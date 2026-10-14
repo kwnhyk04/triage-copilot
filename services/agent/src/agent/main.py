@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text
 
 from agent.consumer import WAIT_SECONDS, consume
 from agent.settings import Settings
-from py_clients.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_config import ConfigError, load_settings
 from py_telemetry import configure_logging, instrument
 
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def handle(request: InvestigationRequested) -> None:
+def handle(request: InvestigationRequestedV1) -> None:
     """Records the request; the investigation loop replaces this in build step 6."""
     log.info("investigation requested", extra={"investigation_id": str(request.investigation_id)})
 

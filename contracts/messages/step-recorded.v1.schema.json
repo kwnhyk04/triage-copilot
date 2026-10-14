@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StepRecordedV1",
+  "description": "Agent to gateway: one step of the investigation loop, sent after its checkpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "investigation_id",
+    "seq",
+    "kind",
+    "summary",
+    "tool_name",
+    "tool_call_id",
+    "recorded_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "investigation_id": { "type": "string", "format": "uuid" },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Position of the step in its investigation, starting at 1."
+    },
+    "kind": { "type": "string", "enum": ["tool_call", "hypothesis", "action", "report"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "tool_name": { "type": ["string", "null"], "description": "Set on tool_call steps only." },
+    "tool_call_id": {
+      "type": ["string", "null"],
+      "description": "Id of the tool result; evidence cites it. Set on tool_call steps only."
+    },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  },
+  "examples": [
+    {
+      "schema_version": 1,
+      "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+      "seq": 3,
+      "kind": "tool_call",
+      "summary": "Error rate on checkout rose from 0.2% to 14% at 11:52, two minutes after deploy v1.8.0.",
+      "tool_name": "query_metrics",
+      "tool_call_id": "tc_01J9ZK3Q7M",
+      "recorded_at": "2026-10-14T12:00:41Z"
+    }
+  ]
+}

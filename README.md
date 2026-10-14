@@ -39,6 +39,8 @@ make dev
 | `make lint` | ESLint, Prettier, ruff |
 | `make typecheck` | tsc and pyright |
 | `make codegen` | Regenerates clients from `contracts/` |
+| `make contracts-check` | Regenerates clients; fails if any generated file changed |
+| `make contracts-breaking` | oasdiff breaking-change check of both OpenAPI specs against `CONTRACTS_BASE` (default `HEAD`; needs Docker) |
 | `make migrate` | Drizzle (gateway) and Alembic (agent) migrations |
 | `make seed`, `make eval` | Placeholders until build steps 3 and 6 |
 | `make infra-down` | Removes this project's containers; data volume stays |

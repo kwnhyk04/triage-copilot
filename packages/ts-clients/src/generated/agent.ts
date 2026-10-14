@@ -35,6 +35,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/investigations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Asks the agent loop to stop at its next checkpoint. Repeating it is harmless. */
+        post: operations["cancelInvestigation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/investigations/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        /** Progress of one investigation, read from its latest checkpoint. */
+        get: operations["getInvestigationState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -43,9 +81,84 @@ export interface components {
             /** @enum {string} */
             status: "ok" | "unavailable";
         };
+        /** @description RFC 9457 Problem Details. Extension members may appear. */
+        Problem: {
+            /**
+             * Format: uri-reference
+             * @description Identifies the problem type.
+             * @default about:blank
+             */
+            type: string;
+            /** @description Short summary of the problem type. */
+            title: string;
+            status: number;
+            /** @description Explanation specific to this occurrence. */
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @enum {string} */
+        InvestigationStatus: "queued" | "running" | "awaiting_approval" | "resolved" | "failed" | "cancelled";
+        InvestigationState: {
+            /** Format: uuid */
+            investigation_id: string;
+            status: components["schemas"]["InvestigationStatus"];
+            /** @description True once a cancel arrived; the loop stops at its next checkpoint. */
+            cancel_requested: boolean;
+            steps_taken: number;
+            tool_calls: number;
+            /** @description Model tokens spent so far, input and output combined. */
+            tokens_used: number;
+            /**
+             * Format: date-time
+             * @description Time of the latest checkpoint.
+             */
+            updated_at: string;
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description The request is malformed or fails validation. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The service token is missing or invalid. */
+        Unauthorized: {
+            headers: {
+                /** @description The Bearer challenge. */
+                "WWW-Authenticate": string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The token is valid but not allowed on this route. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description No investigation has this id. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+    };
+    parameters: {
+        InvestigationId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -99,6 +212,67 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+        };
+    };
+    cancelInvestigation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancellation requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The investigation already resolved or failed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getInvestigationState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest checkpoint. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
 }

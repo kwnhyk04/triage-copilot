@@ -1,23 +1,64 @@
 """
-Gateway GraphQL API, consumed by the web backend-for-frontend.
+Gateway GraphQL API, consumed by the web backend-for-frontend. It serves reads and live updates;
+commands (alert intake, approvals) go through the REST API in contracts/openapi/gateway.yaml.
+Requests need the X-API-Key header, like the REST /v1 routes.
 """
 type Query {
   "Gateway liveness for clients that only speak GraphQL."
   health: Health!
+  "Investigations, newest first, as a Relay cursor connection. `first` is at most 100."
+  investigations(first: Int = 20, after: String): InvestigationConnection!
+  "One investigation, or null when the id is unknown."
+  investigation(id: ID!): Investigation
 }
+
+type Subscription {
+  "The investigation after each change, streamed over server-sent events."
+  investigationUpdated(id: ID!): Investigation!
+}
+
+"RFC 3339 timestamp in UTC, for example 2026-10-14T12:00:05Z."
+scalar DateTime
 
 type Health {
   status: String!
 }
 
-type Subscription {
-  "Status changes of one investigation, streamed over server-sent events."
-  investigationUpdated(id: ID!): InvestigationUpdate!
+type InvestigationConnection {
+  edges: [InvestigationEdge!]!
+  pageInfo: PageInfo!
 }
 
-type InvestigationUpdate {
-  investigationId: ID!
+type InvestigationEdge {
+  "Opaque keyset cursor; pass it as `after` to read the next page."
+  cursor: String!
+  node: Investigation!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type Investigation {
+  id: ID!
+  "Alert group that triggered the investigation."
+  groupId: ID!
+  title: String!
   status: InvestigationStatus!
+  "Final report summary; null until the investigation ends."
+  summary: String
+  "Model tokens spent so far, input and output combined."
+  tokensUsed: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  "Best first."
+  hypotheses: [Hypothesis!]!
+  proposedActions: [ProposedAction!]!
+  "In execution order."
+  steps: [Step!]!
 }
 
 enum InvestigationStatus {
@@ -26,4 +67,102 @@ enum InvestigationStatus {
   AWAITING_APPROVAL
   RESOLVED
   FAILED
+  CANCELLED
+}
+
+type Hypothesis {
+  "1 is the most likely root cause."
+  rank: Int!
+  rootCauseClass: RootCauseClass!
+  summary: String!
+  "Between 0 and 1."
+  confidence: Float!
+  evidence: [Evidence!]!
+}
+
+"Fixed root-cause classes, so evals compare classes instead of free text."
+enum RootCauseClass {
+  BAD_DEPLOY
+  CONFIG_CHANGE
+  DEPENDENCY_FAILURE
+  RESOURCE_EXHAUSTION
+  TRAFFIC_SURGE
+  DATABASE
+  INFRASTRUCTURE
+  CERTIFICATE_EXPIRY
+  UNKNOWN
+}
+
+"An excerpt of a tool result that supports a hypothesis."
+type Evidence {
+  "Id of the tool result the excerpt comes from."
+  toolCallId: ID!
+  excerpt: String!
+}
+
+"A remediation the agent proposes. Only the executor runs it, and only after a human approves it."
+type ProposedAction {
+  id: ID!
+  kind: ActionKind!
+  "Service the action applies to."
+  target: String!
+  parameters: [ActionParameter!]!
+  rationale: String!
+  status: ActionStatus!
+  proposedAt: DateTime!
+  "Approver identity; null while pending."
+  decidedBy: String
+  decidedAt: DateTime
+}
+
+"Allowlisted action kinds."
+enum ActionKind {
+  ROLLBACK_DEPLOY
+  RESTART_SERVICE
+  SCALE_SERVICE
+  DISABLE_FEATURE_FLAG
+}
+
+enum ActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+type ActionParameter {
+  name: String!
+  "The value as display text, for example v1.7.3 or 4."
+  value: String!
+}
+
+"One step of the agent loop."
+type Step {
+  "Position in the investigation, starting at 1."
+  seq: Int!
+  kind: StepKind!
+  summary: String!
+  "Set on tool call steps only."
+  toolCall: ToolCall
+  recordedAt: DateTime!
+}
+
+enum StepKind {
+  TOOL_CALL
+  HYPOTHESIS
+  ACTION
+  REPORT
+}
+
+type ToolCall {
+  "Id of the tool result; evidence cites it."
+  id: ID!
+  name: String!
+  status: ToolCallStatus!
+  durationMs: Int!
+}
+
+enum ToolCallStatus {
+  OK
+  ERROR
+  TIMEOUT
 }

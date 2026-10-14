@@ -1,13 +1,18 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot agent
-  version: 0.1.0
-  description: Internal API of the agent service. Only other backend services call it.
+  version: 0.2.0
+  description: >-
+    Internal API of the agent service. Only other backend services call it, with the service
+    token. Errors are RFC 9457 Problem Details (application/problem+json).
+security:
+  - serviceToken: []
 paths:
   /healthz:
     get:
       operationId: getHealthz
       summary: Liveness probe.
+      security: []
       responses:
         '200':
           description: The process is up.
@@ -19,6 +24,7 @@ paths:
     get:
       operationId: getReadyz
       summary: Readiness probe. Checks Postgres and the investigations queue.
+      security: []
       responses:
         '200':
           description: Ready to serve traffic.
@@ -32,13 +38,165 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /internal/investigations/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/InvestigationId'
+    post:
+      operationId: cancelInvestigation
+      summary: Asks the agent loop to stop at its next checkpoint. Repeating it is harmless.
+      responses:
+        '202':
+          description: Cancellation requested.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The investigation already resolved or failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /internal/investigations/{id}/state:
+    parameters:
+      - $ref: '#/components/parameters/InvestigationId'
+    get:
+      operationId: getInvestigationState
+      summary: Progress of one investigation, read from its latest checkpoint.
+      responses:
+        '200':
+          description: The latest checkpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+      description: >-
+        Token shared by backend services only; distinct from the gateway API key and the
+        Alertmanager token.
+  parameters:
+    InvestigationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: The request is malformed or fails validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: The service token is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          description: The Bearer challenge.
+          required: true
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: The token is valid but not allowed on this route.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No investigation has this id.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
   schemas:
     Health:
       type: object
-      additionalProperties: false
       required: [status]
       properties:
         status:
           type: string
           enum: [ok, unavailable]
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details. Extension members may appear.
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+          description: Identifies the problem type.
+        title:
+          type: string
+          description: Short summary of the problem type.
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri-reference
+    InvestigationStatus:
+      type: string
+      enum: [queued, running, awaiting_approval, resolved, failed, cancelled]
+    InvestigationState:
+      type: object
+      required:
+        - investigation_id
+        - status
+        - cancel_requested
+        - steps_taken
+        - tool_calls
+        - tokens_used
+        - updated_at
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        cancel_requested:
+          type: boolean
+          description: True once a cancel arrived; the loop stops at its next checkpoint.
+        steps_taken:
+          type: integer
+          minimum: 0
+        tool_calls:
+          type: integer
+          minimum: 0
+        tokens_used:
+          type: integer
+          minimum: 0
+          description: Model tokens spent so far, input and output combined.
+        updated_at:
+          type: string
+          format: date-time
+          description: Time of the latest checkpoint.

@@ -3,11 +3,13 @@
 
 -include .env
 export
+# Only dev-ts (gateway and web) gets the approver key; the Python services, tests and tools never do.
+unexport APPROVER_API_KEY
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
-	build test test-int lint typecheck codegen migrate seed eval
+	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval
 
 install:
 	pnpm install
@@ -25,6 +27,7 @@ dev: infra-up
 	$(MAKE) -j4 dev-ts dev-agent dev-executor dev-sim
 
 # Loose env mode lets turbo pass the .env variables through to the dev servers.
+dev-ts: export APPROVER_API_KEY := $(APPROVER_API_KEY)
 dev-ts:
 	pnpm turbo run dev --env-mode=loose
 
@@ -61,8 +64,27 @@ typecheck:
 
 codegen:
 	pnpm --filter @triage/ts-clients codegen
-	uv run datamodel-codegen --input contracts/messages --input-file-type jsonschema --output packages/py-clients/src/py_clients/messages
-	uv run datamodel-codegen --input contracts/openapi/gateway.yaml --input-file-type openapi --output packages/py-clients/src/py_clients/gateway.py
+	uv run python packages/py-clients/scripts/codegen.py
+
+# Fails when codegen changes any generated file, so stale or hand-edited output never lands.
+contracts-check:
+	uv run python scripts/contracts_check.py $(MAKE) codegen
+
+# Fails on breaking changes against CONTRACTS_BASE, a git ref (CI passes the target branch):
+# breaking OpenAPI changes, or an edited or deleted message version (changes ship as a new version).
+CONTRACTS_BASE ?= HEAD
+# oasdiff sees only the specs and the git history, offline; .env stays out of the container.
+OASDIFF = docker run --rm --network none -w /repo \
+	--mount "type=bind,src=$(CURDIR)/.git,dst=/repo/.git,readonly" \
+	--mount "type=bind,src=$(CURDIR)/contracts,dst=/repo/contracts,readonly" \
+	tufin/oasdiff:v1.33.0
+
+# Stops Git Bash from rewriting the container paths; cmd.exe ignores it.
+contracts-breaking: export MSYS_NO_PATHCONV = 1
+contracts-breaking:
+	$(OASDIFF) breaking $(CONTRACTS_BASE):contracts/openapi/gateway.yaml contracts/openapi/gateway.yaml --fail-on ERR
+	$(OASDIFF) breaking $(CONTRACTS_BASE):contracts/openapi/agent.yaml contracts/openapi/agent.yaml --fail-on ERR
+	git diff --exit-code --stat --diff-filter=MD $(CONTRACTS_BASE) -- "contracts/messages/*.v*.schema.json"
 
 migrate: infra-up
 	pnpm --filter @triage/gateway db:migrate

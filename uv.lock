@@ -1036,11 +1036,15 @@ name = "py-clients"
 version = "0.1.0"
 source = { editable = "packages/py-clients" }
 dependencies = [
+    { name = "httpx2" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.14.1" }]
+requires-dist = [
+    { name = "httpx2", specifier = ">=2.13.1" },
+    { name = "pydantic", specifier = ">=2.14.1" },
+]
 
 [[package]]
 name = "py-config"

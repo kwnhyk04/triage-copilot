@@ -1,13 +1,20 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.1.0
-  description: REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql.
+  version: 0.2.0
+  description: >-
+    REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
+    RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
+    Alertmanager webhook takes its own bearer token, approve and reject take X-Approver-Key, every
+    other route the X-API-Key header. /graphql takes the same X-API-Key.
+security:
+  - apiKey: []
 paths:
   /healthz:
     get:
       operationId: getHealthz
       summary: Liveness probe.
+      security: []
       responses:
         '200':
           description: The process is up.
@@ -19,6 +26,7 @@ paths:
     get:
       operationId: getReadyz
       summary: Readiness probe. Checks Postgres.
+      security: []
       responses:
         '200':
           description: Ready to serve traffic.
@@ -32,13 +40,639 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /v1/alerts:
+    post:
+      operationId: postAlerts
+      summary: Alertmanager webhook intake.
+      description: >-
+        Takes the Prometheus Alertmanager webhook payload (version 4) and acknowledges it at once;
+        grouping and investigation run asynchronously. Alerts already seen with the same
+        fingerprint and status are deduplicated.
+      security:
+        - alertmanagerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertmanagerWebhook'
+            examples:
+              firing:
+                summary: One firing alert
+                externalValue: examples/alertmanager-webhook.json
+      responses:
+        '202':
+          description: Accepted for grouping and investigation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertAccepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/investigations:
+    get:
+      operationId: listInvestigations
+      summary: Lists investigations, newest first, with keyset pagination.
+      parameters:
+        - name: limit
+          in: query
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          description: The next_cursor of the previous page; omit for the first page.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+      responses:
+        '200':
+          description: One page of investigations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/investigations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/InvestigationId'
+    get:
+      operationId: getInvestigation
+      summary: One investigation with its hypotheses, proposed actions and steps.
+      responses:
+        '200':
+          description: The investigation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Investigation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/actions/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ActionId'
+    post:
+      operationId: approveAction
+      summary: Records a human approval; only then may the executor run the action.
+      security:
+        - approverKey: []
+      requestBody:
+        $ref: '#/components/requestBodies/Decision'
+      responses:
+        '200':
+          $ref: '#/components/responses/Decided'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ApproverKeyRequired'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AlreadyDecided'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/actions/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ActionId'
+    post:
+      operationId: rejectAction
+      summary: Records a human rejection; the action never runs.
+      security:
+        - approverKey: []
+      requestBody:
+        $ref: '#/components/requestBodies/Decision'
+      responses:
+        '200':
+          $ref: '#/components/responses/Decided'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ApproverKeyRequired'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AlreadyDecided'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        Server-only key held by the web backend-for-frontend and backend jobs. Browsers never
+        send it. It cannot approve or reject.
+    approverKey:
+      type: apiKey
+      in: header
+      name: X-Approver-Key
+      description: >-
+        APPROVER_API_KEY, held only by the web app's server, which sends it when a human approves
+        or rejects an action. The agent, executor and sim never receive it. Valid on approve and
+        reject only.
+    alertmanagerToken:
+      type: http
+      scheme: bearer
+      description: >-
+        Shared secret set as the bearer credentials in Alertmanager's webhook http_config. Valid
+        on POST /v1/alerts only.
+  parameters:
+    InvestigationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ActionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  requestBodies:
+    Decision:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Decision'
+  headers:
+    WWW-Authenticate:
+      description: >-
+        The challenge for the route's credential: Bearer on POST /v1/alerts, ApiKey
+        header="X-Approver-Key" on approve and reject, ApiKey header="X-API-Key" elsewhere.
+      required: true
+      schema:
+        type: string
+    RateLimit-Limit:
+      description: Requests allowed in the current window.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    RateLimit-Remaining:
+      description: Requests left in the current window.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    Retry-After:
+      description: Seconds to wait before retrying.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+  responses:
+    Decided:
+      description: The decision was recorded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProposedAction'
+    BadRequest:
+      description: The request is malformed or fails validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Credentials are missing or invalid.
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/WWW-Authenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: The credentials are valid but not allowed on this route.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No resource has this id.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ApproverKeyRequired:
+      description: >-
+        Another gateway credential (X-API-Key or the Alertmanager token) was sent instead of
+        X-Approver-Key.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AlreadyDecided:
+      description: The action was already approved or rejected.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate limit exceeded. Retry after Retry-After seconds.
+      headers:
+        RateLimit-Limit:
+          $ref: '#/components/headers/RateLimit-Limit'
+        RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimit-Remaining'
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: >-
+        The gateway is shedding load or a dependency is down. Retry after Retry-After seconds.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
   schemas:
     Health:
       type: object
-      additionalProperties: false
       required: [status]
       properties:
         status:
           type: string
           enum: [ok, unavailable]
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details. Extension members may appear.
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+          description: Identifies the problem type.
+        title:
+          type: string
+          description: Short summary of the problem type.
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri-reference
+    AlertmanagerWebhook:
+      type: object
+      description: >-
+        Prometheus Alertmanager webhook payload, version 4. Unknown members are ignored, so
+        Alertmanager upgrades that add fields do not break intake.
+      required:
+        - version
+        - groupKey
+        - status
+        - receiver
+        - groupLabels
+        - commonLabels
+        - commonAnnotations
+        - externalURL
+        - alerts
+      properties:
+        version:
+          type: string
+          const: '4'
+        groupKey:
+          type: string
+          minLength: 1
+          description: Identifies the alert group.
+        truncatedAlerts:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Alerts left out because of the receiver's max_alerts.
+        status:
+          $ref: '#/components/schemas/AlertStatus'
+        receiver:
+          type: string
+        groupLabels:
+          $ref: '#/components/schemas/Labels'
+        commonLabels:
+          $ref: '#/components/schemas/Labels'
+        commonAnnotations:
+          $ref: '#/components/schemas/Labels'
+        externalURL:
+          type: string
+          description: Backlink to the Alertmanager.
+        alerts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Alert'
+    Alert:
+      type: object
+      required: [status, labels, annotations, startsAt, endsAt, generatorURL, fingerprint]
+      properties:
+        status:
+          $ref: '#/components/schemas/AlertStatus'
+        labels:
+          $ref: '#/components/schemas/Labels'
+        annotations:
+          $ref: '#/components/schemas/Labels'
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+          description: 0001-01-01T00:00:00Z while the alert fires.
+        generatorURL:
+          type: string
+          description: Link to the rule that fired.
+        fingerprint:
+          type: string
+          minLength: 1
+          description: Identifies the alert; the gateway deduplicates on it.
+    AlertStatus:
+      type: string
+      enum: [firing, resolved]
+    Labels:
+      type: object
+      description: String map, used for labels and annotations.
+      additionalProperties:
+        type: string
+    AlertAccepted:
+      type: object
+      required: [group_id, deduped]
+      properties:
+        group_id:
+          type: string
+          format: uuid
+          description: Alert group the payload was added to.
+        deduped:
+          type: boolean
+          description: >-
+            True when every alert was already known with the same fingerprint and status, so
+            nothing new was queued.
+    InvestigationPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvestigationSummary'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as cursor to read the next page; null on the last page.
+    InvestigationStatus:
+      type: string
+      enum: [queued, running, awaiting_approval, resolved, failed, cancelled]
+    InvestigationSummary:
+      type: object
+      required: [id, group_id, title, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        group_id:
+          type: string
+          format: uuid
+          description: Alert group that triggered the investigation.
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Investigation:
+      allOf:
+        - $ref: '#/components/schemas/InvestigationSummary'
+        - type: object
+          required: [summary, tokens_used, hypotheses, proposed_actions, steps]
+          properties:
+            summary:
+              type: [string, 'null']
+              description: Final report summary; null until the investigation ends.
+            tokens_used:
+              type: integer
+              minimum: 0
+              description: Model tokens spent so far, input and output combined.
+            hypotheses:
+              type: array
+              description: Best first.
+              items:
+                $ref: '#/components/schemas/Hypothesis'
+            proposed_actions:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProposedAction'
+            steps:
+              type: array
+              description: In execution order.
+              items:
+                $ref: '#/components/schemas/Step'
+    Hypothesis:
+      type: object
+      required: [rank, root_cause_class, summary, confidence, evidence]
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: 1 is the most likely root cause.
+        root_cause_class:
+          $ref: '#/components/schemas/RootCauseClass'
+        summary:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/Evidence'
+    RootCauseClass:
+      type: string
+      description: Fixed root-cause classes, so evals compare classes instead of free text.
+      enum:
+        - bad_deploy
+        - config_change
+        - dependency_failure
+        - resource_exhaustion
+        - traffic_surge
+        - database
+        - infrastructure
+        - certificate_expiry
+        - unknown
+    Evidence:
+      type: object
+      description: An excerpt of a tool result that supports a hypothesis.
+      required: [tool_call_id, excerpt]
+      properties:
+        tool_call_id:
+          type: string
+          description: Id of the tool result the excerpt comes from.
+        excerpt:
+          type: string
+          maxLength: 2000
+    ProposedAction:
+      type: object
+      description: >-
+        A remediation the agent proposes. Only the executor runs it, and only after a human
+        approves it.
+      required:
+        - id
+        - investigation_id
+        - kind
+        - target
+        - parameters
+        - rationale
+        - status
+        - proposed_at
+        - decided_by
+        - decided_at
+        - decision_reason
+      properties:
+        id:
+          type: string
+          format: uuid
+        investigation_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/ActionKind'
+        target:
+          type: string
+          description: Service the action applies to.
+        parameters:
+          type: object
+          description: 'Kind-specific arguments, for example {"to_version": "v1.7.3"}.'
+          additionalProperties:
+            type: [string, integer, number, boolean]
+        rationale:
+          type: string
+        status:
+          $ref: '#/components/schemas/ActionStatus'
+        proposed_at:
+          type: string
+          format: date-time
+        decided_by:
+          type: [string, 'null']
+          description: Approver identity; null while pending.
+        decided_at:
+          type: [string, 'null']
+          format: date-time
+        decision_reason:
+          type: [string, 'null']
+    ActionKind:
+      type: string
+      description: Allowlisted action kinds.
+      enum: [rollback_deploy, restart_service, scale_service, disable_feature_flag]
+    ActionStatus:
+      type: string
+      enum: [pending, approved, rejected]
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [approver]
+      properties:
+        approver:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Identity of the human deciding, as authenticated by the web backend-for-frontend
+            (for example an email address).
+        reason:
+          type: string
+          maxLength: 2000
+          description: Optional note recorded with the decision.
+    Step:
+      type: object
+      description: One step of the agent loop.
+      required: [seq, kind, summary, tool_call, recorded_at]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+          description: Position in the investigation, starting at 1.
+        kind:
+          $ref: '#/components/schemas/StepKind'
+        summary:
+          type: string
+        tool_call:
+          description: Set on tool_call steps only.
+          anyOf:
+            - $ref: '#/components/schemas/ToolCall'
+            - type: 'null'
+        recorded_at:
+          type: string
+          format: date-time
+    StepKind:
+      type: string
+      enum: [tool_call, hypothesis, action, report]
+    ToolCall:
+      type: object
+      required: [id, name, status, duration_ms]
+      properties:
+        id:
+          type: string
+          description: Id of the tool result; evidence cites it.
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ToolCallStatus'
+        duration_ms:
+          type: integer
+          minimum: 0
+    ToolCallStatus:
+      type: string
+      enum: [ok, error, timeout]

@@ -26,6 +26,17 @@ From the approved design doc:
 - 2026-10-14: `infra/docker-compose.prod.yml` publishes no Postgres or ElasticMQ ports, sets `restart: unless-stopped` and memory limits, and puts Toxiproxy behind `--profile chaos`. Reason: only containers on the compose network reach data services; fault injection stays out of production.
 - 2026-10-14: ElasticMQ persists queues and messages (`messages-storage`, H2 at `/data/elasticmq`) on the named volume `elasticmq-data`, declared in both compose files. Reason: queued investigations must survive restarts; the prod copy keeps it even if dev drops the volume.
 - 2026-10-14: The gateway turns off GraphQL Yoga's CORS and GraphiQL. Reason: Yoga's defaults reflect any origin with credentials, which would let any web page call the API from a browser.
+- 2026-10-14: Queue messages are versioned per file (`<name>.v<N>.schema.json`, title `<Name>V<N>`) and strict (`additionalProperties: false`). Any change ships as a new version; consumers validate against an unversioned union file (`step-recorded.schema.json`) until the old version is drained. Reason: expand, migrate, contract for messages; strict schemas catch producer bugs.
+- 2026-10-14: Nullable message fields are required and typed `[T, "null"]`, never optional. Reason: pydantic dumps `None` as `null`, so an optional non-nullable field would make Python producers emit messages that TypeScript consumers reject. The Python contract test checks that every example dumps back unchanged.
+- 2026-10-14: REST response schemas allow unknown members; request bodies and messages forbid them. Reason: datamodel-codegen turns `additionalProperties: false` into `extra="forbid"`, so a new response field would break deployed Python clients. Response enums have no such slack: a new value fails pydantic validation, so ship it with regenerated clients.
+- 2026-10-14: Approve and reject take their own credential (user decision): `APPROVER_API_KEY`, sent as `X-Approver-Key` and held only by the web server. Any other gateway credential on those routes gets 403; a missing or wrong approver key gets 401. Reason: a credential that can read investigations must not be able to approve actions, and the agent, executor and sim never receive the approver key.
+- 2026-10-14: The Makefile `unexport`s `APPROVER_API_KEY` and exports it only for `dev-ts` (gateway and web). Reason: `export` after `-include .env` hands every variable to every recipe, including the Python services; checked under sh and cmd.exe, even with the key set in the calling shell.
+- 2026-10-14: The Python `GatewayClient` is read-only. It has no approve or reject, because only the web backend-for-frontend records a human decision and the agent imports `py_clients`. Reason: the agent must have no code path that approves its own proposals.
+- 2026-10-14: Released message versions are immutable. `make contracts-breaking` fails when a `*.v*.schema.json` present at `CONTRACTS_BASE` is edited or deleted (`git diff --diff-filter=MD`); new files pass. Reason: oasdiff covers only OpenAPI.
+- 2026-10-14: Commands (alert intake, approve, reject) use REST; GraphQL has no mutations and serves reads and live updates. Reason: one write path per action, each with an OpenAPI contract and a breaking-change check.
+- 2026-10-14: Python HTTP clients use httpx2, the maintained httpx successor, instead of httpx. Reason: it is already locked (Starlette's TestClient needs it), so the venv keeps one HTTP library.
+- 2026-10-14: oasdiff runs from the pinned image `tufin/oasdiff:v1.33.0` and compares against a git ref (`CONTRACTS_BASE`). It runs with `--network none` and only `.git` and `contracts/` mounted read-only. Reason: no Go toolchain needed (the image ships git), and a third-party image never sees `.env` or the network.
+- 2026-10-14: `make contracts-check` compares hashes of the generated dirs before and after codegen instead of running `git diff`. Reason: it works on an uncommitted tree and catches added and deleted files.
 
 ## Preferences and Instructions
 
@@ -46,7 +57,12 @@ None yet.
 - 2026-10-14: Starlette 1.8 `TestClient` is typed against `httpx2`, not `httpx`. Full `types-boto3` makes `boto3.client` "partially unknown" under pyright strict, so the repo uses `types-boto3-lite` and annotates clients.
 - 2026-10-14: Jaeger 2.22 serves only the v3 query API (`/api/v3/services`). The collector's `otlp` exporter alias is deprecated; use `otlp_grpc`.
 - 2026-10-14: Compose does not recreate a container when a bind-mounted config file changes; restart the service.
-- 2026-10-14: datamodel-codegen writes CRLF files on Windows; `.gitattributes` stores them as LF, so `git add` only warns.
+- 2026-10-14: datamodel-codegen writes CRLF files on Windows; `.gitattributes` stores them as LF, so `git add` only warns. `scripts/contracts_check.py` ignores line endings for the same reason.
+- 2026-10-14: datamodel-codegen runs `ruff check` on its output before formatting, so E501 failed on long schema descriptions. `**/generated/**` ignores E501.
+- 2026-10-14: json-schema-to-typescript's `declareExternallyReferenced: false` also drops a schema's own `$defs`. The codegen sets it only on schemas that `$ref` other files, which would otherwise redeclare those types.
+- 2026-10-14: A YAML plain scalar cannot contain `: ` (for example `{"to_version": "v1.7.3"}` in a description); quote it. oasdiff reports it as a parse error.
+- 2026-10-14: Under `nodenext`, ajv-formats' plugin is `addFormats.default(ajv)`: the package is CommonJS and Node's ESM interop puts the function on `default`.
+- 2026-10-14: SQS rejects an Alertmanager group key as MessageGroupId: it allows only alphanumerics and punctuation (no spaces) and at most 128 characters. Group keys look like `{}:{alertname="X", service="Y"}`. Found by an independent review against this stack's ElasticMQ (`InvalidParameterValue`). Use the gateway's group id (UUID) instead.
 
 ## Rejected Approaches
 

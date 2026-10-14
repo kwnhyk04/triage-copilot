@@ -35,6 +35,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Alertmanager webhook intake.
+         * @description Takes the Prometheus Alertmanager webhook payload (version 4) and acknowledges it at once; grouping and investigation run asynchronously. Alerts already seen with the same fingerprint and status are deduplicated.
+         */
+        post: operations["postAlerts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/investigations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lists investigations, newest first, with keyset pagination. */
+        get: operations["listInvestigations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/investigations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        /** One investigation with its hypotheses, proposed actions and steps. */
+        get: operations["getInvestigation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/actions/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records a human approval; only then may the executor run the action. */
+        post: operations["approveAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/actions/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records a human rejection; the action never runs. */
+        post: operations["rejectAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -43,11 +137,293 @@ export interface components {
             /** @enum {string} */
             status: "ok" | "unavailable";
         };
+        /** @description RFC 9457 Problem Details. Extension members may appear. */
+        Problem: {
+            /**
+             * Format: uri-reference
+             * @description Identifies the problem type.
+             * @default about:blank
+             */
+            type: string;
+            /** @description Short summary of the problem type. */
+            title: string;
+            status: number;
+            /** @description Explanation specific to this occurrence. */
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description Prometheus Alertmanager webhook payload, version 4. Unknown members are ignored, so Alertmanager upgrades that add fields do not break intake. */
+        AlertmanagerWebhook: {
+            /** @constant */
+            version: "4";
+            /** @description Identifies the alert group. */
+            groupKey: string;
+            /**
+             * @description Alerts left out because of the receiver's max_alerts.
+             * @default 0
+             */
+            truncatedAlerts: number;
+            status: components["schemas"]["AlertStatus"];
+            receiver: string;
+            groupLabels: components["schemas"]["Labels"];
+            commonLabels: components["schemas"]["Labels"];
+            commonAnnotations: components["schemas"]["Labels"];
+            /** @description Backlink to the Alertmanager. */
+            externalURL: string;
+            alerts: components["schemas"]["Alert"][];
+        };
+        Alert: {
+            status: components["schemas"]["AlertStatus"];
+            labels: components["schemas"]["Labels"];
+            annotations: components["schemas"]["Labels"];
+            /** Format: date-time */
+            startsAt: string;
+            /**
+             * Format: date-time
+             * @description 0001-01-01T00:00:00Z while the alert fires.
+             */
+            endsAt: string;
+            /** @description Link to the rule that fired. */
+            generatorURL: string;
+            /** @description Identifies the alert; the gateway deduplicates on it. */
+            fingerprint: string;
+        };
+        /** @enum {string} */
+        AlertStatus: "firing" | "resolved";
+        /** @description String map, used for labels and annotations. */
+        Labels: {
+            [key: string]: string;
+        };
+        AlertAccepted: {
+            /**
+             * Format: uuid
+             * @description Alert group the payload was added to.
+             */
+            group_id: string;
+            /** @description True when every alert was already known with the same fingerprint and status, so nothing new was queued. */
+            deduped: boolean;
+        };
+        InvestigationPage: {
+            items: components["schemas"]["InvestigationSummary"][];
+            /** @description Pass as cursor to read the next page; null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @enum {string} */
+        InvestigationStatus: "queued" | "running" | "awaiting_approval" | "resolved" | "failed" | "cancelled";
+        InvestigationSummary: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Alert group that triggered the investigation.
+             */
+            group_id: string;
+            title: string;
+            status: components["schemas"]["InvestigationStatus"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        Investigation: components["schemas"]["InvestigationSummary"] & {
+            /** @description Final report summary; null until the investigation ends. */
+            summary: string | null;
+            /** @description Model tokens spent so far, input and output combined. */
+            tokens_used: number;
+            /** @description Best first. */
+            hypotheses: components["schemas"]["Hypothesis"][];
+            proposed_actions: components["schemas"]["ProposedAction"][];
+            /** @description In execution order. */
+            steps: components["schemas"]["Step"][];
+        };
+        Hypothesis: {
+            /** @description 1 is the most likely root cause. */
+            rank: number;
+            root_cause_class: components["schemas"]["RootCauseClass"];
+            summary: string;
+            confidence: number;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        /**
+         * @description Fixed root-cause classes, so evals compare classes instead of free text.
+         * @enum {string}
+         */
+        RootCauseClass: "bad_deploy" | "config_change" | "dependency_failure" | "resource_exhaustion" | "traffic_surge" | "database" | "infrastructure" | "certificate_expiry" | "unknown";
+        /** @description An excerpt of a tool result that supports a hypothesis. */
+        Evidence: {
+            /** @description Id of the tool result the excerpt comes from. */
+            tool_call_id: string;
+            excerpt: string;
+        };
+        /** @description A remediation the agent proposes. Only the executor runs it, and only after a human approves it. */
+        ProposedAction: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            investigation_id: string;
+            kind: components["schemas"]["ActionKind"];
+            /** @description Service the action applies to. */
+            target: string;
+            /** @description Kind-specific arguments, for example {"to_version": "v1.7.3"}. */
+            parameters: {
+                [key: string]: string | number | boolean;
+            };
+            rationale: string;
+            status: components["schemas"]["ActionStatus"];
+            /** Format: date-time */
+            proposed_at: string;
+            /** @description Approver identity; null while pending. */
+            decided_by: string | null;
+            /** Format: date-time */
+            decided_at: string | null;
+            decision_reason: string | null;
+        };
+        /**
+         * @description Allowlisted action kinds.
+         * @enum {string}
+         */
+        ActionKind: "rollback_deploy" | "restart_service" | "scale_service" | "disable_feature_flag";
+        /** @enum {string} */
+        ActionStatus: "pending" | "approved" | "rejected";
+        Decision: {
+            /** @description Identity of the human deciding, as authenticated by the web backend-for-frontend (for example an email address). */
+            approver: string;
+            /** @description Optional note recorded with the decision. */
+            reason?: string;
+        };
+        /** @description One step of the agent loop. */
+        Step: {
+            /** @description Position in the investigation, starting at 1. */
+            seq: number;
+            kind: components["schemas"]["StepKind"];
+            summary: string;
+            /** @description Set on tool_call steps only. */
+            tool_call: components["schemas"]["ToolCall"] | null;
+            /** Format: date-time */
+            recorded_at: string;
+        };
+        /** @enum {string} */
+        StepKind: "tool_call" | "hypothesis" | "action" | "report";
+        ToolCall: {
+            /** @description Id of the tool result; evidence cites it. */
+            id: string;
+            name: string;
+            status: components["schemas"]["ToolCallStatus"];
+            duration_ms: number;
+        };
+        /** @enum {string} */
+        ToolCallStatus: "ok" | "error" | "timeout";
     };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
+    responses: {
+        /** @description The decision was recorded. */
+        Decided: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ProposedAction"];
+            };
+        };
+        /** @description The request is malformed or fails validation. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description Credentials are missing or invalid. */
+        Unauthorized: {
+            headers: {
+                "WWW-Authenticate": components["headers"]["WWW-Authenticate"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The credentials are valid but not allowed on this route. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description No resource has this id. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description Another gateway credential (X-API-Key or the Alertmanager token) was sent instead of X-Approver-Key. */
+        ApproverKeyRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The action was already approved or rejected. */
+        AlreadyDecided: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description Rate limit exceeded. Retry after Retry-After seconds. */
+        TooManyRequests: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "Retry-After": components["headers"]["Retry-After"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The gateway is shedding load or a dependency is down. Retry after Retry-After seconds. */
+        ServiceUnavailable: {
+            headers: {
+                "Retry-After": components["headers"]["Retry-After"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+    };
+    parameters: {
+        InvestigationId: string;
+        ActionId: string;
+    };
+    requestBodies: {
+        Decision: {
+            content: {
+                "application/json": components["schemas"]["Decision"];
+            };
+        };
+    };
+    headers: {
+        /** @description The challenge for the route's credential: Bearer on POST /v1/alerts, ApiKey header="X-Approver-Key" on approve and reject, ApiKey header="X-API-Key" elsewhere. */
+        "WWW-Authenticate": string;
+        /** @description Requests allowed in the current window. */
+        "RateLimit-Limit": number;
+        /** @description Requests left in the current window. */
+        "RateLimit-Remaining": number;
+        /** @description Seconds to wait before retrying. */
+        "Retry-After": number;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -99,6 +475,135 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+        };
+    };
+    postAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertmanagerWebhook"];
+            };
+        };
+        responses: {
+            /** @description Accepted for grouping and investigation. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listInvestigations: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: number;
+                /** @description The next_cursor of the previous page; omit for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of investigations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getInvestigation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The investigation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Investigation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    approveAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["Decision"];
+        responses: {
+            200: components["responses"]["Decided"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ApproverKeyRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["AlreadyDecided"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    rejectAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["Decision"];
+        responses: {
+            200: components["responses"]["Decided"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ApproverKeyRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["AlreadyDecided"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
 }

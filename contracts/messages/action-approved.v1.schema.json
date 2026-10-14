@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActionApprovedV1",
+  "description": "Gateway to executor: an action a human approved. action_id doubles as the executor's idempotency key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action_id",
+    "investigation_id",
+    "kind",
+    "target",
+    "parameters",
+    "approved_by",
+    "approved_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "action_id": { "type": "string", "format": "uuid" },
+    "investigation_id": { "type": "string", "format": "uuid" },
+    "kind": {
+      "type": "string",
+      "enum": ["rollback_deploy", "restart_service", "scale_service", "disable_feature_flag"],
+      "description": "Allowlisted action kinds; any other kind fails validation."
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Service the action applies to."
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "integer", "number", "boolean"] },
+      "description": "Kind-specific arguments, for example {\"to_version\": \"v1.7.3\"}."
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Approver identity as recorded by the gateway."
+    },
+    "approved_at": { "type": "string", "format": "date-time" }
+  },
+  "examples": [
+    {
+      "schema_version": 1,
+      "action_id": "9f8b6c1e-3d2a-4f5b-8e7d-6c5b4a392817",
+      "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+      "kind": "rollback_deploy",
+      "target": "checkout",
+      "parameters": { "to_version": "v1.7.3" },
+      "approved_by": "oncall@example.com",
+      "approved_at": "2026-10-14T12:03:12Z"
+    }
+  ]
+}

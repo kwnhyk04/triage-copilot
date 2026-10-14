@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StepRecorded",
+  "description": "Every StepRecorded version a consumer must accept. Drop v1 here only after no v1 producer runs and the queue holds no v1 messages.",
+  "oneOf": [{ "$ref": "step-recorded.v1.schema.json" }, { "$ref": "step-recorded.v2.schema.json" }]
+}

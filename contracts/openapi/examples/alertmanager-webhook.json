@@ -1,0 +1,31 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"CheckoutHighErrorRate\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-copilot",
+  "groupLabels": { "alertname": "CheckoutHighErrorRate" },
+  "commonLabels": {
+    "alertname": "CheckoutHighErrorRate",
+    "service": "checkout",
+    "severity": "critical"
+  },
+  "commonAnnotations": { "summary": "Checkout error rate above 5% for 5 minutes" },
+  "externalURL": "http://alertmanager.example:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "CheckoutHighErrorRate",
+        "service": "checkout",
+        "severity": "critical",
+        "pod": "checkout-7d9f8b6c5-x2k4p"
+      },
+      "annotations": { "summary": "Checkout error rate above 5% for 5 minutes" },
+      "startsAt": "2026-10-14T11:54:12.481516234Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.example:9090/graph?g0.expr=checkout_error_ratio+%3E+0.05",
+      "fingerprint": "3f9c2a7b1e5d8c40"
+    }
+  ]
+}

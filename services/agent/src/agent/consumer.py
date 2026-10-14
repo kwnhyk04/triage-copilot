@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from py_clients.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 
 if TYPE_CHECKING:
     # Stub-only package from the dev group; never imported at runtime.
@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 WAIT_SECONDS = 10
 """Long-poll length; also the longest a shutdown waits for the consumer thread."""
 
-Handler = Callable[[InvestigationRequested], None]
+Handler = Callable[[InvestigationRequestedV1], None]
 
 
 def poll_once(sqs: SQSClient, queue_url: str, handle: Handler) -> int:
@@ -32,7 +32,7 @@ def poll_once(sqs: SQSClient, queue_url: str, handle: Handler) -> int:
     for message in response.get("Messages", []):
         message_id = message.get("MessageId")
         try:
-            request = InvestigationRequested.model_validate_json(message.get("Body", ""))
+            request = InvestigationRequestedV1.model_validate_json(message.get("Body", ""))
         except ValidationError:
             log.warning("invalid message left for redrive", extra={"message_id": message_id})
             continue

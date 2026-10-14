@@ -41,11 +41,13 @@ known-first-party = ["agent", "executor", "sim", "py_clients", "py_config", "py_
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101"]
+# datamodel-codegen lints before it formats, and schema descriptions stay on one line.
+"**/generated/**" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["services", "sim", "packages/py-*"]
+include = ["services", "sim", "packages/py-*", "scripts"]
 # Resolve workspace packages as local source, not as untyped installed libraries.
 extraPaths = [
   "services/agent/src",

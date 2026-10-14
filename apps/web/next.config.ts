@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 
 const config: NextConfig = {
   // Workspace packages ship TypeScript source.
-  transpilePackages: ['@triage/ts-config'],
+  transpilePackages: ['@triage/ts-clients', '@triage/ts-config'],
 };
 
 export default config;

@@ -1,14 +1,21 @@
+import { loadConfig, z } from '@triage/ts-config';
+
 import { buildApp, createUpdates } from './app.ts';
-import { loadGatewayConfig } from './config.ts';
 import { connectDb } from './db.ts';
 
 describe('gateway against real Postgres', () => {
-  const config = loadGatewayConfig();
-  const db = connectDb(config.GATEWAY_DATABASE_URL);
+  // Only the database URL: make keeps the approver key away from every test process.
+  const { GATEWAY_DATABASE_URL } = loadConfig(z.object({ GATEWAY_DATABASE_URL: z.url() }));
+  const db = connectDb(GATEWAY_DATABASE_URL);
   afterAll(() => db.sql.end());
 
   it('is ready', async () => {
-    const app = buildApp({ config, ping: db.ping, updates: createUpdates() });
+    const app = buildApp({
+      config: { LOG_LEVEL: 'error', APPROVER_API_KEY: 'unused-by-this-test-0000000000000' },
+      ping: db.ping,
+      updates: createUpdates(),
+      decide: () => Promise.resolve('not_found'),
+    });
     try {
       expect((await app.inject({ url: '/readyz' })).statusCode).toBe(200);
     } finally {

@@ -1,4 +1,4 @@
-import { buildApp, createUpdates } from './app.ts';
+import { buildApp, createUpdates, type Decide } from './app.ts';
 import { type GatewayConfig, loadGatewayConfig } from './config.ts';
 import { connectDb } from './db.ts';
 
@@ -12,7 +12,9 @@ try {
 }
 
 const db = connectDb(config.GATEWAY_DATABASE_URL);
-const app = buildApp({ config, ping: db.ping, updates: createUpdates() });
+// No action is stored before build step 3 adds the table, so every action id is unknown.
+const decide: Decide = () => Promise.resolve('not_found');
+const app = buildApp({ config, ping: db.ping, updates: createUpdates(), decide });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {

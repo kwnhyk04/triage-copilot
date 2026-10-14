@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StepRecordedV2",
+  "description": "Agent to gateway: one step of the investigation loop, sent after its checkpoint. Unlike v1, the tool call is nested with its outcome and each step reports token usage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "investigation_id",
+    "seq",
+    "kind",
+    "summary",
+    "tool_call",
+    "usage",
+    "recorded_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "investigation_id": { "type": "string", "format": "uuid" },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Position of the step in its investigation, starting at 1."
+    },
+    "kind": { "type": "string", "enum": ["tool_call", "hypothesis", "action", "report"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "tool_call": {
+      "description": "Set on tool_call steps only.",
+      "anyOf": [{ "$ref": "#/$defs/ToolCall" }, { "type": "null" }]
+    },
+    "usage": { "$ref": "#/$defs/TokenUsage" },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "ToolCall": {
+      "title": "ToolCall",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "duration_ms"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Id of the tool result; evidence cites it."
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["ok", "error", "timeout"] },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TokenUsage": {
+      "title": "TokenUsage",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema_version": 2,
+      "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+      "seq": 4,
+      "kind": "tool_call",
+      "summary": "Log search timed out; deploy history is the only evidence for the v1.8.0 hypothesis so far.",
+      "tool_call": {
+        "id": "tc_01J9ZK4B2X",
+        "name": "search_logs",
+        "status": "timeout",
+        "duration_ms": 10000
+      },
+      "usage": { "input_tokens": 5120, "output_tokens": 310 },
+      "recorded_at": "2026-10-14T12:00:52Z"
+    }
+  ]
+}

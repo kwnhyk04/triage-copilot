@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InvestigationRequestedV1",
+  "description": "Gateway to agent on investigations.fifo. The MessageGroupId is the gateway's alert group id (a UUID), not group_key: Alertmanager group keys contain spaces and can exceed 128 characters, which SQS rejects.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "investigation_id", "group_key", "requested_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "investigation_id": { "type": "string", "format": "uuid" },
+    "group_key": { "type": "string", "minLength": 1 },
+    "requested_at": { "type": "string", "format": "date-time" }
+  },
+  "examples": [
+    {
+      "schema_version": 1,
+      "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+      "group_key": "{}:{alertname=\"CheckoutHighErrorRate\"}",
+      "requested_at": "2026-10-14T12:00:05Z"
+    }
+  ]
+}
