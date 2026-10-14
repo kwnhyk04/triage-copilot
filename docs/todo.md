@@ -1,0 +1,33 @@
+# To-Do
+
+Concise, verifiable tasks. Move items between sections as status changes. Trim old completed items when the list grows large; the activity log keeps the history.
+
+Each step maps to a Claude Code prompt in the design doc. Done when the check after the colon passes.
+
+## Pending
+
+- [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
+- [ ] (manual, before step 7) GitHub repo created; provider keys added as Actions secrets.
+- [ ] (manual, before step 10) Vercel and Tailscale accounts created.
+- [ ] 1. Scaffolding: monorepo layout, docker-compose infra healthy, every service answers /healthz
+- [ ] 2. Contracts: OpenAPI and GraphQL contracts, typed clients generated, contracts-check and breaking-change check pass
+- [ ] 3. Data: schema and migrations apply from empty, expand/contract series tested, seed scripts run
+- [ ] 4. Workers: queue job with retries and dead-letter handling, backpressure and crash-recovery tests pass
+- [ ] 5. Tests: unit and integration suites green three runs in a row
+- [ ] 6. AI: pipeline built, golden dataset v1 created, eval report lists every target with pass or fail
+- [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
+- [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved
+- [ ] 9. Review UI and demo mode: resolvers, login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass
+- [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off
+
+## In Progress
+
+None.
+
+## Completed
+
+- [x] Project created from template (2026-10-13).
+
+## Blocked
+
+None.
