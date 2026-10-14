@@ -5,6 +5,7 @@ import { type GatewayConfig, loadGatewayConfig } from './config.ts';
 import { connectDb } from './db.ts';
 import { createFindTenant, createIntake } from './intake.ts';
 import { sqsSender, startRelay } from './outbox.ts';
+import { agentStates, startSweeper } from './sweeper.ts';
 
 let config: GatewayConfig;
 try {
@@ -43,10 +44,21 @@ const app = await buildApp({
 });
 const relay = startRelay(db.sql, sqsSender(sqs, config.INVESTIGATIONS_QUEUE), app.log);
 nudgeRelay = relay.nudge;
+const sweeper = startSweeper(
+  db.sql,
+  agentStates(config.AGENT_URL, config.AGENT_SERVICE_TOKEN),
+  {
+    stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
+    intervalMs: config.SWEEPER_INTERVAL_SECONDS * 1000,
+  },
+  app.log,
+  relay.nudge,
+);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     void app.close().then(async () => {
+      await sweeper.stop();
       await relay.stop();
       sqs.destroy();
       await db.sql.end({ timeout: 5 });

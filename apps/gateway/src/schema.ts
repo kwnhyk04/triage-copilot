@@ -96,6 +96,9 @@ export const alertGroups = gateway.table(
     investigationId: uuid('investigation_id').unique(),
     createdAt: createdAt(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    // The recovery sweeper's last re-queue of the investigation (src/sweeper.ts), and how many.
+    requeuedAt: timestamptz('requeued_at'),
+    requeueCount: integer('requeue_count').notNull().default(0),
   },
   (t) => [
     unique().on(t.tenantId, t.groupKey, t.windowStart),

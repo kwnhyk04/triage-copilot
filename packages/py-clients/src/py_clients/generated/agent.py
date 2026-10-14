@@ -42,6 +42,15 @@ class InvestigationStatus(StrEnum):
     cancelled = "cancelled"
 
 
+class WaitReason(StrEnum):
+    """
+    What a parked investigation waits for. tenant_cap: a slot under its tenant's cap of investigations running at once. budget: model calls, which are off or out of today's token budget.
+    """
+
+    tenant_cap = "tenant_cap"
+    budget = "budget"
+
+
 class InvestigationState(BaseModel):
     investigation_id: UUID
     status: InvestigationStatus
@@ -55,3 +64,19 @@ class InvestigationState(BaseModel):
         int, Field(description="Model tokens spent so far, input and output combined.", ge=0)
     ]
     updated_at: Annotated[AwareDatetime, Field(description="Time of the latest checkpoint.")]
+    waiting_for: Annotated[
+        WaitReason | None,
+        Field(
+            description="Set while the investigation is parked: its status is queued, its message was deleted, and the gateway's recovery sweeper re-queues it. Null otherwise."
+        ),
+    ]
+    waiting_since: Annotated[
+        AwareDatetime | None,
+        Field(description="When the investigation last parked; null unless waiting_for is set."),
+    ]
+    resumable: Annotated[
+        bool,
+        Field(
+            description="True when a parked investigation can run now: model calls are available again, or a slot under its tenant's cap is free and no investigation of that tenant parked for one before it."
+        ),
+    ]

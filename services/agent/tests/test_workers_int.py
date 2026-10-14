@@ -4,6 +4,7 @@ tenant cap. Each test gets throwaway queues set up like investigations.fifo and 
 
 import asyncio
 import contextlib
+import secrets
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Sequence
@@ -12,9 +13,13 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, delete, insert, select, text
 from types_boto3_sqs import SQSClient
 
+from agent.api import add_internal_api
 from agent.consumer import Consumer
 from agent.db import AiUsage, DeadLetter, Investigation, ToolCall
 from agent.dlq import replay_dead_letters, replay_dlq
@@ -54,6 +59,7 @@ ONE_CALL: list[ToolRequest | Report] = [SCRIPT[0], REPORT]
 STEP_SEQS = text(
     "SELECT seq FROM agent.investigation_steps WHERE investigation_id = :id ORDER BY 1"
 )
+SERVICE_TOKEN = secrets.token_urlsafe(32)
 
 
 class Tools:
@@ -124,7 +130,6 @@ def make_job(
         "ai_enabled": True,
         "daily_token_budget": 1_000_000,
         "tenant_cap": 5,
-        "budget_poll_seconds": 0.05,
     }
     return cls(engine, model or ScriptedModel(SCRIPT), tools, **(settings | options))
 
@@ -192,6 +197,28 @@ def status(engine: Engine, inv: UUID) -> str | None:
     with engine.connect() as conn:
         found = conn.execute(select(Investigation.status).where(Investigation.id == inv))
         return found.scalar_one_or_none()
+
+
+def waiting(engine: Engine, inv: UUID) -> tuple[str, str | None, UUID | None]:
+    """Status, what the investigation waits for, and the tenant it recorded."""
+    query = select(Investigation.status, Investigation.waiting_reason, Investigation.tenant_id)
+    with engine.connect() as conn:
+        found, reason, tenant = conn.execute(query.where(Investigation.id == inv)).one()
+        return found, reason, tenant
+
+
+def state_api(job: Job) -> TestClient:
+    """The internal API over the job's database, sending the service token."""
+    app = FastAPI()
+    add_internal_api(app, job, SecretStr(SERVICE_TOKEN))
+    return TestClient(app, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
+
+
+def state(api: TestClient, inv: UUID) -> dict[str, Any]:
+    response = api.get(f"/internal/investigations/{inv}/state")
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
 
 
 def recorded(engine: Engine, inv: UUID) -> list[tuple[int, StepRecordedV2]]:
@@ -376,7 +403,7 @@ def test_heartbeat_keeps_a_long_investigation_from_redelivering(
     assert job.runs == 1
 
 
-def test_budget_guard_holds_new_investigations_and_counts_tokens(engine: Engine) -> None:
+def test_budget_parks_new_investigations_and_counts_tokens(engine: Engine) -> None:
     model = Counting(ScriptedModel(ONE_CALL, TokenUsage(input=100, output=10)))
     job = make_job(engine, Tools().all(), model, daily_token_budget=1000)
     with engine.begin() as conn:
@@ -385,18 +412,19 @@ def test_budget_guard_holds_new_investigations_and_counts_tokens(engine: Engine)
     inv = request.investigation_id
 
     async def main() -> None:
-        running = asyncio.create_task(job.run(request, asyncio.Event()))
-        await eventually(lambda: status(engine, inv) == "queued_budget")
-        await asyncio.sleep(0.3)  # Several budget checks.
+        # It parks at once, before it takes a tenant slot, so its message can go.
+        assert await job.run(request, asyncio.Event()) == "parked"
+        assert waiting(engine, inv) == ("queued", "budget", TENANT)
         assert model.calls == 0
         with engine.begin() as conn:
             conn.execute(delete(AiUsage))  # A new UTC day.
-        assert await asyncio.wait_for(running, 30) == "done"
+        # Re-queued by the gateway's sweeper, it runs and stops waiting.
+        assert await job.run(request, asyncio.Event()) == "done"
 
     asyncio.run(main())
 
     assert model.calls == 2
-    assert status(engine, inv) == "resolved"
+    assert waiting(engine, inv) == ("resolved", None, TENANT)
     assert tokens_today(engine) == 220
     with engine.connect() as conn:
         used = conn.execute(select(Investigation.budget_tokens_used).where(Investigation.id == inv))
@@ -424,13 +452,10 @@ def test_resumed_investigations_pass_the_budget_but_not_ai_off(engine: Engine) -
     model = Counting(ScriptedModel(ONE_CALL))
 
     async def main() -> None:
-        # With model calls off, even a resumed investigation waits once it needs the model.
-        stopping = asyncio.Event()
+        # With model calls off, even a resumed investigation parks once it needs the model.
         off = make_job(engine, Tools().all(), model, daily_token_budget=1000, ai_enabled=False)
-        running = asyncio.create_task(off.run(request, stopping))
-        await eventually(lambda: status(engine, inv) == "queued_budget")
-        stopping.set()
-        assert await asyncio.wait_for(running, 30) == "stopped"
+        assert await off.run(request, asyncio.Event()) == "parked"
+        assert waiting(engine, inv)[:2] == ("queued", "budget")
         assert model.calls == 0
         # Over budget with model calls on, it goes on: only new investigations wait.
         on = make_job(engine, Tools().all(), model, daily_token_budget=1000)
@@ -442,7 +467,7 @@ def test_resumed_investigations_pass_the_budget_but_not_ai_off(engine: Engine) -
     assert [step.kind for _, step in recorded(engine, inv)] == ["tool_call"] * 2 + ["report"]
 
 
-def test_tenant_cap_limits_running_investigations_per_tenant(engine: Engine) -> None:
+def test_tenant_cap_parks_investigations_over_it(engine: Engine) -> None:
     tools = Tools()
 
     async def main() -> None:
@@ -456,11 +481,71 @@ def test_tenant_cap_limits_running_investigations_per_tenant(engine: Engine) -> 
         stopping = asyncio.Event()
         first = [asyncio.create_task(job.run(new_request(), stopping)) for _ in range(2)]
         await eventually(lambda: len(tools.calls) == 2)  # Both hold a slot, inside a tool call.
-        assert await job.run(new_request(), stopping) == "busy"
+        third = new_request()
+        assert await job.run(third, stopping) == "parked"
+        assert waiting(engine, third.investigation_id) == ("queued", "tenant_cap", TENANT)
         other_tenant = asyncio.create_task(job.run(new_request(UUID(int=2)), stopping))
         await eventually(lambda: len(tools.calls) == 3)
         gate.set()
         assert await asyncio.gather(*first, other_tenant) == ["done"] * 3
-        assert await job.run(new_request(), stopping) == "done"
+        # Re-queued once a slot is free, it runs and stops waiting.
+        assert await job.run(third, stopping) == "done"
+        assert waiting(engine, third.investigation_id) == ("resolved", None, TENANT)
 
     asyncio.run(main())
+
+
+def test_state_reports_parked_investigations_and_when_they_can_run(engine: Engine) -> None:
+    job = make_job(engine, {}, ScriptedModel([REPORT]), tenant_cap=2, daily_token_budget=1000)
+    api = state_api(job)
+    assert api.get(f"/internal/investigations/{uuid.uuid4()}/state").status_code == 404
+
+    # Two running investigations of the tenant, as far as the cap can tell.
+    key = f"tenant:{TENANT}"
+    holder = engine.connect()
+    with holder.begin():
+        for slot in (0, 1):
+            holder.execute(text("SELECT pg_advisory_lock(hashtext(:k), :s)"), {"k": key, "s": slot})
+    requests = [new_request() for _ in range(3)]
+
+    async def run(*batch: Request) -> list[Outcome]:
+        return [await job.run(request, asyncio.Event()) for request in batch]
+
+    assert asyncio.run(run(*requests)) == ["parked"] * 3
+    first, second, third = (request.investigation_id for request in requests)
+    parked = state(api, first)
+    assert (parked["status"], parked["waiting_for"]) == ("queued", "tenant_cap")
+    assert parked["waiting_since"] is not None
+
+    def resumable() -> list[bool]:
+        return [state(api, inv)["resumable"] for inv in (first, second, third)]
+
+    assert resumable() == [False, False, False]
+
+    # Each free slot goes to the one that parked earliest and is not resumed yet.
+    unlock = text("SELECT pg_advisory_unlock(hashtext(:k), :s)")
+    with holder.begin():
+        holder.execute(unlock, {"k": key, "s": 0})
+    assert resumable() == [True, False, False]
+    with holder.begin():
+        holder.execute(unlock, {"k": key, "s": 1})
+    assert resumable() == [True, True, False]
+    holder.close()
+    assert asyncio.run(run(requests[0], requests[1])) == ["done", "done"]
+    assert resumable() == [False, False, True]
+    finished = state(api, first)
+    assert finished["status"] == "resolved"
+    assert (finished["waiting_for"], finished["waiting_since"]) == (None, None)
+    assert finished["steps_taken"] == 1
+
+    # Budget: a new investigation over today's budget parks, and can run once the budget resets.
+    with engine.begin() as conn:
+        conn.execute(delete(AiUsage))
+        conn.execute(insert(AiUsage).values(day=UTC_TODAY, tokens=1000))
+    over = new_request()
+    assert asyncio.run(run(over)) == ["parked"]
+    assert state(api, over.investigation_id)["waiting_for"] == "budget"
+    assert state(api, over.investigation_id)["resumable"] is False
+    with engine.begin() as conn:
+        conn.execute(delete(AiUsage))
+    assert state(api, over.investigation_id)["resumable"] is True

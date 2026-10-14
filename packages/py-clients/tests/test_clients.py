@@ -73,6 +73,9 @@ def test_agent_client_sends_the_service_token() -> None:
         "tool_calls": 2,
         "tokens_used": 5430,
         "updated_at": "2026-10-14T12:00:52Z",
+        "waiting_for": None,
+        "waiting_since": None,
+        "resumable": False,
     }
     seen, transport = recorder(httpx2.Response(202, json=state))
 

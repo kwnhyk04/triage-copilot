@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 
+from agent.api import add_internal_api
 from agent.consumer import Consumer, sqs_client
 from agent.job import Job
 from agent.model import Report, ScriptedModel
@@ -71,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="agent", lifespan=lifespan)
     instrument(app, "agent", settings.otel_exporter_otlp_endpoint)
+    add_internal_api(app, job, settings.agent_service_token)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

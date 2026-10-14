@@ -99,6 +99,11 @@ export interface components {
         };
         /** @enum {string} */
         InvestigationStatus: "queued" | "running" | "awaiting_approval" | "resolved" | "failed" | "cancelled";
+        /**
+         * @description What a parked investigation waits for. tenant_cap: a slot under its tenant's cap of investigations running at once. budget: model calls, which are off or out of today's token budget.
+         * @enum {string}
+         */
+        WaitReason: "tenant_cap" | "budget";
         InvestigationState: {
             /** Format: uuid */
             investigation_id: string;
@@ -114,6 +119,15 @@ export interface components {
              * @description Time of the latest checkpoint.
              */
             updated_at: string;
+            /** @description Set while the investigation is parked: its status is queued, its message was deleted, and the gateway's recovery sweeper re-queues it. Null otherwise. */
+            waiting_for: components["schemas"]["WaitReason"] | null;
+            /**
+             * Format: date-time
+             * @description When the investigation last parked; null unless waiting_for is set.
+             */
+            waiting_since: string | null;
+            /** @description True when a parked investigation can run now: model calls are available again, or a slot under its tenant's cap is free and no investigation of that tenant parked for one before it. */
+            resumable: boolean;
         };
     };
     responses: {

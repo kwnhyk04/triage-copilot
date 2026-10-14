@@ -1,8 +1,10 @@
 """Long-polls investigations.fifo and runs each request as a resumable job.
 
-A message is deleted only once its final report is committed. One that fails schema validation
-goes to agent.dead_letters and is deleted at once, so it does not use up the 5 receives that move
-a message to investigations-dlq.fifo. Any other failure leaves the message to SQS redelivery.
+A message is deleted once its final report is committed, or once its investigation is parked to
+wait for a tenant slot or model budget (the gateway's recovery sweeper re-queues it). One that
+fails schema validation goes to agent.dead_letters and is deleted at once, so it does not use up
+the 5 receives that move a message to investigations-dlq.fifo. Any other failure leaves the
+message to SQS redelivery.
 """
 
 from __future__ import annotations
@@ -157,11 +159,10 @@ class Consumer:
                 return
             finally:
                 heartbeat.cancel()
-            if outcome == "done":
+            if outcome in ("done", "parked"):
                 await self._delete(receipt)
             elif outcome == "busy":
-                # ponytail: cap and duplicate waits use up receives, so a tenant over its cap for
-                # about 10 minutes (several agents) dead-letters work. Park it in Postgres then.
+                # A duplicate: another agent runs this investigation with its own message in flight.
                 delay = round(random.uniform(*self.busy_backoff_seconds))  # noqa: S311 - jitter
                 await self._change_visibility(receipt, delay)
         except Exception:

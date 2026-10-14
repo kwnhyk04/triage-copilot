@@ -60,9 +60,9 @@ Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; c
 
 Design (steps 1 to 4 built intake, queueing and the resumable job; the model providers and tools come in step 6):
 
-1. `apps/gateway` (TS): webhook intake, dedupe and grouping, approvals API, GraphQL with subscriptions.
+1. `apps/gateway` (TS): webhook intake, dedupe and grouping, recovery sweeper, approvals API, GraphQL with subscriptions.
 2. SQS FIFO `investigations.fifo`, one MessageGroupId per Alertmanager group (a hash of tenant and group key); redrive to DLQ after 5 receives.
-3. `services/agent` (Python): SQS consumer, agent loop, checkpoint after every step, visibility heartbeat.
+3. `services/agent` (Python): SQS consumer, agent loop, checkpoint after every step, visibility heartbeat. Work that must wait for a tenant slot or model budget parks in Postgres and gives up its message; the gateway's sweeper re-queues it.
 4. `services/executor` (Python): runs approved, allowlisted actions only, with idempotency keys.
 5. `sim/` (Python): metrics, paginated logs, and deploy history for scripted incidents.
 6. `apps/web` (Next.js): live timeline, hypotheses, approve and reject.
@@ -74,7 +74,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 - `infra/elasticmq.conf`: `investigations.fifo`, redriven to `investigations-dlq.fifo` after 5 receives. Messages persist in H2 on the `elasticmq-data` volume.
 - `contracts/` (spec-first; code is generated from it, never the reverse):
   - `openapi/gateway.yaml` (OpenAPI 3.1): `POST /v1/alerts` (Alertmanager webhook v4, 202 `{group_id, deduped}`), `GET /v1/investigations` (keyset: `limit`, opaque `cursor`, `next_cursor`), `GET /v1/investigations/{id}`, `POST /v1/actions/{id}/approve|reject` (body `{approver, reason?}`, 409 once decided). Errors are RFC 9457 problem details; 401 carries `WWW-Authenticate`; 429 carries `RateLimit-Limit`, `RateLimit-Remaining`, `Retry-After`; 503 carries `Retry-After`. Security: the webhook takes its own bearer token, approve and reject take `X-Approver-Key` (`APPROVER_API_KEY`, held only by the web server), other `/v1` routes and `/graphql` take `X-API-Key`, health probes none. `openapi/examples/alertmanager-webhook.json` is a sample payload.
-  - `openapi/agent.yaml` (internal): `POST /internal/investigations/{id}/cancel`, `GET /internal/investigations/{id}/state`, behind a separate service bearer token.
+  - `openapi/agent.yaml` (internal, 0.3.0): `POST /internal/investigations/{id}/cancel`, `GET /internal/investigations/{id}/state`, behind a separate service bearer token (`AGENT_SERVICE_TOKEN`). The state adds `waiting_for` (`tenant_cap` or `budget`), `waiting_since` and `resumable`. Only state is served; cancel is not built.
   - `messages/`: one strict JSON Schema per message version (`<name>.v<N>.schema.json`, `schema_version` const, embedded `examples`): InvestigationRequested v1 and v2, StepRecorded v1, v2 and v3, ActionProposed v1, ActionApproved v1. `step-recorded.schema.json` is the union of v1, v2 and v3 that consumers validate against; it marks v2 deprecated. Producers emit v3, whose payload is the agent's stored StepRecorded v2 event unchanged. Both require a summary of 1 to 2,000 characters, and latency and token counts that are not negative.
   - InvestigationRequested v2 adds `tenant_id`; the union `investigation-requested.schema.json` accepts v1 (deprecated) and v2, and the gateway emits v2. Its MessageGroupId is the hex SHA-256 of tenant and Alertmanager `group_key`, which SQS cannot take raw (spaces, over 128 characters); its MessageDeduplicationId hashes tenant, group key and window start.
   - `graphql/schema.graphql`: reads and live updates only. Investigation, Hypothesis, Evidence, ProposedAction, Step, ToolCall; Relay connection `investigations(first, after)`; `investigation(id)`; subscription `investigationUpdated(id): Investigation!`.
@@ -95,19 +95,28 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - `proposed_actions`: a copy of the agent's proposals for the UI. Its status comes from `approvals`, whose primary key `action_id` allows one decision per action.
   - Keyset indexes on `(tenant_id, created_at DESC NULLS FIRST, id DESC NULLS FIRST)` for alerts, groups and actions.
 - Agent schema:
-  - Models in `services/agent/src/agent/db.py`; plain-SQL Alembic revisions 0001 to 0005 in `services/agent/migrations/versions/` (`docs/migrations.md`).
-  - Tables: `investigations` (status adds `queued_budget`), `investigation_steps` (partitioned by month on `created_at`), `tool_calls`, `runbook_chunks` (`vector(768)`, no ANN index yet), `proposed_actions` (unique `idempotency_key`), `dead_letters` (poison messages), `ai_usage` (model tokens per UTC day).
+  - Models in `services/agent/src/agent/db.py`; plain-SQL Alembic revisions 0001 to 0006 in `services/agent/migrations/versions/` (`docs/migrations.md`).
+  - Tables: `investigations` (while parked: `waiting_reason`, `waiting_since` and the `tenant_id` from the message; `queued_budget` is no longer written), `investigation_steps` (partitioned by month on `created_at`), `tool_calls`, `runbook_chunks` (`vector(768)`, no ANN index yet), `proposed_actions` (unique `idempotency_key`), `dead_letters` (poison messages), `ai_usage` (model tokens per UTC day).
 - Gateway intake (`apps/gateway/src/intake.ts`, `outbox.ts`, `cli.ts`):
   - `POST /v1/alerts` checks the tenant's bearer token after the rate limit and before reading the body, then validates the payload (1 MB, 200 alerts, 10 s to send the request).
   - It stores each firing once per (tenant, fingerprint, startsAt) and records status changes. New alerts join the group of their group key whose 5-minute window opened last, or open a group. A new group with a firing alert gets an investigation, whose InvestigationRequested v2 goes to `outbox` in the same transaction, unless the tenant already started `MAX_NEW_INVESTIGATIONS` (5) in the last 5 minutes; otherwise it stays `queued_not_investigated`. It answers 202 `{group_id, deduped}`; the request path never calls a model.
   - The relay sends due outbox rows to `investigations.fifo` (nudged after each commit, else every second), retries a failure after 2^attempts seconds up to 5 minutes, and parks a row after 10 failures.
   - `cli.ts`: `tenant:token <name>` issues a webhook token (stored as SHA-256); `outbox:replay` re-queues parked rows.
   - @fastify/rate-limit, in memory, `RATE_LIMIT_PER_MINUTE` (600) per credential hash or client address; probes are exempt; 429 is problem+json with `Retry-After` and `RateLimit-*` headers.
+- Gateway recovery sweeper (`apps/gateway/src/sweeper.ts`), every `SWEEPER_INTERVAL_SECONDS` (15) in the gateway process:
+  - One transaction over the `queued` groups that have no outbox row, `FOR NO KEY UPDATE SKIP LOCKED`, so two gateways never sweep one group and webhook foreign-key checks are not blocked.
+  - For each, it asks the agent's state (`AGENT_URL`, service token, 3 s timeout); an unreachable agent skips the group.
+  - Re-queues through the outbox: a parked investigation the agent reports `resumable` (unless a re-queue since it parked is still on its way), and stuck ones: unknown to the agent, or `queued`/`running` without a checkpoint, for `SWEEPER_STUCK_AFTER_MINUTES` (10), counted from the last re-queue too. `failed` is left to the DLQ and `make dlq-replay`.
+  - A re-queue writes the outbox row and sets `requeued_at` and `requeue_count` in that transaction, then wakes the relay. Its MessageDeduplicationId is the window's hash input plus `\nrequeue N`, so SQS never drops it as a repeat of an earlier send. `investigationRequest` in `intake.ts` builds the message for both.
+  - A group whose investigation reached `awaiting_approval`, `resolved` or `cancelled` takes that status and leaves the sweep.
 - Agent worker (`services/agent/src/agent/consumer.py`, `job.py`, `model.py`, `dlq.py`):
-  - `Consumer`: asyncio task in the FastAPI lifespan. 20 s long polls ask only for free slots (`AGENT_MAX_IN_FLIGHT`, 5). A heartbeat extends visibility to 60 s every 30 s and stops at shutdown. Poison messages go to `dead_letters` and are deleted. A message is deleted only once its report commits; a failure leaves it to redelivery, and the 5th failed receive marks the investigation `failed`.
-  - `Job`: one Postgres session per run, holding an advisory lock per investigation and one of `AGENT_TENANT_CAP` (5) slots per tenant ("busy" returns the message after 60 to 120 s). It replays the recorded steps and continues after the last: a model turn, or the tool call the last turn asked for.
+  - `Consumer`: asyncio task in the FastAPI lifespan. 20 s long polls ask only for free slots (`AGENT_MAX_IN_FLIGHT`, 5). A heartbeat extends visibility to 60 s every 30 s and stops at shutdown. Poison messages go to `dead_letters` and are deleted. A message is deleted once its report commits or its investigation parks; a failure leaves it to redelivery, and the 5th failed receive marks the investigation `failed`.
+  - `Job`: one Postgres session per run, holding an advisory lock per investigation and one of `AGENT_TENANT_CAP` (5) slots per tenant. A duplicate delivery ("busy": the investigation runs elsewhere) returns after 60 to 120 s. It replays the recorded steps and continues after the last: a model turn, or the tool call the last turn asked for.
+  - Parking: a tenant at its cap, or no model budget, marks the investigation waiting (status `queued`, `waiting_reason` `tenant_cap` or `budget`, `waiting_since`, `tenant_id`) and the consumer deletes its message, so a wait holds no worker slot and uses up no receives. The budget check comes before the tenant slot; with `AI_ENABLED=false` a running investigation parks at its next model turn and frees its slot. Taking a slot clears the mark.
+  - `Job.resumable`: budget waiters, once model calls are available again (resumed ones need only `AI_ENABLED`); tenant-cap waiters, while fewer of the tenant's investigations that parked earlier still wait than slots are free. Free slots are the cap minus the tenant's slot locks in `pg_locks`. A re-queued investigation stays parked until it takes its slot, so it keeps its place in line.
+- Agent internal API (`services/agent/src/agent/api.py`): `GET /internal/investigations/{id}/state` behind `AGENT_SERVICE_TOKEN` (32+ characters), compared as SHA-256 digests in constant time. Missing or wrong: 401 problem details with `WWW-Authenticate: Bearer`. Every error is problem details (400 for a bad id, 404 for an unknown one). It maps `queued_budget` to `queued` and always reports `cancel_requested` false.
   - Each model turn and each tool result is one transaction: a turn that asks for a tool writes the call's `tool_calls` row with its arguments, and the result step completes it. As StepRecorded v3 defines them, only result steps carry `result` and `latency_ms`. One message per FIFO group runs from each receive; later ones of that group go back at once. `failed` is not final: a message replayed from the DLQ resumes its investigation. Tools get a 10 s timeout and 3 retries with full jitter; a call that still fails is recorded as an error and the investigation goes on. Model calls get 60 s and 3 retries, waiting the provider's Retry-After when given.
-  - Budget guard: new investigations wait as `queued_budget` while `AI_ENABLED` is false or today's `ai_usage` reaches `DAILY_AI_TOKEN_BUDGET`; `AI_ENABLED=false` also holds running ones at their next model turn.
+  - Budget guard: new investigations park (`budget`) while `AI_ENABLED` is false or today's `ai_usage` reaches `DAILY_AI_TOKEN_BUDGET`; `AI_ENABLED=false` also parks running ones at their next model turn.
   - `model.py`: the provider layer (`Model`, `ModelError.retry_after`, the `Report` of summary and hypotheses, `ScriptedModel`). Until step 6 the agent runs a placeholder `ScriptedModel` that reports at once.
   - `python -m agent.dlq replay` moves `investigations-dlq.fifo` back to the queue and re-sends unreplayed `dead_letters`; `make dlq-replay` runs it after the gateway's `outbox:replay`.
 - `agent.steps`: the stored StepRecorded v1 and v2 event models, the upcasters, `replay` (always v2), `step_message`, and `record_step`. `record_step` numbers steps from `investigations.step_count`, dual-writes to `investigation_steps_p` while `STEPS_DUAL_WRITE` is on, and returns the StepRecorded v3 message to publish after its transaction commits.
@@ -117,7 +126,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - Each schema is written by its own role. It refuses to overwrite data without `--reset`; `--large` tops the agent up to 2,000,000 steps.
 - Migration tests (`services/agent/tests/conftest.py`) create a throwaway database `triage_test_*` per test as the Postgres superuser (`POSTGRES_PASSWORD`) and drop it afterwards.
 
-Still planned: the recovery sweeper, agent tools and model providers (step 6), executor safety checks, scenario engine, eval harness.
+Still planned: agent tools and model providers (step 6), executor safety checks, scenario engine, eval harness.
 
 ## Implemented Functionality
 
@@ -140,7 +149,7 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
   - Errors, including Fastify's own, are problem+json.
 - Approver key: `APPROVER_API_KEY` (at least 32 characters) is required by the gateway and the web server and checked at startup. The Makefile unexports it and passes it only to `dev-ts` (gateway and web), so the agent, executor, sim, tests and tools never receive it. `apps/web/src/lib/decisions.ts` (`decideAction`) is the only code that sends it.
 - web: home page shows gateway status through a server-side GraphQL call; `/healthz`, `/readyz` (gateway reachable).
-- agent: `/healthz`, `/readyz` (Postgres and queue), and the worker (consumer and resumable job, see Important Components).
+- agent: `/healthz`, `/readyz` (Postgres and queue), the worker (consumer and resumable job, see Important Components), and the internal state API.
 - Step 4 (workers), checked by tests:
   - Restart: an agent stopped mid-investigation finishes and records its running tool call, leaves the message, and the next agent resumes at the next step; every tool call ran once. After a hard kill only the interrupted call runs again, since it had no recorded result (`services/agent/tests/test_workers_int.py`).
   - DLQ: a message whose job fails 5 times lands in the DLQ, and its investigation is `failed`; replayed with the cause fixed, it resolves. A poison message goes to `dead_letters` without using receives. Both replay commands move messages back.
@@ -148,6 +157,12 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
   - Budget guard: a new investigation waits as `queued_budget` with no model call until the day's usage is under budget; resumed ones pass the budget but not `AI_ENABLED=false`; tokens add up per UTC day and per investigation. The tenant cap holds a third run of a tenant capped at 2 while another tenant proceeds.
   - Storm: 500 webhook posts from 10 concurrent clients (400 alerts in 8 groups plus 100 re-sends) are all acknowledged with p99 under 200 ms (about 86 ms measured), store every alert, open 8 groups and queue only 5 investigations, one message per FIFO group (`apps/gateway/src/intake.int.test.ts`). A new alert that arrives resolved opens a group without an investigation.
   - Rate limit: 429 with `Retry-After` and `RateLimit-*` headers once a credential uses its minute, a separate count per credential, and probes never limited. Limits: 201 alerts get 400, a body over 1 MB gets 413, and the request timeout is 10 s (`apps/gateway/src/app.test.ts`).
+- Step 4 follow-up (parking and recovery sweeper), checked by tests:
+  - Two agents (`services/agent/tests/test_parking_int.py`, with the real gateway process and its sweeper): a storm of 40 alerts over 8 groups starts 5 investigations against a tenant cap of 2. Three park and give up their messages; each runs after one re-queue; all 5 resolve with one model turn each; the DLQ and `dead_letters` stay empty; the groups take `resolved`.
+  - A budget-parked investigation stays parked through three sweeps, then runs once the day's usage resets, after one re-queue.
+  - Queue loss (`apps/gateway/src/sweeper.int.test.ts`): after a purge, one sweep re-queues exactly the lost, resumable and stuck investigations, each with a new deduplication id; parked, budget, busy, failed and uninvestigated groups stay; a second sweep re-queues nothing; one that parks again goes back once resumable.
+  - The resumable order (`test_workers_int.py`): with both slots held, three parked investigations are not resumable; each freed slot goes to the earliest parked.
+  - The internal API answers 401 problem details with `WWW-Authenticate` without the token, with a wrong one, or with another scheme (`test_agent_api.py`).
 - executor and sim: `/healthz` and `/readyz` only.
 - Both schemas, migrated by Drizzle (`gateway.__drizzle_migrations`) and Alembic (`agent.alembic_version`). Tests apply both chains to an empty database, run the seed, and check the models against the result (`alembic check`). They also downgrade the agent chain to empty and back.
 - Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms. Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
@@ -155,24 +170,29 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 
 ## Current Development Status
 
-Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) on 2026-10-15 except the recovery sweeper. Next: the sweeper, then step 5, tests.
+Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper) on 2026-10-15. Next: step 5, tests.
 
 ## Known Limitations
 
 - All targets are design goals and have not been measured.
 - The contracts are ahead of the code:
   - Approve, reject and the alert webhook are the only `/v1` routes served. Their decision store still answers not found. The `proposed_actions` and `approvals` tables exist, but recording a decision must also queue ActionApproved, which needs an outbox (step 4).
-  - X-API-Key and the agent service token are not enforced yet; the webhook enforces per-tenant tokens.
+  - X-API-Key is not enforced yet; the webhook enforces per-tenant tokens and the agent's internal API its service token.
+  - The agent serves `GET .../state` only; `POST .../cancel` is not built, and `cancel_requested` is always false.
   - The GraphQL `investigations` and `investigation` queries have no resolvers (step 9).
 - `RootCauseClass` and `ActionKind` are initial enums; the scenario engine and eval steps may extend them. A new value in a response breaks older generated Python clients (pydantic enums reject unknown values), so ship the gateway and the clients together.
 - Action `parameters` are free-form; per-kind parameter schemas are open (docs/todo.md). No message carries the structured report (hypotheses, evidence) from agent to gateway yet; decide before step 6.
 - `make eval` is a placeholder until step 6.
 - StepRecorded v3, like the stored v2 event, has no tool call status, and its `latency_ms` may be null. The API's `Step.tool_call` needs `status` and `duration_ms`, so the gateway must derive them or a later version must add them (docs/todo.md).
 - The job records StepRecorded events but publishes none: no queue carries them to the gateway yet (step 6). A tool call is two steps (the model's request with tokens, then the result), so the API's `Step.tool_call` must pair them.
-- Agent tables carry no tenant id; the agent reads the tenant from InvestigationRequested v2 only to cap concurrency.
+- Agent tables record a tenant only when an investigation parks; the agent reads it from InvestigationRequested v2.
+- Parked investigations resume up to `SWEEPER_INTERVAL_SECONDS` after their slot or budget frees, since the sweeper polls. One re-queued that loses the freed slot to a new arrival parks again at the back of the line.
+- The sweeper asks the agent once per queued group per sweep (a `ponytail:` note): fine for hundreds; batch it past a few thousand.
+- Only investigations the gateway requested (with an alert group) are re-queued; `--large` seed rows and hand-sent test messages are not.
+- The sweeper copies only finished statuses onto groups; `running` and `failed` stay `queued` in the gateway until step 9 brings the status flow.
 - Until step 6 the agent's model is a placeholder that ends each investigation with a "not investigated" report, and it has no tools.
 - Rate limits count in memory, so they hold for one gateway instance only. Requests without a credential are counted per client address, which is the proxy's behind Tailscale Funnel unless `trustProxy` is set (step 10).
-- With several agents, messages that wait for a tenant slot use up receives and can dead-letter (docs/memory.md). Budget waits hold up to `AGENT_MAX_IN_FLIGHT` messages in flight, and while every slot waits, resumed investigations wait in the queue too. Real SQS ends a message's visibility 12 hours after its receive, so a longer wait costs one receive.
+- A duplicate delivery of a running investigation ("busy") still returns to SQS and uses up receives; one that outlasts about 5 backoffs reaches the DLQ.
 - A group opened without an investigation (cap reached, or only resolved alerts) stays without one for its 5-minute window, even if firing alerts join it.
 - The storm test sends its 500 posts within seconds rather than over 2 minutes, which is harsher on latency.
 - `STEPS_DUAL_WRITE` and the dual-write code stay for the partitioning test; past revision 0004 the flag must stay false.
@@ -181,7 +201,7 @@ Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (wo
 - Apps run natively in dev; Dockerfiles and the prod compose override come with steps 7 and 10.
 - Gateway subscriptions use in-process pub/sub, so they work with one gateway instance only.
 - Toxiproxy runs without proxies; fault-injection tests will create them.
-- ElasticMQ messages survive container restarts (H2 on the `elasticmq-data` volume), but losing that volume loses queued investigations until the recovery sweeper (step 4) exists.
+- ElasticMQ messages survive container restarts (H2 on the `elasticmq-data` volume); if that volume is lost, the recovery sweeper re-queues the lost investigations after `SWEEPER_STUCK_AFTER_MINUTES`.
 
 ## Planned Features
 

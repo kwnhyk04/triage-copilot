@@ -142,8 +142,23 @@ def test_runs_valid_messages_and_dead_letters_invalid_ones() -> None:
     assert [request.group_key for request in job.ran] == ["checkout-errors"]
 
 
+@pytest.mark.parametrize("outcome", ["done", "parked"])
+def test_deletes_the_message_once_the_report_commits_or_the_investigation_parks(
+    outcome: Outcome,
+) -> None:
+    sqs = FakeSqs([VALID])
+    job = FakeJob(outcome)
+    consume(sqs, job, until=lambda: bool(sqs.deleted))
+
+    # A parked investigation holds no worker slot and uses up no receives while it waits.
+    assert sqs.deleted == ["r0"]
+    assert sqs.visibility == []
+
+
 @pytest.mark.parametrize("outcome", ["stopped", "busy", RuntimeError("model down")])
-def test_keeps_the_message_unless_the_report_is_committed(outcome: Outcome | Exception) -> None:
+def test_keeps_the_message_while_the_investigation_is_unfinished(
+    outcome: Outcome | Exception,
+) -> None:
     sqs = FakeSqs([VALID])
     job = FakeJob(outcome)
     consume(sqs, job, until=lambda: bool(job.ran), busy_backoff_seconds=(60, 120))

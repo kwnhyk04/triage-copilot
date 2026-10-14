@@ -67,9 +67,17 @@ From the approved design doc:
 - 2026-10-15: `failed` is not a finished status for the job: it marks an investigation whose message went to the DLQ, and a replayed message resumes it. Reason: with `failed` finished, `make dlq-replay` deleted exactly the messages it should retry (found by the independent review).
 - 2026-10-15: The consumer runs one message per FIFO group from each receive. A later message of the same group in the batch goes back with visibility 0, and SQS holds it until the earlier one is deleted. Reason: one receive can return several messages of a group, which would run investigations of one Alertmanager group at once.
 - 2026-10-15: Each job holds one Postgres session for its whole run. It takes a session advisory lock per investigation (a duplicate delivery gets "busy") and one of `AGENT_TENANT_CAP` slot locks per tenant. Reason: session locks end with the process, so a crash never leaks a slot, as a counter row would.
-- 2026-10-15: A "busy" message (tenant at its cap, or the investigation running elsewhere) returns to SQS after 60 to 120 s. Ceiling: these waits use up receives, so with several agents a tenant over its cap for about 10 minutes dead-letters work; park such messages in Postgres if that happens. One agent never hits it, since its 5 slots equal the cap.
-- 2026-10-15: Budget waits keep the message in flight with heartbeats, status `queued_budget`. Reason: the spec deletes a message only after its final report, and releasing it would use up receives during an hours-long wait. Once every slot waits, the consumer stops receiving, so the rest stay queued untouched. Only new investigations (no steps) wait for the budget; `AI_ENABLED=false` holds every investigation at its next model turn. Ceiling: while every slot holds a waiting new investigation, redelivered resumed ones wait in the queue too, until the budget frees; park budget waiters in Postgres if that delay matters.
+- 2026-10-15: A "busy" message (tenant at its cap, or the investigation running elsewhere) returns to SQS after 60 to 120 s. Ceiling: these waits use up receives, so with several agents a tenant over its cap for about 10 minutes dead-letters work; park such messages in Postgres if that happens. One agent never hits it, since its 5 slots equal the cap. Superseded the same day by parking (below): only a duplicate delivery is still "busy".
+- 2026-10-15: Budget waits keep the message in flight with heartbeats, status `queued_budget`. Reason: the spec deletes a message only after its final report, and releasing it would use up receives during an hours-long wait. Once every slot waits, the consumer stops receiving, so the rest stay queued untouched. Only new investigations (no steps) wait for the budget; `AI_ENABLED=false` holds every investigation at its next model turn. Ceiling: while every slot holds a waiting new investigation, redelivered resumed ones wait in the queue too, until the budget frees; park budget waiters in Postgres if that delay matters. Superseded the same day by parking (below).
 - 2026-10-15: Until build step 6 the agent runs `ScriptedModel` with one placeholder report ("Not investigated: the AI pipeline arrives in build step 6."), which resolves each investigation. Reason: the queue, steps, budget and delete path run end to end now.
+- 2026-10-15: Parking replaces holding (user decision). A message that must wait for a tenant slot or model budget marks its investigation waiting and is deleted: status `queued`, `waiting_reason` `tenant_cap` or `budget`, `waiting_since`, and the `tenant_id` from the message. Reason: waits used up SQS receives, so a tenant over its cap dead-lettered work, and budget waiters held every worker slot.
+- 2026-10-15: Waiting is two columns, not a new status. Reason: the internal API's `InvestigationStatus` must equal the gateway's REST and GraphQL enums (`contracts.test.ts`), so the API reports `waiting_for` beside status `queued`.
+- 2026-10-15: The gateway's recovery sweeper re-queues through the gateway's outbox. The agent decides when a parked investigation can run: `resumable` in its internal state API. Reason: the gateway owns alert groups and the outbox, only the agent sees tenant slots and the budget, and no service reads another's schema.
+- 2026-10-15: Free slots are read from `pg_locks`, never probed: a two-key advisory lock shows as `classid = hashtext(key)::oid` and `objsubid` 2, negative hashes included (checked by hand). A tenant-cap waiter is resumable while fewer earlier-parked investigations of its tenant still wait than slots are free. A re-queued one stays parked until it takes its slot. Reason: the sweep then never sends more than the free slots, and the first to park runs first.
+- 2026-10-15: Each re-queue has its own MessageDeduplicationId: the window's hash input plus `\nrequeue N`. Reason: the window's id is fixed, and SQS silently drops a repeat within 5 minutes, which would strand a parked investigation.
+- 2026-10-15: Stuck means unknown to the agent (404), or `queued` or `running` and not waiting, with no checkpoint for `SWEEPER_STUCK_AFTER_MINUTES`, counted from the last re-queue too. `failed` is left alone: its message is in the DLQ, which `make dlq-replay` owns. A false positive only sends a duplicate, which the investigation lock and the checkpoints absorb.
+- 2026-10-15: The sweeper copies `awaiting_approval`, `resolved` and `cancelled` onto the alert group, so each sweep asks only about unfinished work. Reason: nothing else moves a group off `queued` until step 9. `running` and `failed` are not copied: they can still change, and the gateway would show a stale status.
+- 2026-10-15: `AGENT_SERVICE_TOKEN` (at least 32 characters) is required by the agent and the gateway. The agent compares SHA-256 digests in constant time, and every internal API error is problem details. Reason: the contract's service token, and a sweeper that must tell an outage (error) from a lost message (404).
 
 ## Preferences and Instructions
 
@@ -79,7 +87,7 @@ From the approved design doc:
 
 ## Solved Problems
 
-None yet.
+- 2026-10-15: Waits for a tenant slot used up SQS receives and could dead-letter work, and budget waits held every worker slot. Parking fixed both: the two-agent storm test shows no DLQ entry and every parked investigation running.
 
 ## Known Issues and Pitfalls
 
@@ -107,6 +115,8 @@ None yet.
 - 2026-10-15: TypeScript narrows a `let` read inside an immediately invoked async function, so typescript-eslint's `no-unnecessary-condition` called `while (!stopped)` constant. The relay uses an AbortController's `signal.aborted` instead.
 - 2026-10-15: Jest shows no console output from the gateway integration suite here; the storm test writes its p99 to stderr.
 - 2026-10-15: pyright widens a literal in `self.x = param` to `str`; annotate the attribute (`self.outcome: Outcome | Exception = outcome`).
+- 2026-10-15: Turbo replays cached test output (the log timestamps repeat), so a second `make test` may not run the TypeScript suites again. For repeated-run checks use `pnpm turbo run test --force`.
+- 2026-10-15: pyright strict reports a `@contextmanager` function annotated `-> Iterator[T]` as deprecated; annotate `-> Generator[T]`.
 
 ## Rejected Approaches
 
@@ -124,6 +134,8 @@ None yet.
 - 2026-10-14: Partition story on 2,000,000 seeded steps: about 50 s for the whole test. In the final run the writer committed in every phase, with 2,256 writes during the backfill, 132 during the verify-and-swap migration and 250 during 0004's row check. It had zero errors, and the slowest write took 63 ms. Each test was also run against a broken version and failed as it should: without the compat view, with dual-write left on past 0004, and with an upcaster that writes 0 for an unknown latency.
 - 2026-10-14: With `messages-storage` on, a message queued on `investigations.fifo` survived `docker compose restart elasticmq` and a forced container recreate; its receive count (1, then 2) and the redrive policy carried over. Checked by hand, not in `make test-int`, because the check restarts the shared container.
 - 2026-10-15: Storm test (`apps/gateway/src/intake.int.test.ts`): 500 webhook posts from 10 concurrent clients against the local Postgres and ElasticMQ. They carried 400 alerts in 8 Alertmanager groups plus 100 re-sends. p99 was 86.4, 86.5 and 86.7 ms over 3 runs, with 8 groups, 5 investigations and queued messages, and no alert dropped. The posts arrive within seconds, which is harsher than the target's 2 minutes. With 3 groups and no cap, p99 was 64 to 73 ms; the per-tenant lock on opening a window adds the difference.
+
+- 2026-10-15: Parking end to end (`services/agent/tests/test_parking_int.py`): the real gateway process with its sweeper and two agents. The storm parks exactly 3 of 5 investigations under a cap of 2, and each runs after one re-queue; both tests take about 20 s. `make test-int` passed 3 runs in a row with pytest at 98 to 108 s and storm p99 at 81 to 110 ms.
 
 ## Constraints
 

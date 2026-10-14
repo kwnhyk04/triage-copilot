@@ -15,6 +15,37 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-15: Step 4 follow-up, parking and recovery sweeper
+
+- Changes:
+  - Agent:
+    - A message that must wait for a tenant slot or model budget parks its investigation and is deleted (Alembic 0006: `tenant_id`, `waiting_reason`, `waiting_since`). Only a duplicate delivery still returns to SQS as "busy".
+    - `Job.resumable`: budget waiters once model calls are back; tenant-cap waiters first parked first, never more than the free slots read from `pg_locks`.
+  - Agent internal API (`agent/api.py`): `GET /internal/investigations/{id}/state` behind `AGENT_SERVICE_TOKEN` (401 problem details with `WWW-Authenticate: Bearer`); every error is problem details.
+  - Gateway recovery sweeper (`sweeper.ts`):
+    - Every `SWEEPER_INTERVAL_SECONDS`, over queued groups without an outbox row (SKIP LOCKED), it re-queues through the outbox resumable parked investigations and stuck ones: unknown to the agent, or no step for `SWEEPER_STUCK_AFTER_MINUTES`.
+    - Each re-queue has its own deduplication id. Groups take finished statuses.
+    - Drizzle 0002 adds `requeued_at` and `requeue_count`. `investigationRequest` in `intake.ts` builds the message for intake and sweeper.
+  - Contract: agent API 0.3.0 (`waiting_for`, `waiting_since`, `resumable`); codegen.
+  - Config: `.env.example` gains `AGENT_SERVICE_TOKEN`, `AGENT_URL` and `SWEEPER_*`. A random `AGENT_SERVICE_TOKEN` was appended to `.env`, value not shown.
+  - The gateway's integration helpers moved to `src/testing.ts`.
+- Files:
+  - services/agent: src/agent/api.py (new), job.py, consumer.py, db.py, settings.py, main.py; migrations/versions/0006_waiting.py (new); tests: test_parking_int.py (new), test_workers_int.py, test_consumer.py, test_agent_api.py.
+  - apps/gateway: src/sweeper.ts, sweeper.test.ts, sweeper.int.test.ts and testing.ts (new); intake.ts, config.ts, main.ts, schema.ts, intake.int.test.ts; drizzle/0002_sweeper.sql and meta/ (new).
+  - Contracts and clients: contracts/openapi/agent.yaml; packages/ts-clients and packages/py-clients generated files; packages/py-clients/tests/test_clients.py.
+  - Config and docs: .env.example, docs/.
+- Validation:
+  - `make lint`, `typecheck`, `contracts-check` and `contracts-breaking` pass. oasdiff: no breaking change in agent.yaml.
+  - `make test` passed 3 runs in a row: pytest 62, Jest 18 in the gateway; the TypeScript suites were forced past Turbo's cache.
+  - `make test-int` passed 3 runs in a row: Jest 7, pytest 26, 104 to 115 s, storm p99 109.7, 95.0 and 81.3 ms.
+  - Done-when checks:
+    - (1) Two agents with the real gateway process: 5 investigations under a cap of 2. Three parked, each ran after one re-queue; no DLQ entry or dead letter.
+    - (2) A budget-parked investigation stayed parked through three sweeps and ran once the budget reset.
+    - (3) Queue loss: each stuck group was re-enqueued exactly once, and a second sweep re-enqueued nothing.
+    - (4) The internal API answers 401 without the token, with a wrong one, or with another scheme.
+  - Dev database migrated to agent 0006 and gateway 0002 (`make migrate`); `alembic check` clean. drizzle-kit generated only the two new columns, so `schema.ts` had not drifted.
+- Not changed: migration 0001 still sets no `lock_timeout`, and `queued_budget` stays in the enum until its contract step. Both are in docs/todo.md.
+
 ### 2026-10-15: Step 4 workers
 
 - Changes:

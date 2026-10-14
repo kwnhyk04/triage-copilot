@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot agent
-  version: 0.2.0
+  version: 0.3.0
   description: >-
     Internal API of the agent service. Only other backend services call it, with the service
     token. Errors are RFC 9457 Problem Details (application/problem+json).
@@ -167,6 +167,13 @@ components:
     InvestigationStatus:
       type: string
       enum: [queued, running, awaiting_approval, resolved, failed, cancelled]
+    WaitReason:
+      type: string
+      enum: [tenant_cap, budget]
+      description: >-
+        What a parked investigation waits for. tenant_cap: a slot under its tenant's cap of
+        investigations running at once. budget: model calls, which are off or out of today's
+        token budget.
     InvestigationState:
       type: object
       required:
@@ -177,6 +184,9 @@ components:
         - tool_calls
         - tokens_used
         - updated_at
+        - waiting_for
+        - waiting_since
+        - resumable
       properties:
         investigation_id:
           type: string
@@ -200,3 +210,20 @@ components:
           type: string
           format: date-time
           description: Time of the latest checkpoint.
+        waiting_for:
+          description: >-
+            Set while the investigation is parked: its status is queued, its message was deleted,
+            and the gateway's recovery sweeper re-queues it. Null otherwise.
+          anyOf:
+            - $ref: '#/components/schemas/WaitReason'
+            - type: 'null'
+        waiting_since:
+          type: [string, 'null']
+          format: date-time
+          description: When the investigation last parked; null unless waiting_for is set.
+        resumable:
+          type: boolean
+          description: >-
+            True when a parked investigation can run now: model calls are available again, or a
+            slot under its tenant's cap is free and no investigation of that tenant parked for one
+            before it.

@@ -5,6 +5,10 @@ row. A redelivered message replays the recorded steps and goes on after the last
 recorded tool call runs twice. A tool_call step that carries tokens is the model's request: its
 tool_calls row, written with it, holds the arguments, and the result step after it completes the
 row. As StepRecorded v3 defines them, `result` and `latency_ms` belong to tool results only.
+
+An investigation that must wait for a slot under its tenant's cap or for model budget parks: it is
+marked waiting and its message is deleted, so it holds no worker slot and uses up no receives. The
+gateway's recovery sweeper re-queues it once `Job.resumable` says its slot or budget is free.
 """
 
 import asyncio
@@ -28,8 +32,10 @@ from py_clients.generated.messages.investigation_requested_v2_schema import Inve
 log = logging.getLogger(__name__)
 
 Request = InvestigationRequestedV1 | InvestigationRequestedV2
-Outcome = Literal["done", "stopped", "busy"]
-"""done: the final report is committed. stopped: shutdown began. busy: run it later."""
+Outcome = Literal["done", "stopped", "busy", "parked"]
+"""done: the final report is committed. stopped: shutdown began. busy: another agent runs it.
+parked: it waits for a tenant slot or model budget, so its message can go."""
+WaitReason = Literal["tenant_cap", "budget"]
 Tool = Callable[[dict[str, Any]], Awaitable[str]]
 """A read-only tool: arguments in, result text out."""
 
@@ -44,6 +50,18 @@ UTC_TODAY = cast(func.timezone("UTC", func.now()), Date)
 # Session locks: one per investigation, and `cap` slots per tenant.
 LOCK_INVESTIGATION = "SELECT pg_try_advisory_lock(hashtextextended(:key, 0))"
 LOCK_TENANT_SLOT = "SELECT pg_try_advisory_lock(hashtext(:key), :slot)"
+# Slots of a tenant's cap that no job holds; pg_locks shows LOCK_TENANT_SLOT locks this way.
+FREE_SLOTS = text("""
+    SELECT :cap - count(*) FROM pg_locks
+    WHERE locktype = 'advisory' AND granted AND objsubid = 2 AND classid = hashtext(:key)::oid
+      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+""")
+# Investigations of the same tenant that parked for a slot earlier: first parked, first resumed.
+PARKED_AHEAD = text("""
+    SELECT count(*) FROM agent.investigations w JOIN agent.investigations me ON me.id = :id
+    WHERE w.waiting_reason = 'tenant_cap' AND w.tenant_id IS NOT DISTINCT FROM me.tenant_id
+      AND (w.waiting_since, w.id) < (me.waiting_since, me.id)
+""")
 
 
 class Stopped(Exception):
@@ -77,7 +95,6 @@ class Job:
         daily_token_budget: int,
         tenant_cap: int,
         dual_write: bool = False,
-        budget_poll_seconds: float = 60.0,
     ) -> None:
         self.engine = engine
         self.model = model
@@ -86,7 +103,6 @@ class Job:
         self.daily_token_budget = daily_token_budget
         self.tenant_cap = tenant_cap
         self.dual_write = dual_write
-        self.budget_poll_seconds = budget_poll_seconds
 
     async def run(self, request: Request, stopping: asyncio.Event) -> Outcome:
         """Runs the investigation to its final report, or until shutdown.
@@ -108,21 +124,22 @@ class Job:
         status, steps = await asyncio.to_thread(_load, conn, inv)
         if status in FINISHED:
             return "done"
-        # The budget wait comes before the tenant slot, so waiting work holds no slot.
-        if not steps and not await self._wait_for_model(conn, inv, new=True, stopping=stopping):
-            return "stopped"
-        tenant = str(request.tenant_id) if isinstance(request, InvestigationRequestedV2) else ""
+        tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
+        # The budget check comes before the tenant slot, so parking for budget never held a slot.
+        if not steps and not await asyncio.to_thread(self._model_available, conn, True):
+            return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
         if not await asyncio.to_thread(_take_tenant_slot, conn, tenant, self.tenant_cap):
-            return "busy"
-        await asyncio.to_thread(_set_status, conn, inv, "running")
+            return await asyncio.to_thread(_park, conn, inv, "tenant_cap", tenant)
+        await asyncio.to_thread(_start, conn, inv)
         try:
             while not stopping.is_set():
                 last = steps[-1] if steps else None
                 if last is not None and last.kind == "tool_call" and is_model_turn(last):
                     steps.append(await self._call_tool(conn, inv, last, stopping))
                     continue
-                if not await self._wait_for_model(conn, inv, new=not steps, stopping=stopping):
-                    return "stopped"
+                # With AI_ENABLED=false even a resumed investigation parks at its next model turn.
+                if not await asyncio.to_thread(self._model_available, conn, not steps):
+                    return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
                 turn = await self._model_turn(steps, stopping)
                 event = await asyncio.to_thread(_record_turn, conn, inv, turn, self.dual_write)
                 steps.append(event)
@@ -132,29 +149,27 @@ class Job:
             pass
         return "stopped"
 
-    async def _wait_for_model(
-        self, conn: Connection, inv: UUID, *, new: bool, stopping: asyncio.Event
-    ) -> bool:
-        """Waits while model calls are off, or, for a new investigation, today's budget is spent.
+    def _model_available(self, conn: Connection, new: bool) -> bool:
+        """Model calls are on and, for a new investigation, today's token budget is not spent."""
+        return self.ai_enabled and (not new or _tokens_today(conn) < self.daily_token_budget)
 
-        Returns False if shutdown began while waiting.
+    def resumable(
+        self, conn: Connection, inv: UUID, reason: str | None, tenant: UUID | None, new: bool
+    ) -> bool:
+        """Whether a parked investigation can run now.
+
+        Budget: model calls are available again. Tenant cap: a slot is free, and fewer of the
+        tenant's investigations parked for one before it than there are free slots. A re-queued
+        investigation stays parked until it takes its slot, so it keeps its place in that line.
         """
-        # ponytail: a waiting message keeps its consumer slot, so once every slot waits, even
-        # resumed investigations stay queued until the budget frees. Park waiters in Postgres if
-        # that delay matters.
-        waited = False
-        while not self.ai_enabled or (
-            new and await asyncio.to_thread(_tokens_today, conn) >= self.daily_token_budget
-        ):
-            if not waited:
-                await asyncio.to_thread(_set_status, conn, inv, "queued_budget")
-                log.info("waiting for the model budget", extra={"investigation_id": str(inv)})
-                waited = True
-            if await sleep_unless(stopping, self.budget_poll_seconds):
-                return False
-        if waited:
-            await asyncio.to_thread(_set_status, conn, inv, "running")
-        return True
+        if reason == "budget":
+            return self._model_available(conn, new)
+        if reason != "tenant_cap":
+            return False
+        with conn.begin():
+            free = conn.execute(FREE_SLOTS, {"key": tenant_key(tenant), "cap": self.tenant_cap})
+            ahead = conn.execute(PARKED_AHEAD, {"id": inv})
+            return ahead.scalar_one() < free.scalar_one()
 
     async def _model_turn(self, steps: list[StepRecordedV2], stopping: asyncio.Event) -> ModelTurn:
         """One model call; retries a failure, after the provider's Retry-After if it sent one."""
@@ -226,11 +241,12 @@ class Job:
 
         def write() -> None:
             unfinished = Investigation.status.not_in(FINISHED)
+            failed = {"status": "failed", "waiting_reason": None, "waiting_since": None}
             with self.engine.begin() as conn:
                 conn.execute(
                     update(Investigation)
                     .where(Investigation.id == investigation_id, unfinished)
-                    .values(status="failed", updated_at=func.now())
+                    .values(**failed, updated_at=func.now())
                 )
 
         await asyncio.to_thread(write)
@@ -249,9 +265,14 @@ def _try_lock(conn: Connection, sql: str, **params: object) -> bool:
         return bool(conn.execute(text(sql), params).scalar_one())
 
 
-def _take_tenant_slot(conn: Connection, tenant: str, cap: int) -> bool:
+def tenant_key(tenant: UUID | None) -> str:
+    """Advisory lock key of a tenant's slots; v1 messages carry no tenant and share one key."""
+    return f"tenant:{tenant or ''}"
+
+
+def _take_tenant_slot(conn: Connection, tenant: UUID | None, cap: int) -> bool:
     """Takes one of the tenant's `cap` slots, so at most `cap` of its investigations run at once."""
-    key = f"tenant:{tenant}"
+    key = tenant_key(tenant)
     return any(_try_lock(conn, LOCK_TENANT_SLOT, key=key, slot=slot) for slot in range(cap))
 
 
@@ -280,12 +301,33 @@ def _requested_call(conn: Connection, call_id: str) -> tuple[str, dict[str, Any]
         return name, args
 
 
-def _set_status(conn: Connection, inv: UUID, status: str) -> None:
+def _park(conn: Connection, inv: UUID, reason: WaitReason, tenant: UUID | None) -> Outcome:
+    """Marks the investigation waiting, so its message can go; the recovery sweeper re-queues it."""
     with conn.begin():
         conn.execute(
             update(Investigation)
             .where(Investigation.id == inv)
-            .values(status=status, updated_at=func.now())
+            .values(
+                status="queued",
+                waiting_reason=reason,
+                waiting_since=func.now(),
+                tenant_id=tenant,
+                updated_at=func.now(),
+            )
+        )
+    log.info("investigation parked", extra={"investigation_id": str(inv), "waiting_for": reason})
+    return "parked"
+
+
+def _start(conn: Connection, inv: UUID) -> None:
+    """It holds a tenant slot and has model budget, so it no longer waits."""
+    with conn.begin():
+        conn.execute(
+            update(Investigation)
+            .where(Investigation.id == inv)
+            .values(
+                status="running", waiting_reason=None, waiting_since=None, updated_at=func.now()
+            )
         )
 
 

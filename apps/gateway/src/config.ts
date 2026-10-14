@@ -15,6 +15,13 @@ export const loadGatewayConfig = (env?: Env) =>
       RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
       // Investigations one tenant may start within any 5 minutes; later groups go uninvestigated.
       MAX_NEW_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(5),
+      // The agent's internal API, which the recovery sweeper asks with the service token.
+      AGENT_URL: z.url().default('http://127.0.0.1:4210'),
+      AGENT_SERVICE_TOKEN: z.string().min(32),
+      // How often the recovery sweeper runs, and how long an investigation may go without a
+      // step (or a message without a receive) before it counts as stuck.
+      SWEEPER_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
+      SWEEPER_STUCK_AFTER_MINUTES: z.coerce.number().int().positive().default(10),
       LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     }),
     env,

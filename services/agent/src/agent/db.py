@@ -51,7 +51,7 @@ class Investigation(Base):
     status: Mapped[str] = mapped_column(
         Enum(
             "queued",
-            # Waiting for model calls: AI_ENABLED is off or today's token budget is spent.
+            # No longer written: budget waits now park as queued with waiting_reason "budget".
             "queued_budget",
             "running",
             "awaiting_approval",
@@ -68,6 +68,13 @@ class Investigation(Base):
     final_report: Mapped[dict[str, Any] | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # From InvestigationRequested v2 (null for v1), recorded when the investigation parks.
+    tenant_id: Mapped[UUID | None]
+    # Set while parked: its message is deleted, and the gateway's recovery sweeper re-queues it.
+    waiting_reason: Mapped[str | None] = mapped_column(
+        Enum("tenant_cap", "budget", name="wait_reason")
+    )
+    waiting_since: Mapped[datetime | None]
 
 
 class InvestigationStep(Base):

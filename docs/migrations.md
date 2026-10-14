@@ -2,6 +2,19 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-15: Parking and recovery sweeper (agent 0006, gateway 0002, agent API 0.3.0)
+
+Expand only: nothing is dropped or rewritten.
+
+- Agent 0006:
+  - Adds the enum `agent.wait_reason` (`tenant_cap`, `budget`) and the nullable `investigations.tenant_id`, `waiting_reason` and `waiting_since`. Nullable columns change only the catalog. `lock_timeout` 3 s.
+  - Before a downgrade, let the gateway's sweeper re-queue every waiting investigation: they have no message, and the old code cannot re-queue them.
+  - `queued_budget` is no longer written: budget waits park as `queued` with `waiting_reason` `budget`. Contract, later: once no row holds it, rebuild the type without it, as 0005's downgrade does, in a maintenance window.
+- Gateway `0002_sweeper.sql` (drizzle-kit, from `apps/gateway/src/schema.ts`): `alert_groups.requeued_at` (nullable) and `requeue_count` (`integer NOT NULL DEFAULT 0`; a constant default rewrites no rows). `SET LOCAL lock_timeout = '3s'` was added by hand; Drizzle runs pending migrations in one transaction.
+- Agent API 0.3.0: `InvestigationState` adds the required `waiting_for` (`WaitReason` or null), `waiting_since` (nullable) and `resumable`. Only a response gains fields: oasdiff reports no breaking change, and older clients ignore them. Clients regenerated.
+- InvestigationRequested is unchanged. A re-queue sends it with its own MessageDeduplicationId: the window's hash input plus `\nrequeue N`. The released v2 description, which names only the window's id, stays as is.
+- From empty, `alembic check`, and downgrade to base and back: `test_migrations_int.py`. Dev database: agent 0005 to 0006 and gateway 0001 to 0002 with `make migrate`; `alembic check` clean.
+
 ## 2026-10-15: Workers (gateway 0001, agent 0005, InvestigationRequested v2)
 
 Expand only: nothing is dropped or rewritten.

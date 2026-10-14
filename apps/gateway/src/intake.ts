@@ -48,6 +48,30 @@ export const sha256 = (value: string) => createHash('sha256').update(value).dige
 
 const SEVERITIES = ['critical', 'warning', 'info'] as const;
 
+/**
+ * A group's InvestigationRequested, with its FIFO group (one per Alertmanager group) and its
+ * deduplication id (one per window). Each re-queue gets its own id, so SQS never drops it as a
+ * repeat of an earlier send.
+ */
+export function investigationRequest(
+  group: { tenantId: string; groupKey: string; windowStart: Date; investigationId: string },
+  requeue = 0,
+) {
+  const windowStart = group.windowStart.toISOString();
+  const window = `${group.tenantId}\n${group.groupKey}\n${windowStart}`;
+  return {
+    groupId: sha256(`${group.tenantId}\n${group.groupKey}`),
+    deduplicationId: sha256(requeue === 0 ? window : `${window}\nrequeue ${String(requeue)}`),
+    body: parseMessage('investigation-requested.v2', {
+      schema_version: 2,
+      investigation_id: group.investigationId,
+      tenant_id: group.tenantId,
+      group_key: group.groupKey,
+      requested_at: windowStart,
+    }),
+  };
+}
+
 const one = <T>(rows: readonly T[]): T => {
   const [row] = rows;
   if (row === undefined) throw new Error('the query returned no row');
@@ -83,7 +107,6 @@ export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigation
       })),
     );
     const severity = SEVERITIES.find((s) => alerts.some((a) => a.labels.severity === s));
-    const groupHash = sha256(`${tenantId}\n${groupKey}`);
     const outcome = await sql.begin(async (tx) => {
       const seen = one(
         await tx<
@@ -146,18 +169,15 @@ export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigation
             RETURNING id, investigation_id, window_start`,
         );
         if (created.investigation_id !== null) {
-          const windowStart = created.window_start.toISOString();
-          const message = parseMessage('investigation-requested.v2', {
-            schema_version: 2,
-            investigation_id: created.investigation_id,
-            tenant_id: tenantId,
-            group_key: groupKey,
-            requested_at: windowStart,
+          const message = investigationRequest({
+            tenantId,
+            groupKey,
+            windowStart: created.window_start,
+            investigationId: created.investigation_id,
           });
           await tx`
             INSERT INTO gateway.outbox (message_group_id, deduplication_id, body)
-            VALUES (${groupHash}, ${sha256(`${tenantId}\n${groupKey}\n${windowStart}`)},
-                    ${tx.json({ ...message })})`;
+            VALUES (${message.groupId}, ${message.deduplicationId}, ${tx.json({ ...message.body })})`;
           queued = true;
         }
         group = created;
