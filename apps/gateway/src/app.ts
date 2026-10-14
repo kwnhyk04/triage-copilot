@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { STATUS_CODES } from 'node:http';
 
+import rateLimit from '@fastify/rate-limit';
 import type { components } from '@triage/ts-clients/gateway';
 import type { Investigation, Resolvers } from '@triage/ts-clients/graphql';
 import { typeDefs } from '@triage/ts-clients/schema';
@@ -8,6 +10,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { createPubSub, createSchema, createYoga } from 'graphql-yoga';
 
 import type { GatewayConfig } from './config.ts';
+import { type FindTenant, type Intake, sha256, webhookSchema } from './intake.ts';
 
 type Schemas = components['schemas'];
 
@@ -25,12 +28,28 @@ export type Decide = (
 ) => Promise<Schemas['ProposedAction'] | 'not_found' | 'already_decided'>;
 
 export interface AppDeps {
-  config: Pick<GatewayConfig, 'LOG_LEVEL' | 'APPROVER_API_KEY'>;
+  config: Pick<GatewayConfig, 'LOG_LEVEL' | 'APPROVER_API_KEY' | 'RATE_LIMIT_PER_MINUTE'>;
   /** Rejects when a dependency the gateway needs is unreachable. */
   ping: () => Promise<void>;
   updates: Updates;
   decide: Decide;
+  findTenant: FindTenant;
+  intake: Intake;
 }
+
+/** Webhook bodies over 1 MB get 413. */
+export const BODY_LIMIT = 1024 * 1024;
+/** A client must send its whole request within 10 s. */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+const header = (request: FastifyRequest, name: string) => {
+  const value = request.headers[name];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
+const bearer = (request: FastifyRequest) =>
+  /^Bearer (\S+)$/i.exec(header(request, 'authorization') ?? '')?.[1];
+const httpError = (statusCode: number, message: string) =>
+  Object.assign(new Error(message), { statusCode });
 
 const decisionBody = z.strictObject({
   approver: z.string().min(1).max(200),
@@ -49,18 +68,47 @@ const problem = (reply: FastifyReply, status: number, title: string, detail?: st
     .type('application/problem+json')
     .send({ title, status, ...(detail === undefined ? {} : { detail }) });
 
-export function buildApp({ config, ping, updates, decide }: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: { level: config.LOG_LEVEL, base: { service: 'gateway' } } });
-
-  // Fastify's own errors, such as malformed JSON, leave as problem details too.
-  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
-    const status = error.statusCode ?? 500;
-    if (status >= 500) app.log.error({ err: error }, 'request failed');
-    return problem(reply, status, status >= 500 ? 'Internal Server Error' : error.message);
+export async function buildApp({
+  config,
+  ping,
+  updates,
+  decide,
+  findTenant,
+  intake,
+}: AppDeps): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: { level: config.LOG_LEVEL, base: { service: 'gateway' } },
+    requestTimeout: REQUEST_TIMEOUT_MS,
   });
 
-  app.get('/healthz', () => ({ status: 'ok' }));
-  app.get('/readyz', async (_request, reply) => {
+  // Errors thrown anywhere, Fastify's own included, leave as problem details.
+  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
+    const status = error.statusCode ?? 500;
+    const title = STATUS_CODES[status] ?? 'Error';
+    if (status < 500) return problem(reply, status, title, error.message);
+    app.log.error({ err: error }, 'request failed');
+    return problem(reply, status, title);
+  });
+
+  // Registered before the routes, which it hooks as they are added.
+  await app.register(rateLimit, {
+    max: config.RATE_LIMIT_PER_MINUTE,
+    timeWindow: 60_000,
+    // ponytail: in-memory counters fit one gateway; several gateways need a shared store (Redis).
+    // Invented credentials each get their own count, so an edge limit per address must stop
+    // floods of them.
+    keyGenerator: (request) => {
+      const credential =
+        bearer(request) ?? header(request, 'x-api-key') ?? header(request, 'x-approver-key');
+      return credential === undefined ? `ip:${request.ip}` : `key:${sha256(credential)}`;
+    },
+    // RateLimit-Limit, RateLimit-Remaining and RateLimit-Reset, and Retry-After on 429.
+    enableDraftSpec: true,
+  });
+
+  const probe = { config: { rateLimit: false } } as const;
+  app.get('/healthz', probe, () => ({ status: 'ok' }));
+  app.get('/readyz', probe, async (_request, reply) => {
     try {
       await ping();
       return { status: 'ok' };
@@ -69,6 +117,59 @@ export function buildApp({ config, ping, updates, decide }: AppDeps): FastifyIns
       return reply.code(503).send({ status: 'unavailable' });
     }
   });
+
+  // Alertmanager webhook. The token is checked after the rate limit and before the body is read.
+  const tenants = new WeakMap<FastifyRequest, string>();
+  app.post(
+    '/v1/alerts',
+    {
+      bodyLimit: BODY_LIMIT,
+      preParsing: async (request, reply, payload) => {
+        const token = bearer(request);
+        if (
+          token === undefined &&
+          (header(request, 'x-api-key') ?? header(request, 'x-approver-key'))
+        ) {
+          throw httpError(403, 'POST /v1/alerts takes the tenant webhook token only.');
+        }
+        let tenantId: string | undefined;
+        try {
+          tenantId = token === undefined ? undefined : await findTenant(sha256(token));
+        } catch (error) {
+          request.log.error({ err: error }, 'tenant lookup failed');
+          reply.header('Retry-After', '5');
+          throw httpError(503, 'Alerts cannot be stored right now.');
+        }
+        if (tenantId === undefined) {
+          reply.header('WWW-Authenticate', 'Bearer');
+          throw httpError(401, 'Send a valid tenant webhook token.');
+        }
+        tenants.set(request, tenantId);
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      const webhook = webhookSchema.safeParse(request.body);
+      if (!webhook.success) {
+        const issues = webhook.error.issues.slice(0, 10);
+        const detail = issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+        return problem(reply, 400, 'Bad Request', detail.join('; '));
+      }
+      const tenantId = tenants.get(request);
+      if (tenantId === undefined)
+        throw new Error('webhook request reached its handler unauthenticated');
+      let accepted;
+      try {
+        // Only stores the alerts; the agent investigates from the queue, never in this request.
+        accepted = await intake(tenantId, webhook.data);
+      } catch (error) {
+        request.log.error({ err: error }, 'alert intake failed');
+        reply.header('Retry-After', '5');
+        return problem(reply, 503, 'Service Unavailable', 'The alerts could not be stored.');
+      }
+      return reply.code(202).send(accepted);
+    },
+  );
 
   // Approve and reject take only the approver key, which the web app's server alone holds.
   for (const [route, verdict] of [

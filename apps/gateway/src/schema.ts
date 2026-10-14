@@ -1,8 +1,11 @@
+import type { InvestigationRequestedV2 } from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   check,
   foreignKey,
   index,
+  integer,
   jsonb,
   pgSchema,
   primaryKey,
@@ -41,6 +44,8 @@ const createdAt = () => timestamptz('created_at').notNull().defaultNow();
 export const tenants = gateway.table('tenants', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull().unique(),
+  // Hex SHA-256 of the tenant's Alertmanager webhook token, set by `pnpm tenant:token`.
+  webhookTokenSha256: text('webhook_token_sha256').unique(),
   createdAt: createdAt(),
 });
 
@@ -163,6 +168,28 @@ export const proposedActions = gateway.table(
       columns: [t.investigationId],
       foreignColumns: [alertGroups.investigationId],
     }),
+  ],
+);
+
+// Messages committed together with the rows that caused them. The relay (src/outbox.ts) sends
+// each to SQS and deletes it; a row that keeps failing gets failed_at until `pnpm outbox:replay`.
+export const outbox = gateway.table(
+  'outbox',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    messageGroupId: text('message_group_id').notNull(),
+    deduplicationId: text('deduplication_id').notNull(),
+    body: jsonb('body').$type<InvestigationRequestedV2>().notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamptz('next_attempt_at').notNull().defaultNow(),
+    lastError: text('last_error'),
+    failedAt: timestamptz('failed_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('outbox_due_idx')
+      .on(t.nextAttemptAt)
+      .where(sql`${t.failedAt} is null`),
   ],
 );
 

@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
+from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
 from py_clients.generated.messages.step_recorded_schema import StepRecorded
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
@@ -40,6 +41,14 @@ def test_every_step_recorded_version_validates_as_step_recorded(version: int) ->
     schema_file = CONTRACTS / f"messages/step-recorded.v{version}.schema.json"
     for example in json.loads(schema_file.read_bytes())["examples"]:
         assert isinstance(StepRecorded.model_validate(example).root, model_for(schema_file))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_every_investigation_requested_version_validates_as_the_union(version: int) -> None:
+    schema_file = CONTRACTS / f"messages/investigation-requested.v{version}.schema.json"
+    for example in json.loads(schema_file.read_bytes())["examples"]:
+        root = InvestigationRequested.model_validate(example).root
+        assert isinstance(root, model_for(schema_file))
 
 
 @pytest.mark.parametrize("name", ["action-proposed.v1", "action-approved.v1"])

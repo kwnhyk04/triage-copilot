@@ -1,34 +1,29 @@
+import asyncio
 import logging
 import sys
 import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
 
-import boto3
 import uvicorn
-from botocore.config import Config
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 
-from agent.consumer import WAIT_SECONDS, consume
+from agent.consumer import Consumer, sqs_client
+from agent.job import Job
+from agent.model import Report, ScriptedModel
 from agent.partitions import maintain_partitions
 from agent.settings import Settings
-from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_config import ConfigError, load_settings
 from py_telemetry import configure_logging, instrument
 
-if TYPE_CHECKING:
-    # Stub-only package from the dev group; never imported at runtime.
-    from types_boto3_sqs import SQSClient
-
 log = logging.getLogger(__name__)
 
-
-def handle(request: InvestigationRequestedV1) -> None:
-    """Records the request; the investigation loop replaces this in build step 6."""
-    log.info("investigation requested", extra={"investigation_id": str(request.investigation_id)})
+# Until build step 6 adds the model providers and tools, each investigation ends with this report.
+PLACEHOLDER = Report(
+    summary="Not investigated: the AI pipeline arrives in build step 6.", hypotheses=[]
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -37,32 +32,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_engine(
         settings.agent_database_url,
         pool_pre_ping=True,
+        # Every job in flight holds one session for its whole run.
+        pool_size=settings.agent_max_in_flight + 2,
         connect_args={"connect_timeout": 5, "options": "-c statement_timeout=5000"},
     )
-    sqs: SQSClient = boto3.client(
-        "sqs",
-        endpoint_url=settings.sqs_endpoint_url,
-        region_name=settings.aws_region,
-        config=Config(
-            connect_timeout=5, read_timeout=WAIT_SECONDS + 10, retries={"max_attempts": 2}
-        ),
+    sqs = sqs_client(settings)
+    job = Job(
+        engine,
+        ScriptedModel([PLACEHOLDER]),
+        {},
+        ai_enabled=settings.ai_enabled,
+        daily_token_budget=settings.daily_ai_token_budget,
+        tenant_cap=settings.agent_tenant_cap,
+        dual_write=settings.steps_dual_write,
     )
-    stop = threading.Event()
+    consumer = Consumer(
+        sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-        worker = threading.Thread(
-            target=consume,
-            args=(sqs, settings.investigations_queue, handle, stop),
-            name="consumer",
-            daemon=True,
-        )
-        worker.start()
+        stopping = asyncio.Event()
+        consuming = asyncio.create_task(consumer.run(stopping))
+        stop_partitions = threading.Event()
         threading.Thread(
-            target=maintain_partitions, args=(engine, stop), name="partitions", daemon=True
+            target=maintain_partitions,
+            args=(engine, stop_partitions),
+            name="partitions",
+            daemon=True,
         ).start()
         yield
-        stop.set()
+        # Uvicorn ends the lifespan on SIGTERM. Each job finishes and records its current step,
+        # then exits without deleting its message, which redelivers once its visibility lapses.
+        stopping.set()
+        stop_partitions.set()
+        await consuming
         engine.dispose()
 
     app = FastAPI(title="agent", lifespan=lifespan)

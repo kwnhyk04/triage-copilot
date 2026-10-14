@@ -1,5 +1,6 @@
-"""Scratch databases for the migration tests, set up like infra/postgres-init.sql."""
+"""Scratch databases set up like infra/postgres-init.sql, and throwaway queues like ours."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -10,14 +11,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+import boto3
 import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
 from sqlalchemy.engine import make_url
+from types_boto3_sqs import SQSClient
+
+from agent.consumer import MAX_RECEIVES
+from agent.settings import Settings
+from py_config import load_settings
 
 REPO = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(scope="module")
+def sqs() -> SQSClient:
+    settings = load_settings(Settings)
+    client: SQSClient = boto3.client(
+        "sqs", endpoint_url=settings.sqs_endpoint_url, region_name=settings.aws_region
+    )
+    return client
+
+
+@pytest.fixture
+def queues(sqs: SQSClient) -> Iterator[tuple[str, str]]:
+    """URLs of a FIFO queue and its DLQ, with the same redrive limit as investigations.fifo."""
+    name = f"probe-{uuid4().hex[:8]}"
+    dlq = sqs.create_queue(QueueName=f"{name}-dlq.fifo", Attributes={"FifoQueue": "true"})
+    dlq_arn = sqs.get_queue_attributes(QueueUrl=dlq["QueueUrl"], AttributeNames=["QueueArn"])
+    redrive = {
+        "deadLetterTargetArn": dlq_arn["Attributes"]["QueueArn"],
+        "maxReceiveCount": MAX_RECEIVES,
+    }
+    queue = sqs.create_queue(
+        QueueName=f"{name}.fifo",
+        Attributes={"FifoQueue": "true", "RedrivePolicy": json.dumps(redrive)},
+    )
+    yield queue["QueueUrl"], dlq["QueueUrl"]
+    sqs.delete_queue(QueueUrl=queue["QueueUrl"])
+    sqs.delete_queue(QueueUrl=dlq["QueueUrl"])
 
 
 def _run(args: list[str]) -> None:

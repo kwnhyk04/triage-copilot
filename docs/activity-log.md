@@ -15,6 +15,47 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-15: Step 4 workers
+
+- Changes:
+  - Contracts: InvestigationRequested v2 adds `tenant_id` for the per-tenant cap, and its description fixes MessageGroupId and MessageDeduplicationId as SHA-256 hashes of tenant and group key (and window start) (user decision). The union accepts v1 (deprecated) and v2. `gateway.yaml` describes per-tenant webhook tokens, rate limiting, the 200-alert limit and a 413. Codegen regenerated.
+  - Gateway:
+    - Per-tenant webhook tokens (user decision): `tenants.webhook_token_sha256` and `pnpm tenant:token`.
+    - `POST /v1/alerts`: auth in `preParsing`, fingerprint dedupe, 5-minute windows opened by the first new alert, 202 `{group_id, deduped}`.
+    - A transactional outbox with a relay to `investigations.fifo` and `outbox:replay` for parked rows.
+    - @fastify/rate-limit keyed by credential hash, 1 MB, 200 alerts and a 10 s request timeout. Problem titles now come from the status code.
+    - `buildApp` is async. Drizzle migration 0001. New dependencies: @fastify/rate-limit 11.2.1 and @aws-sdk/client-sqs 3.1150.0.
+  - Agent:
+    - An asyncio consumer: 20 s long poll, 5 in flight, visibility heartbeat every 30 s, graceful shutdown that leaves the message.
+    - A resumable job: two steps per tool call, one transaction per step with its tool_calls row, tool retries with jitter, model retries honoring Retry-After.
+    - A per-tenant cap with advisory locks, a budget guard (`AI_ENABLED`, `DAILY_AI_TOKEN_BUDGET`, `ai_usage`), poison messages to `dead_letters`, and `python -m agent.dlq replay`.
+    - A placeholder `ScriptedModel` until step 6. Alembic 0005.
+  - `make dlq-replay`; `.env.example` and README updated; the ElasticMQ probe's queue fixtures moved to `conftest.py`.
+- Files: contracts/ (messages/investigation-requested*.json, openapi/gateway.yaml), packages/ts-clients (src/generated/, src/contracts.test.ts), packages/py-clients (src/py_clients/generated/, tests/test_contracts.py), apps/gateway (src/app.ts, intake.ts, outbox.ts, cli.ts, main.ts, config.ts, schema.ts, app.test.ts, db.int.test.ts, intake.int.test.ts, drizzle/0001_workers.sql, drizzle/meta/, package.json), services/agent (src/agent/consumer.py, job.py, model.py, dlq.py, main.py, settings.py, db.py, migrations/versions/0005_workers.py, tests/conftest.py, test_consumer.py, test_elasticmq_int.py, test_workers_int.py), pnpm-lock.yaml, Makefile, .env.example, README.md, docs/
+- Validation:
+  - After the review fixes: `make lint`, `typecheck`, `test` (Jest 50, pytest 54), `test-int` (Jest 6, pytest 23, about 85 s), `contracts-check` and `contracts-breaking` pass.
+  - Done-when checks:
+    - (1) `test_shutdown_mid_investigation_resumes_at_the_next_step`: every tool ran once across the restart. `test_killed_mid_tool_call_repeats_only_that_call`: only the interrupted call ran twice.
+    - (2) The storm test over 8 group keys: p99 86.4, 86.5 and 86.7 ms over 3 runs; 8 groups, 5 investigations, 5 queued messages; 400 of 400 alerts stored.
+    - (3) `test_a_message_that_fails_five_times_lands_in_the_dlq`: 5 model calls, then the DLQ, and the investigation is `failed`; after `replay_dlq` it resolves.
+  - The gateway integration and consumer unit tests passed 3 runs in a row.
+  - A first `maxItems: 200` failed `contracts-breaking` (`request-property-max-items-set`), so the limit moved to the description.
+  - Live run on the dev stack after `make migrate`:
+    - `tenant:token` issued a token. The sample webhook got 202 with `RateLimit-*` headers, its repeat got `deduped: true`, and a wrong token got 401.
+    - The relay queued the message, and the agent resolved the investigation with the placeholder report in 1 step.
+    - Both queues ended empty, with no error in either log.
+  - The live run came before the review fixes.
+- Review fixes (independent review: 1 high, 2 medium and 4 low findings):
+  - High: `failed` counted as finished, so a message replayed from the DLQ was deleted without running. `failed` now resumes, and the DLQ test replays its message to resolution (the separate replay test, which used a fresh message, is gone).
+  - Medium: nothing capped investigations per storm, and the storm test's 3 keys could not exceed 5. The gateway now starts at most `MAX_NEW_INVESTIGATIONS` (5) per tenant in any 5 minutes and keeps further groups `queued_not_investigated`, under a per-tenant lock. The storm runs over 8 keys.
+  - Low:
+    - A new alert that arrives resolved no longer opens an investigation.
+    - One receive's later messages of a FIFO group go back instead of running in parallel (new unit test).
+    - `AGENT_MAX_IN_FLIGHT` is capped at 10, the SQS receive maximum.
+    - Request and report steps no longer put the ToolRequest or report JSON and the model latency into `result` and `latency_ms`, which StepRecorded v3 defines as the tool's. Arguments now live in the `tool_calls` row written with the request (0005 makes its latency nullable).
+  - Not changed (medium): budget waiters keep their slots, so resumed investigations can wait behind them until the budget frees. Documented with a `ponytail:` note and in docs/memory.md.
+- Outstanding: the recovery sweeper; trust-proxy addressing behind Tailscale Funnel; StepRecorded publishing and the report message (step 6). All are in docs/todo.md.
+
 ### 2026-10-14: StepRecorded v3 non-empty summary
 
 - Changes: `step-recorded.v3.schema.json` adds `minLength: 1` to `summary`, and the stored `StepRecordedV2` model adds `min_length=1` (user decision). Both test tables gained the boundary cases: an empty summary is rejected, one character is allowed. Codegen regenerated.

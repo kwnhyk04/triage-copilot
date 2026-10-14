@@ -82,6 +82,21 @@ describe('message contracts', () => {
     expect(deprecated).toEqual([false, true, false]);
   });
 
+  it('accepts InvestigationRequested v1 and v2, marks v1 deprecated, and needs a v2 tenant', () => {
+    for (const name of ['investigation-requested.v1', 'investigation-requested.v2'] as const) {
+      for (const example of schemas[name].examples) {
+        expect(parseMessage('investigation-requested', example)).toEqual(example);
+      }
+    }
+    const deprecated = schemas['investigation-requested'].oneOf.map((b) => 'deprecated' in b);
+    expect(deprecated).toEqual([true, false]);
+    const noTenant: Record<string, unknown> = {
+      ...schemas['investigation-requested.v2'].examples[0],
+    };
+    delete noTenant.tenant_id;
+    expect(() => parseMessage('investigation-requested.v2', noTenant)).toThrow(/tenant_id/);
+  });
+
   it('rejects unknown versions and unknown fields', () => {
     expect(() => parseMessage('step-recorded', { ...stepV1, schema_version: 4 })).toThrow(
       /invalid step-recorded message/,

@@ -1,50 +1,17 @@
 """Probes the ElasticMQ behavior the agent relies on, using throwaway queues set up like ours."""
 
-import json
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 
-import boto3
 import pytest
 from types_boto3_sqs import SQSClient
 from types_boto3_sqs.type_defs import MessageAttributeValueTypeDef, MessageTypeDef
 
-from agent.settings import Settings
-from py_config import load_settings
+from agent.consumer import MAX_RECEIVES
 
 pytestmark = pytest.mark.integration
-
-MAX_RECEIVES = 5
-
-
-@pytest.fixture(scope="module")
-def sqs() -> SQSClient:
-    settings = load_settings(Settings)
-    client: SQSClient = boto3.client(
-        "sqs", endpoint_url=settings.sqs_endpoint_url, region_name=settings.aws_region
-    )
-    return client
-
-
-@pytest.fixture
-def queues(sqs: SQSClient) -> Iterator[tuple[str, str]]:
-    """A FIFO queue and its DLQ with the same redrive limit as investigations.fifo."""
-    name = f"probe-{uuid.uuid4().hex[:8]}"
-    dlq = sqs.create_queue(QueueName=f"{name}-dlq.fifo", Attributes={"FifoQueue": "true"})
-    dlq_arn = sqs.get_queue_attributes(QueueUrl=dlq["QueueUrl"], AttributeNames=["QueueArn"])
-    redrive = {
-        "deadLetterTargetArn": dlq_arn["Attributes"]["QueueArn"],
-        "maxReceiveCount": MAX_RECEIVES,
-    }
-    queue = sqs.create_queue(
-        QueueName=f"{name}.fifo",
-        Attributes={"FifoQueue": "true", "RedrivePolicy": json.dumps(redrive)},
-    )
-    yield queue["QueueUrl"], dlq["QueueUrl"]
-    sqs.delete_queue(QueueUrl=queue["QueueUrl"])
-    sqs.delete_queue(QueueUrl=dlq["QueueUrl"])
 
 
 def send(

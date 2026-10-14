@@ -54,11 +54,27 @@ export interface ActionProposedV1 {
 }
 
 /**
+ * Every InvestigationRequested version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.
+ */
+export type InvestigationRequested = InvestigationRequestedV1 | InvestigationRequestedV2;
+
+/**
  * Gateway to agent on investigations.fifo. The MessageGroupId is the gateway's alert group id (a UUID), not group_key: Alertmanager group keys contain spaces and can exceed 128 characters, which SQS rejects.
  */
 export interface InvestigationRequestedV1 {
   schema_version: 1;
   investigation_id: string;
+  group_key: string;
+  requested_at: string;
+}
+
+/**
+ * Gateway to agent on investigations.fifo. v2 adds tenant_id, which the agent's per-tenant concurrency cap needs. MessageGroupId is the lowercase hex SHA-256 of tenant_id and group_key joined by a newline, so every grouping window of one Alertmanager group shares a FIFO group and its investigations run one at a time. MessageDeduplicationId is the same hash over tenant_id, group_key and the window start (ISO 8601). Raw group keys contain spaces and can exceed 128 characters, which SQS rejects.
+ */
+export interface InvestigationRequestedV2 {
+  schema_version: 2;
+  investigation_id: string;
+  tenant_id: string;
   group_key: string;
   requested_at: string;
 }
@@ -168,7 +184,9 @@ export interface StepRecordedV3 {
 export interface Messages {
   "action-approved.v1": ActionApprovedV1;
   "action-proposed.v1": ActionProposedV1;
+  "investigation-requested": InvestigationRequested;
   "investigation-requested.v1": InvestigationRequestedV1;
+  "investigation-requested.v2": InvestigationRequestedV2;
   "step-recorded": StepRecorded;
   "step-recorded.v1": StepRecordedV1;
   "step-recorded.v2": StepRecordedV2;
@@ -339,6 +357,21 @@ export const schemas = {
       }
     ]
   },
+  "investigation-requested": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "InvestigationRequested",
+    "description": "Every InvestigationRequested version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
+    "oneOf": [
+      {
+        "$ref": "investigation-requested.v1.schema.json",
+        "deprecated": true,
+        "description": "Deprecated: v1 carries no tenant_id, so the agent counts it against one shared bucket under the per-tenant cap. Accepted until the queue holds no v1 messages."
+      },
+      {
+        "$ref": "investigation-requested.v2.schema.json"
+      }
+    ]
+  },
   "investigation-requested.v1": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "InvestigationRequestedV1",
@@ -372,6 +405,50 @@ export const schemas = {
       {
         "schema_version": 1,
         "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "group_key": "{}:{alertname=\"CheckoutHighErrorRate\"}",
+        "requested_at": "2026-10-14T12:00:05Z"
+      }
+    ]
+  },
+  "investigation-requested.v2": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "InvestigationRequestedV2",
+    "description": "Gateway to agent on investigations.fifo. v2 adds tenant_id, which the agent's per-tenant concurrency cap needs. MessageGroupId is the lowercase hex SHA-256 of tenant_id and group_key joined by a newline, so every grouping window of one Alertmanager group shares a FIFO group and its investigations run one at a time. MessageDeduplicationId is the same hash over tenant_id, group_key and the window start (ISO 8601). Raw group keys contain spaces and can exceed 128 characters, which SQS rejects.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "investigation_id",
+      "tenant_id",
+      "group_key",
+      "requested_at"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": 2
+      },
+      "investigation_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "tenant_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "group_key": {
+        "type": "string",
+        "minLength": 1
+      },
+      "requested_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "examples": [
+      {
+        "schema_version": 2,
+        "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "tenant_id": "6f1c2a9e-8b3d-4e5f-9a7b-2c4d6e8f0a1b",
         "group_key": "{}:{alertname=\"CheckoutHighErrorRate\"}",
         "requested_at": "2026-10-14T12:00:05Z"
       }

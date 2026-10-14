@@ -9,9 +9,13 @@
     "test:int": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config jest.int.config.js",
     "typecheck": "tsc",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
-    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts"
+    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "tenant:token": "node src/cli.ts tenant-token",
+    "outbox:replay": "node src/cli.ts outbox-replay"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1150.0",
+    "@fastify/rate-limit": "^11.2.1",
     "@triage/ts-clients": "workspace:*",
     "@triage/ts-config": "workspace:*",
     "@triage/ts-telemetry": "workspace:*",

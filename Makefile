@@ -9,7 +9,8 @@ unexport APPROVER_API_KEY
 COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
-	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval
+	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
+	dlq-replay
 
 install:
 	pnpm install
@@ -96,3 +97,9 @@ seed:
 
 eval:
 	@echo eval: no harness until build step 6, AI pipeline
+
+# Replays both failure stores: parked gateway outbox messages (the running gateway sends them),
+# then investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
+dlq-replay:
+	pnpm --filter @triage/gateway outbox:replay
+	uv run python -m agent.dlq replay

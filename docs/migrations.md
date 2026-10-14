@@ -2,6 +2,25 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-15: Workers (gateway 0001, agent 0005, InvestigationRequested v2)
+
+Expand only: nothing is dropped or rewritten.
+
+- Gateway `0001_workers.sql` (drizzle-kit, from `apps/gateway/src/schema.ts`):
+  - `tenants.webhook_token_sha256`: nullable and unique. A tenant without one cannot post alerts; `pnpm --filter @triage/gateway tenant:token <name>` sets it.
+  - `outbox`: InvestigationRequested messages, committed with the alert group that caused them. The relay deletes each row once SQS has the message. A row whose send fails 10 times gets `failed_at` (the gateway's failure store) until `outbox:replay` clears it. The partial index `outbox_due_idx` covers `next_attempt_at` where `failed_at` is null.
+- Agent 0005:
+  - `investigation_status` gains `queued_budget` (`ADD VALUE ... AFTER 'queued'`, which Postgres 12+ allows in a transaction; nothing uses the value before the commit). The downgrade maps it back to `queued` and rebuilds the type, which rewrites `investigations` under an ACCESS EXCLUSIVE lock.
+  - `dead_letters`: messages that failed schema validation (body, MessageGroupId, the validation errors). `uv run python -m agent.dlq replay` re-sends them and sets `replayed_at`.
+  - `ai_usage`: model tokens per UTC day, which the budget guard reads.
+  - `tool_calls.latency_ms` drops NOT NULL: the row is written when the model asks for the call, with its arguments, and completed with the result. The downgrade deletes calls that never returned, then restores NOT NULL.
+  - The from-empty, `alembic check` and downgrade-to-base tests in `test_migrations_int.py` cover it.
+- Message InvestigationRequested v2 adds `tenant_id`, which the per-tenant cap needs (user decision on its MessageGroupId).
+  - Its description fixes MessageGroupId as the hex SHA-256 of `tenant_id` and `group_key` joined by a newline, and MessageDeduplicationId as the same hash over tenant, group key and window start. v1's description, which named the alert group id, stays as released.
+  - Expand: `investigation-requested.v2.schema.json` and the union `investigation-requested.schema.json`, which marks v1 deprecated. The agent validates against the union; a v1 message counts against one shared tenant bucket.
+  - Migrate: the gateway emits v2 only.
+  - Contract: once `investigations.fifo` and its DLQ hold no v1 message, drop v1 from the union, then delete its file.
+
 ## 2026-10-14: StepRecorded v3 message
 
 No DDL; a message contract change (user decision). It replaces the earlier plan to move producers to message v2.

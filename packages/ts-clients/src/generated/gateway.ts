@@ -46,7 +46,7 @@ export interface paths {
         put?: never;
         /**
          * Alertmanager webhook intake.
-         * @description Takes the Prometheus Alertmanager webhook payload (version 4) and acknowledges it at once; grouping and investigation run asynchronously. Alerts already seen with the same fingerprint and status are deduplicated.
+         * @description Takes the Prometheus Alertmanager webhook payload (version 4) and acknowledges it at once; investigation runs asynchronously. Alerts already seen with the same fingerprint and status are deduplicated. New alerts join the group of the same groupKey whose 5-minute window opened last, or open a new group. A new group with a firing alert queues one investigation, unless the tenant already started the gateway's limit (5 by default) in the last 5 minutes; then the group is kept without one. The body may hold at most 1 MB and 200 alerts.
          */
         post: operations["postAlerts"];
         delete?: never;
@@ -171,6 +171,7 @@ export interface components {
             commonAnnotations: components["schemas"]["Labels"];
             /** @description Backlink to the Alertmanager. */
             externalURL: string;
+            /** @description At most 200; larger payloads get 400. Set max_alerts to 200 in Alertmanager's webhook_config so it truncates bigger groups and reports truncatedAlerts. */
             alerts: components["schemas"]["Alert"][];
         };
         Alert: {
@@ -380,6 +381,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description The body is over 1 MB. */
+        PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description Rate limit exceeded. Retry after Retry-After seconds. */
         TooManyRequests: {
             headers: {
@@ -502,6 +512,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
         };

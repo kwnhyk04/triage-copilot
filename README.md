@@ -44,6 +44,8 @@ make dev
 | `make migrate` | Drizzle (gateway) and Alembic (agent) migrations; see `docs/migrations.md` |
 | `make seed` | The same fake history every run in both schemas; `SEED_ARGS=--reset` replaces existing rows, `SEED_ARGS=--large` tops the agent up to 2,000,000 steps |
 | `make eval` | Placeholder until build step 6 |
+| `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `investigations-dlq.fifo`, and the agent's `dead_letters` |
+| `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
 Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:

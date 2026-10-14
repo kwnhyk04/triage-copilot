@@ -221,7 +221,13 @@ class AlertmanagerWebhook(BaseModel):
     commonLabels: Labels
     commonAnnotations: Labels
     externalURL: Annotated[str, Field(description="Backlink to the Alertmanager.")]
-    alerts: Annotated[list[Alert], Field(min_length=1)]
+    alerts: Annotated[
+        list[Alert],
+        Field(
+            description="At most 200; larger payloads get 400. Set max_alerts to 200 in Alertmanager's webhook_config so it truncates bigger groups and reports truncatedAlerts.",
+            min_length=1,
+        ),
+    ]
 
 
 class Step(BaseModel):

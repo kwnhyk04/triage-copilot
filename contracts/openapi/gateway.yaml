@@ -5,8 +5,9 @@ info:
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
-    Alertmanager webhook takes its own bearer token, approve and reject take X-Approver-Key, every
-    other route the X-API-Key header. /graphql takes the same X-API-Key.
+    Alertmanager webhook takes the tenant's bearer token, approve and reject take X-Approver-Key,
+    every other route the X-API-Key header. /graphql takes the same X-API-Key. Requests are rate
+    limited per credential, or per client address without one.
 security:
   - apiKey: []
 paths:
@@ -46,8 +47,11 @@ paths:
       summary: Alertmanager webhook intake.
       description: >-
         Takes the Prometheus Alertmanager webhook payload (version 4) and acknowledges it at once;
-        grouping and investigation run asynchronously. Alerts already seen with the same
-        fingerprint and status are deduplicated.
+        investigation runs asynchronously. Alerts already seen with the same fingerprint and status
+        are deduplicated. New alerts join the group of the same groupKey whose 5-minute window
+        opened last, or open a new group. A new group with a firing alert queues one investigation,
+        unless the tenant already started the gateway's limit (5 by default) in the last 5 minutes;
+        then the group is kept without one. The body may hold at most 1 MB and 200 alerts.
       security:
         - alertmanagerToken: []
       requestBody:
@@ -73,6 +77,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '503':
@@ -214,8 +220,9 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Shared secret set as the bearer credentials in Alertmanager's webhook http_config. Valid
-        on POST /v1/alerts only.
+        A tenant's own secret, set as the bearer credentials in its Alertmanager webhook
+        http_config. It identifies the tenant; the gateway stores only its SHA-256. Valid on POST
+        /v1/alerts only.
   parameters:
     InvestigationId:
       name: id
@@ -308,6 +315,12 @@ components:
             $ref: '#/components/schemas/Problem'
     AlreadyDecided:
       description: The action was already approved or rejected.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: The body is over 1 MB.
       content:
         application/problem+json:
           schema:
@@ -410,6 +423,9 @@ components:
         alerts:
           type: array
           minItems: 1
+          description: >-
+            At most 200; larger payloads get 400. Set max_alerts to 200 in Alertmanager's
+            webhook_config so it truncates bigger groups and reports truncatedAlerts.
           items:
             $ref: '#/components/schemas/Alert'
     Alert:

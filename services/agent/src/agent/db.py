@@ -1,6 +1,6 @@
 """Agent tables at the head revision, as the Alembic revisions in services/agent/migrations end."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -51,6 +51,8 @@ class Investigation(Base):
     status: Mapped[str] = mapped_column(
         Enum(
             "queued",
+            # Waiting for model calls: AI_ENABLED is off or today's token budget is spent.
+            "queued_budget",
             "running",
             "awaiting_approval",
             "resolved",
@@ -96,7 +98,8 @@ class ToolCall(Base):
     args: Mapped[dict[str, Any]]
     # Where the full, possibly paginated result is kept; null when the call failed.
     result_ref: Mapped[str | None]
-    latency_ms: Mapped[int]
+    # Null until the call returns: the row is written when the model asks for the call.
+    latency_ms: Mapped[int | None]
     error: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -140,3 +143,27 @@ class ProposedAction(Base):
         Enum("pending", "approved", "rejected", name="action_status"), server_default="pending"
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class DeadLetter(Base):
+    """Queue messages that failed schema validation; `python -m agent.dlq replay` re-sends them."""
+
+    __tablename__ = "dead_letters"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    message_id: Mapped[str]
+    # The SQS MessageGroupId, reused when the message is replayed.
+    group_id: Mapped[str]
+    body: Mapped[str]
+    error: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    replayed_at: Mapped[datetime | None]
+
+
+class AiUsage(Base):
+    """Model tokens spent per UTC day, input and output combined; the budget guard reads it."""
+
+    __tablename__ = "ai_usage"
+
+    day: Mapped[date] = mapped_column(primary_key=True)
+    tokens: Mapped[int] = mapped_column(BigInteger, server_default="0")
