@@ -1,3 +1,5 @@
 pnpm-lock.yaml
+# drizzle-kit rewrites these on every generate.
+**/drizzle/meta/
 **/generated/
 *.md

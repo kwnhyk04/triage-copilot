@@ -75,7 +75,7 @@ Design (scaffolded in step 1; behavior beyond health checks is not built yet):
 - `contracts/` (spec-first; code is generated from it, never the reverse):
   - `openapi/gateway.yaml` (OpenAPI 3.1): `POST /v1/alerts` (Alertmanager webhook v4, 202 `{group_id, deduped}`), `GET /v1/investigations` (keyset: `limit`, opaque `cursor`, `next_cursor`), `GET /v1/investigations/{id}`, `POST /v1/actions/{id}/approve|reject` (body `{approver, reason?}`, 409 once decided). Errors are RFC 9457 problem details; 401 carries `WWW-Authenticate`; 429 carries `RateLimit-Limit`, `RateLimit-Remaining`, `Retry-After`; 503 carries `Retry-After`. Security: the webhook takes its own bearer token, approve and reject take `X-Approver-Key` (`APPROVER_API_KEY`, held only by the web server), other `/v1` routes and `/graphql` take `X-API-Key`, health probes none. `openapi/examples/alertmanager-webhook.json` is a sample payload.
   - `openapi/agent.yaml` (internal): `POST /internal/investigations/{id}/cancel`, `GET /internal/investigations/{id}/state`, behind a separate service bearer token.
-  - `messages/`: one strict JSON Schema per message version (`<name>.v<N>.schema.json`, `schema_version` const, embedded `examples`): InvestigationRequested v1, StepRecorded v1 and v2, ActionProposed v1, ActionApproved v1. `step-recorded.schema.json` is the v1-or-v2 union consumers validate against. The `investigations.fifo` MessageGroupId is the gateway's alert group id (a UUID), not the Alertmanager `group_key`, which SQS rejects (spaces, over 128 characters).
+  - `messages/`: one strict JSON Schema per message version (`<name>.v<N>.schema.json`, `schema_version` const, embedded `examples`): InvestigationRequested v1, StepRecorded v1, v2 and v3, ActionProposed v1, ActionApproved v1. `step-recorded.schema.json` is the union of v1, v2 and v3 that consumers validate against; it marks v2 deprecated. Producers emit v3, whose payload is the agent's stored StepRecorded v2 event unchanged. Both require a summary of 1 to 2,000 characters, and latency and token counts that are not negative. The `investigations.fifo` MessageGroupId is the gateway's alert group id (a UUID), not the Alertmanager `group_key`, which SQS rejects (spaces, over 128 characters).
   - `graphql/schema.graphql`: reads and live updates only. Investigation, Hypothesis, Evidence, ProposedAction, Step, ToolCall; Relay connection `investigations(first, after)`; `investigation(id)`; subscription `investigationUpdated(id): Investigation!`.
 - Codegen (`make codegen`): `packages/ts-clients/scripts/codegen.ts` writes `packages/ts-clients/src/generated/` (openapi-typescript, json-schema-to-typescript plus the embedded schemas, graphql-codegen resolver types) and `apps/web/src/generated/graphql.ts` (typed document strings for `apps/web/src/graphql/*.graphql`). `packages/py-clients/scripts/codegen.py` writes `packages/py-clients/src/py_clients/generated/` (datamodel-codegen). Both wipe their output first.
 - Clients: `@triage/ts-clients/gateway` has `createGatewayClient` (openapi-fetch over the X-API-Key routes only; the webhook and decision routes are excluded from its type) and `createDecisionClient` (approve and reject with `X-Approver-Key`; only `apps/web/src/lib/decisions.ts` calls it). `/agent` uses the service token. All have a 10 s default timeout; `/messages` (`parseMessage(name, data)`, ajv 2020 validation). `py_clients.clients` (httpx2, 10 s default timeout): `AlertsClient`, a read-only `GatewayClient` (no approve or reject: only the web backend-for-frontend records human decisions), `AgentClient`, and `ApiError` (status, problem, Retry-After).
@@ -86,15 +86,32 @@ Design (scaffolded in step 1; behavior beyond health checks is not built yet):
 - `packages/ts-telemetry`, `packages/py-telemetry`: JSON logs; OTLP tracing when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 - `Makefile`: one entry point for both toolchains; recipes run under cmd.exe and sh.
 
+- Gateway schema (`apps/gateway/src/schema.ts`, SQL migrations in `apps/gateway/drizzle/`, written by `pnpm --filter @triage/gateway db:generate`):
+  - `tenants`; `services` and `service_dependencies` (the dependency graph; writers keep it acyclic).
+  - `alert_groups`: `group_key` and `window_start` are unique per tenant. `status` holds the API's investigation statuses plus `queued_not_investigated`, and a CHECK ties a null `investigation_id` to exactly that status.
+  - `alerts`: one row per firing, unique on `(tenant_id, fingerprint, starts_at)`.
+  - `proposed_actions`: a copy of the agent's proposals for the UI. Its status comes from `approvals`, whose primary key `action_id` allows one decision per action.
+  - Keyset indexes on `(tenant_id, created_at DESC NULLS FIRST, id DESC NULLS FIRST)` for alerts, groups and actions.
+- Agent schema:
+  - Models in `services/agent/src/agent/db.py`; plain-SQL Alembic revisions 0001 to 0004 in `services/agent/migrations/versions/` (`docs/migrations.md`).
+  - Tables: `investigations`, `investigation_steps` (partitioned by month on `created_at`), `tool_calls`, `runbook_chunks` (`vector(768)`, no ANN index yet), `proposed_actions` (unique `idempotency_key`).
+- `agent.steps`: the stored StepRecorded v1 and v2 event models, the upcasters, `replay` (always v2), `step_message`, and `record_step`. `record_step` numbers steps from `investigations.step_count`, dual-writes to `investigation_steps_p` while `STEPS_DUAL_WRITE` is on, and returns the StepRecorded v3 message to publish after its transaction commits.
+- `agent.partitions`: creates monthly partitions (the agent runs it at startup and then daily) and runs the resumable backfill. CLI: `uv run python -m agent.partitions backfill|ensure`.
+- `scripts/seed.py` (`make seed`): Faker with a fixed seed.
+  - 5 tenants, 50 services, 79 dependency edges, 10,000 alerts in 2,523 groups, 2,000 investigations (21,867 steps: v1 before 2026-06-01, v2 after), 17,486 tool calls, 784 actions, 714 decisions.
+  - Each schema is written by its own role. It refuses to overwrite data without `--reset`; `--large` tops the agent up to 2,000,000 steps.
+- Migration tests (`services/agent/tests/conftest.py`) create a throwaway database `triage_test_*` per test as the Postgres superuser (`POSTGRES_PASSWORD`) and drop it afterwards.
+
 Still planned: gateway intake and grouping, checkpoints, agent tools, executor safety checks, scenario engine, eval harness.
 
 ## Implemented Functionality
 
-Step 1 scaffolding and step 2 contracts:
+Steps 1 (scaffolding), 2 (contracts) and 3 (data):
 
 - Contracts and generated clients for both languages (see Important Components). Contract tests cover both sides:
   - Every message schema example validates in TypeScript (ajv) and Python (pydantic, which must also dump it back unchanged).
-  - A v1 StepRecorded validates as StepRecorded in both.
+  - Every StepRecorded version (v1, v2, v3) validates as StepRecorded in both, and only v2 is marked deprecated.
+  - The v3 payload fields equal the stored v2 event's, and every stored event becomes a v3 message unchanged (`services/agent/tests/test_steps.py`).
   - Action kinds outside the allowlist are rejected in both.
   - The Alertmanager sample parses.
   - The clients send the right credential header.
@@ -109,22 +126,30 @@ Step 1 scaffolding and step 2 contracts:
 - web: home page shows gateway status through a server-side GraphQL call; `/healthz`, `/readyz` (gateway reachable).
 - agent: `/healthz`, `/readyz` (Postgres and queue). A consumer thread validates `InvestigationRequested`, logs and deletes valid messages, and leaves invalid ones for the DLQ.
 - executor and sim: `/healthz` and `/readyz` only.
-- Migrations wired, no tables yet: Drizzle (`gateway.__drizzle_migrations`) and Alembic (`agent.alembic_version`).
+- Both schemas, migrated by Drizzle (`gateway.__drizzle_migrations`) and Alembic (`agent.alembic_version`). Tests apply both chains to an empty database, run the seed, and check the models against the result (`alembic check`). They also downgrade the agent chain to empty and back.
+- Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms. Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
+- Story B (event versioning): replaying stored v1 steps returns v2 objects; a golden snapshot pins the result, and stored rows are never rewritten.
 
 ## Current Development Status
 
-Steps 1 (scaffolding) and 2 (contracts) done on 2026-10-14. Next: step 3, data.
+Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14. Next: step 4, workers.
 
 ## Known Limitations
 
 - All targets are design goals and have not been measured.
 - The contracts are ahead of the code:
-  - Approve and reject are the only `/v1` routes served. They find no action yet: the gateway's decision store answers not found until step 3 stores actions.
+  - Approve and reject are the only `/v1` routes served. Their decision store still answers not found. The `proposed_actions` and `approvals` tables exist, but recording a decision must also queue ActionApproved, which needs an outbox (step 4).
   - X-API-Key, the Alertmanager token and the agent service token are not enforced yet.
   - The GraphQL `investigations` and `investigation` queries have no resolvers (step 9).
 - `RootCauseClass` and `ActionKind` are initial enums; the scenario engine and eval steps may extend them. A new value in a response breaks older generated Python clients (pydantic enums reject unknown values), so ship the gateway and the clients together.
 - Action `parameters` are free-form; per-kind parameter schemas are open (docs/todo.md). No message carries the structured report (hypotheses, evidence) from agent to gateway yet; decide before step 6.
-- `make seed` and `make eval` are placeholders until steps 3 and 6.
+- `make eval` is a placeholder until step 6.
+- StepRecorded v3, like the stored v2 event, has no tool call status, and its `latency_ms` may be null. The API's `Step.tool_call` needs `status` and `duration_ms`, so the gateway must derive them or a later version must add them (docs/todo.md).
+- No producer publishes StepRecorded yet; the agent loop (step 6) will publish what `record_step` returns.
+- Agent tables carry no tenant id; InvestigationRequested has none either, so the agent learns the tenant only through the gateway.
+- `STEPS_DUAL_WRITE` and the dual-write code stay for the partitioning test; past revision 0004 the flag must stay false.
+- `make seed SEED_ARGS=--large` adds agent rows only: its extra investigations have no gateway alert groups.
+- Embeddings are `vector(768)`; another dimension needs a new column and a re-embed.
 - Apps run natively in dev; Dockerfiles and the prod compose override come with steps 7 and 10.
 - Gateway subscriptions use in-process pub/sub, so they work with one gateway instance only.
 - Toxiproxy runs without proxies; fault-injection tests will create them.

@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 
 from agent.consumer import WAIT_SECONDS, consume
+from agent.partitions import maintain_partitions
 from agent.settings import Settings
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_config import ConfigError, load_settings
@@ -57,6 +58,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             daemon=True,
         )
         worker.start()
+        threading.Thread(
+            target=maintain_partitions, args=(engine, stop), name="partitions", daemon=True
+        ).start()
         yield
         stop.set()
         engine.dispose()

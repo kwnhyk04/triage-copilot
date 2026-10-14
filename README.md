@@ -35,14 +35,15 @@ make dev
 | `make dev` | Infra plus every app with reload |
 | `make build` | Next.js build and Python wheels |
 | `make test` | Jest and pytest unit tests |
-| `make test-int` | Integration tests against the infra |
+| `make test-int` | Integration tests against the infra, about a minute (the partitioning test seeds 2,000,000 steps) |
 | `make lint` | ESLint, Prettier, ruff |
 | `make typecheck` | tsc and pyright |
 | `make codegen` | Regenerates clients from `contracts/` |
 | `make contracts-check` | Regenerates clients; fails if any generated file changed |
 | `make contracts-breaking` | oasdiff breaking-change check of both OpenAPI specs against `CONTRACTS_BASE` (default `HEAD`; needs Docker) |
-| `make migrate` | Drizzle (gateway) and Alembic (agent) migrations |
-| `make seed`, `make eval` | Placeholders until build steps 3 and 6 |
+| `make migrate` | Drizzle (gateway) and Alembic (agent) migrations; see `docs/migrations.md` |
+| `make seed` | The same fake history every run in both schemas; `SEED_ARGS=--reset` replaces existing rows, `SEED_ARGS=--large` tops the agent up to 2,000,000 steps |
+| `make eval` | Placeholder until build step 6 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
 Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:

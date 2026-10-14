@@ -37,6 +37,24 @@ From the approved design doc:
 - 2026-10-14: Python HTTP clients use httpx2, the maintained httpx successor, instead of httpx. Reason: it is already locked (Starlette's TestClient needs it), so the venv keeps one HTTP library.
 - 2026-10-14: oasdiff runs from the pinned image `tufin/oasdiff:v1.33.0` and compares against a git ref (`CONTRACTS_BASE`). It runs with `--network none` and only `.git` and `contracts/` mounted read-only. Reason: no Go toolchain needed (the image ships git), and a third-party image never sees `.env` or the network.
 - 2026-10-14: `make contracts-check` compares hashes of the generated dirs before and after codegen instead of running `git diff`. Reason: it works on an uncommitted tree and catches added and deleted files.
+- 2026-10-14: Stored step events (`agent.investigation_steps.event`) follow the step 3 spec: StepRecorded v1 has `observation`; v2 has `result`, `latency_ms` and `tokens`. They are versioned apart from the StepRecorded queue messages of step 2, whose v2 nests the tool call and token usage instead. Reason: released message versions are immutable, and the spec's v1 has a field the message v1 never had. Message v3 (next entry) now carries the stored v2 shape.
+- 2026-10-14: StepRecorded message v3 is the stored v2 step event, field for field, plus `schema_version`, `investigation_id`, `seq` and `recorded_at` (user decision).
+  - Producers emit only v3; `record_step` returns it.
+  - Consumers accept v1, v2 and v3. The union marks v2 `"deprecated": true` beside its `$ref`, because released v1 and v2 files stay byte-identical.
+  - v3 and the stored v2 model share the same limits (user decision): summary of 1 to 2,000 code points, `latency_ms` and token counts not negative.
+  - The model enforces them when an event is built. `record_step` also builds the v3 message before writing, so a stored event always converts to a valid v3.
+  - Reason: no mapping layer between the stored event and the message.
+- 2026-10-14: Step `seq` comes from `investigations.step_count`, incremented under the row lock in `record_step`. Reason: a partitioned table's unique keys must include `created_at`, so the database can no longer enforce unique `(investigation_id, seq)`.
+- 2026-10-14: The 0003 swap renames the old table to `investigation_steps_old` and leaves a view named `investigation_steps_p` over it. Reason: agents still dual-writing keep working without errors, and the old table stays complete for a rollback until the flag goes off.
+- 2026-10-14: New monthly partitions are built as plain tables and then attached. Reason: `ATTACH PARTITION` locks the parent only in SHARE UPDATE EXCLUSIVE mode, where `CREATE TABLE ... PARTITION OF` takes ACCESS EXCLUSIVE. The attach still briefly locks `investigations`, to clone the foreign key, and the default partition. So the job runs under `lock_timeout` and the 0003 swap takes the job's advisory lock, and the two never overlap.
+- 2026-10-14: Every agent revision runs in its own transaction (`transaction_per_migration=True`). 0004 compares the old table row by row with the new one before its irreversible drop. Reason: a long `upgrade head` must not hold one revision's locks into the next. Counts alone miss a row that a writer without dual-write slipped in between 0003's count and its lock.
+- 2026-10-14: Alembic revisions are plain SQL, and `alembic check` (run by the migration tests) compares them with the SQLAlchemy models. Reason: exact DDL for enums, partitions and pgvector, with no app imports in revisions.
+- 2026-10-14: `migrations/env.py` connects with `search_path=public`. Reason: the agent role's default schema is `agent`, which autogenerate otherwise treats as unnamed, reporting every table as missing.
+- 2026-10-14: Migration tests create throwaway databases (`triage_test_*`) as the Postgres superuser, with `POSTGRES_PASSWORD` from `.env`, and drop them afterwards. Reason: the from-empty and partition tests must not touch the dev database.
+- 2026-10-14: `approvals` uses `action_id` as its primary key, and the gateway's `proposed_actions` has no status column; status comes from `approvals`. Reason: one decision per action, and no second copy of the status to drift.
+- 2026-10-14: Keyset indexes are `DESC NULLS FIRST`. Reason: drizzle-kit writes `.desc()` as `DESC NULLS LAST`, which a plain `ORDER BY ... DESC` cannot read without a sort. With `NULLS FIRST`, EXPLAIN shows an index-only scan and no sort.
+- 2026-10-14: The seed lives in `scripts/` (Faker in the dev group, never in an image). It writes each schema through its own role, anchors history to the year before 2026-10-01, and refuses to touch a database with data unless given `--reset`. Reason: the same rows on every run, and no way to seed production by accident.
+- 2026-10-14: Embeddings are `vector(768)`: Gemini embeddings at `output_dimensionality` 768, or nomic-embed-text in Ollama. Reason: one dimension that both the primary and the local provider can produce.
 
 ## Preferences and Instructions
 
@@ -62,6 +80,13 @@ None yet.
 - 2026-10-14: json-schema-to-typescript's `declareExternallyReferenced: false` also drops a schema's own `$defs`. The codegen sets it only on schemas that `$ref` other files, which would otherwise redeclare those types.
 - 2026-10-14: A YAML plain scalar cannot contain `: ` (for example `{"to_version": "v1.7.3"}` in a description); quote it. oasdiff reports it as a parse error.
 - 2026-10-14: Under `nodenext`, ajv-formats' plugin is `addFormats.default(ajv)`: the package is CommonJS and Node's ESM interop puts the function on `default`.
+- 2026-10-14: drizzle-kit's first migration started with `CREATE SCHEMA "gateway"`, which fails because `infra/postgres-init.sql` creates the schema; it was edited to `IF NOT EXISTS`. Postgres truncates names over 63 characters, so drizzle-kit's snapshot and the database disagree; name long constraints by hand (`proposed_actions_investigation_id_fk`).
+- 2026-10-14: The config-protection hook blocks agents from editing lint and format config such as `.prettierignore`; the user makes those edits. The user added `**/drizzle/meta/` to `.prettierignore`, because drizzle-kit rewrites its snapshots in a style Prettier rejects.
+- 2026-10-14: json-schema-to-typescript and datamodel-codegen ignore keywords beside a `$ref` inside `oneOf` (`deprecated`, `description`). The generated StepRecorded unions do not show v2 as deprecated; only the schema does, which ajv validates and the contract tests pin.
+- 2026-10-14: Postgres 18 names NOT NULL constraints `<table>_<column>_not_null`, so after the swap the partitioned table keeps `investigation_steps_p_*_not_null` names. Harmless.
+- 2026-10-14: Log `extra` keys must not be LogRecord attributes (`created`, `name`, `msg`, `args`, `message` and so on): `Logger.makeRecord` raises `KeyError` when the level is enabled. `extra={"created": ...}` crashed `python -m agent.partitions ensure` and rolled back its partitions; an independent review caught it, and the partition test now runs that CLI.
+- 2026-10-14: SQLAlchemy 2.1 deprecated `Result.tuples()`, and `dict()` over it fails; iterate the rows. Enum types take the MetaData schema by default.
+- 2026-10-14: Alembic's `op.execute` wraps SQL in `text()`, which reads `:name` as a bind parameter. Keep `:` in migration SQL only after a digit (`'2026-10-01T00:00Z'`) or in `::` casts. Multi-statement strings work with psycopg 3, because a query without parameters goes through the simple protocol.
 - 2026-10-14: SQS rejects an Alertmanager group key as MessageGroupId: it allows only alphanumerics and punctuation (no spaces) and at most 128 characters. Group keys look like `{}:{alertname="X", service="Y"}`. Found by an independent review against this stack's ElasticMQ (`InvalidParameterValue`). Use the gateway's group id (UUID) instead.
 
 ## Rejected Approaches
@@ -77,6 +102,7 @@ None yet.
   - ChangeMessageVisibility: an extension keeps a message hidden past its original timeout; 0 releases it immediately.
   - Message attributes: String and Number custom attributes round-trip; MessageGroupId and ApproximateReceiveCount come back through MessageSystemAttributeNames.
   - Redrive: ApproximateReceiveCount runs 1 to 5, and the sixth receive moves the message to the DLQ.
+- 2026-10-14: Partition story on 2,000,000 seeded steps: about 50 s for the whole test. In the final run the writer committed in every phase, with 2,256 writes during the backfill, 132 during the verify-and-swap migration and 250 during 0004's row check. It had zero errors, and the slowest write took 63 ms. Each test was also run against a broken version and failed as it should: without the compat view, with dual-write left on past 0004, and with an upcaster that writes 0 for an unknown latency.
 - 2026-10-14: With `messages-storage` on, a message queued on `investigations.fifo` survived `docker compose restart elasticmq` and a forced container recreate; its receive count (1, then 2) and the redrive policy carried over. Checked by hand, not in `make test-int`, because the check restarts the shared container.
 
 ## Constraints

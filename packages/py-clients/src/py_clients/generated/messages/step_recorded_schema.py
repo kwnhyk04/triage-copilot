@@ -7,16 +7,22 @@ from typing import Annotated
 
 from pydantic import Field, RootModel
 
-from . import step_recorded_v1_schema, step_recorded_v2_schema
+from . import step_recorded_v1_schema, step_recorded_v2_schema, step_recorded_v3_schema
 
 
 class StepRecorded(
-    RootModel[step_recorded_v1_schema.StepRecordedV1 | step_recorded_v2_schema.StepRecordedV2]
+    RootModel[
+        step_recorded_v1_schema.StepRecordedV1
+        | step_recorded_v2_schema.StepRecordedV2
+        | step_recorded_v3_schema.StepRecordedV3
+    ]
 ):
     root: Annotated[
-        step_recorded_v1_schema.StepRecordedV1 | step_recorded_v2_schema.StepRecordedV2,
+        step_recorded_v1_schema.StepRecordedV1
+        | step_recorded_v2_schema.StepRecordedV2
+        | step_recorded_v3_schema.StepRecordedV3,
         Field(
-            description="Every StepRecorded version a consumer must accept. Drop v1 here only after no v1 producer runs and the queue holds no v1 messages.",
+            description="Every StepRecorded version a consumer must accept. Producers emit v3 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
             title="StepRecorded",
         ),
     ]

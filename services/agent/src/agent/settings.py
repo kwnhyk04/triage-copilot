@@ -9,5 +9,7 @@ class Settings(EnvSettings):
     sqs_endpoint_url: str | None = None
     aws_region: str = "us-east-1"
     investigations_queue: str = "investigations.fifo"
+    # Also write steps to investigation_steps_p while it is partitioned online (docs/migrations.md).
+    steps_dual_write: bool = False
     log_level: LogLevel = "info"
     otel_exporter_otlp_endpoint: str | None = None

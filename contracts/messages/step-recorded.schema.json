@@ -1,6 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "StepRecorded",
-  "description": "Every StepRecorded version a consumer must accept. Drop v1 here only after no v1 producer runs and the queue holds no v1 messages.",
-  "oneOf": [{ "$ref": "step-recorded.v1.schema.json" }, { "$ref": "step-recorded.v2.schema.json" }]
+  "description": "Every StepRecorded version a consumer must accept. Producers emit v3 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
+  "oneOf": [
+    { "$ref": "step-recorded.v1.schema.json" },
+    {
+      "$ref": "step-recorded.v2.schema.json",
+      "deprecated": true,
+      "description": "Deprecated: producers emit v3, which carries the stored step event unchanged. Accepted until the queue holds no v2 messages."
+    },
+    { "$ref": "step-recorded.v3.schema.json" }
+  ]
 }

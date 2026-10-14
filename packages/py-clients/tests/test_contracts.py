@@ -10,7 +10,6 @@ from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
 from py_clients.generated.messages.step_recorded_schema import StepRecorded
-from py_clients.generated.messages.step_recorded_v1_schema import StepRecordedV1
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 SCHEMAS = sorted((CONTRACTS / "messages").glob("*.schema.json"))
@@ -36,10 +35,11 @@ def test_examples_validate_and_round_trip(schema_file: Path, example: dict[str, 
     assert model_for(schema_file).model_validate(example).model_dump(mode="json") == example
 
 
-def test_v1_step_recorded_validates_as_step_recorded() -> None:
-    schema_file = CONTRACTS / "messages/step-recorded.v1.schema.json"
-    example = json.loads(schema_file.read_bytes())["examples"][0]
-    assert isinstance(StepRecorded.model_validate(example).root, StepRecordedV1)
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_every_step_recorded_version_validates_as_step_recorded(version: int) -> None:
+    schema_file = CONTRACTS / f"messages/step-recorded.v{version}.schema.json"
+    for example in json.loads(schema_file.read_bytes())["examples"]:
+        assert isinstance(StepRecorded.model_validate(example).root, model_for(schema_file))
 
 
 @pytest.mark.parametrize("name", ["action-proposed.v1", "action-approved.v1"])

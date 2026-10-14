@@ -15,6 +15,101 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-14: StepRecorded v3 non-empty summary
+
+- Changes: `step-recorded.v3.schema.json` adds `minLength: 1` to `summary`, and the stored `StepRecordedV2` model adds `min_length=1` (user decision). Both test tables gained the boundary cases: an empty summary is rejected, one character is allowed. Codegen regenerated.
+- Files: contracts/messages/step-recorded.v3.schema.json, packages/py-clients/src/py_clients/generated/messages/step_recorded_v3_schema.py, packages/ts-clients (src/generated/messages.ts, src/contracts.test.ts), services/agent (src/agent/steps.py, tests/test_steps.py), docs/
+- Validation:
+  - Before the change, no stored event in the dev database had an empty or missing summary: 0 of 14,735 v1 and 0 of 7,132 v2 rows, the shortest being 16 characters. `triage` is the only database.
+  - `make lint`, `typecheck`, `test` (Jest 42, pytest 45), `test-int` (Jest 2, pytest 15), `contracts-check` and `contracts-breaking` pass. The v1 and v2 files still match their sha256 and have no diff against HEAD.
+  - Mutations failed the tests: `min_length` removed from the stored model (Python), and `minLength` removed from v3 (Python and TypeScript).
+- Outstanding: None.
+
+### 2026-10-14: StepRecorded v3 limits
+
+- Changes:
+  - `step-recorded.v3.schema.json` (still unreleased) caps `summary` at 2,000 characters (`maxLength`, counted in code points) and requires `latency_ms` and both token counts to be at least 0 (user decision). The v1 and v2 files are unchanged.
+  - The stored `StepRecordedV2` model and its `TokenUsage` enforce the same limits, so an event that breaks one cannot be built or written.
+  - `record_step` now builds the v3 message before inserting, so an event that skipped validation raises before anything is stored.
+  - Codegen regenerated.
+  - The user added `**/drizzle/meta/` to `.prettierignore`. The memory note about running Prettier after `db:generate` is closed, and so is its todo item.
+- Files: contracts/messages/step-recorded.v3.schema.json, packages/py-clients/src/py_clients/generated/messages/step_recorded_v3_schema.py, packages/ts-clients (src/generated/messages.ts, src/contracts.test.ts), services/agent (src/agent/steps.py, tests/test_steps.py, tests/test_migrations_int.py), docs/
+- Validation:
+  - `make lint`, `typecheck`, `test` (Jest 40, pytest 43), `test-int` (Jest 2, pytest 15), `contracts-check` and `contracts-breaking` pass. The v1 and v2 files still match their sha256 and have no diff against HEAD.
+  - No stored event on the dev database breaks a limit: the longest summary is 145 characters, with no negative values.
+  - Each limit has accept and reject cases at its boundary, including 2,000 four-byte emoji, so Python and ajv count characters the same way.
+  - Mutations failed the tests: `ge=0` removed from the stored latency, and `maxLength` removed from v3 (Python and TypeScript).
+- Outstanding: v3 still allows an empty summary, which v1 and v2 messages rejected.
+
+### 2026-10-14: StepRecorded v3 message
+
+- Changes:
+  - `contracts/messages/step-recorded.v3.schema.json` (user decision):
+    - The payload is the stored StepRecorded v2 event field for field, with the same nullability and no extra limits.
+    - Around it are `schema_version` 3, `investigation_id`, `seq` and `recorded_at`.
+    - Two examples: with latency and tokens, and with both unknown.
+  - The union `step-recorded.schema.json` accepts v1, v2 and v3, and marks v2 `"deprecated": true`, with a description, beside its `$ref`. The released v1 and v2 files are unchanged.
+  - Codegen added `StepRecordedV3` in both languages; both StepRecorded unions are now v1, v2 and v3.
+  - `agent.steps.step_message` builds the v3 message from a stored event, and `record_step` returns it, so the first producer (the agent loop, step 6) publishes v3.
+  - Contract tests:
+    - TypeScript accepts each version through the union, pins v2 as the only deprecated branch, adds v3 to the enum parity check, and probes version 4 as unknown.
+    - Python validates each version through the union.
+    - Agent tests check that the v3 payload fields equal the stored v2 fields, and that stored events (upcast v1 included) become v3 messages unchanged.
+- Files: contracts/messages (step-recorded.v3.schema.json, step-recorded.schema.json), packages/ts-clients (src/generated/messages.ts, src/contracts.test.ts), packages/py-clients (src/py_clients/generated/messages/, tests/test_contracts.py), services/agent (src/agent/steps.py, tests/test_steps.py), docs/
+- Validation:
+  - `make lint`, `typecheck`, `test` (Jest 32, pytest 35), `test-int` (Jest 2, pytest 14), `contracts-check` and `contracts-breaking` pass.
+  - The v1 and v2 files match their sha256 from before the change and have no diff against HEAD.
+  - Mutations failed the tests: an extra field on the stored v2 model (field parity), and `step_message` dropping `tokens` (round trip).
+- Outstanding: v3 has no tool call status for the API's `Step.tool_call`, and adding `**/drizzle/meta/` to `.prettierignore` is a manual step; both are in docs/todo.md.
+
+### 2026-10-14: Step 3 data
+
+- Changes:
+  - Gateway schema in Drizzle (`apps/gateway/src/schema.ts`, `drizzle/0000_init.sql`):
+    - `tenants`, `services` and `service_dependencies`.
+    - `alert_groups`: a status enum that includes `queued_not_investigated`, and a CHECK tying that status to a null `investigation_id`.
+    - `alerts`: one row per firing.
+    - The `proposed_actions` copy, and `approvals` keyed by `action_id`.
+    - Keyset indexes `(tenant_id, created_at DESC NULLS FIRST, id DESC NULLS FIRST)`.
+  - Agent schema: SQLAlchemy 2 models (`agent/db.py`) and plain-SQL Alembic revisions 0001 to 0004. `env.py` gained the autogenerate filters, `search_path=public` and one transaction per revision.
+  - Story A:
+    - 0002 expand.
+    - The `STEPS_DUAL_WRITE` flag, with the dual-write in `record_step`.
+    - The resumable backfill CLI.
+    - 0003, which checks the counts and then swaps the names, leaving a compat view.
+    - 0004 contract.
+    - The partition job in the agent: at startup, then daily.
+  - Story B: stored StepRecorded v1 and v2 models, the upcaster chain and `replay`, pinned by a golden snapshot.
+  - Seed: `scripts/seed.py` (`make seed`), with Faker and a fixed seed, writing through both roles, with `--reset` and `--large`. Faker joined the root dev group.
+  - Tests:
+    - A scratch-database fixture.
+    - Both chains from empty, plus the seed and `alembic check`.
+    - A downgrade round trip that carries a row.
+    - The partition story under a writer at 2,000,000 steps, plus two guard tests.
+    - The golden replay.
+- Files: apps/gateway (src/schema.ts, drizzle/, drizzle.config.ts, package.json), services/agent (src/agent/db.py, steps.py, partitions.py, settings.py, main.py; migrations/env.py, migrations/versions/; tests/conftest.py, test_steps.py, test_migrations_int.py, test_partitioning_int.py, golden/), scripts/seed.py, Makefile, pyproject.toml, uv.lock, .env.example, README.md, docs/
+- Validation:
+  - `make lint`, `typecheck`, `test` (Jest 27, pytest 29), `test-int` (Jest 2, pytest 14, about 60 s), `build` and `contracts-check` pass.
+  - Dev database:
+    - `make migrate` applied both chains to the empty schemas; running it again is a no-op.
+    - The gateway schema was reset once: the first apply had a truncated 66-character foreign key name, and the schema held only that apply's empty tables.
+    - `make seed` took 2.6 s. A second run refused without `--reset`, and `--reset` reproduced identical rows (checksums).
+    - EXPLAIN of the keyset queries shows index-only scans with no sort.
+  - The agent started against the dev database with the partition thread: `/readyz` ok, no errors.
+  - Mutations each failed the tests: an upcaster writing 0 for an unknown latency, 0003 without the compat view, and dual-write left on past 0004.
+- Review fixes (independent review: 0 high, 3 medium, 7 low findings):
+  - `python -m agent.partitions ensure` crashed: `extra={"created": ...}` collides with a LogRecord attribute, which also rolled back the partitions. The key is renamed, and the partition test runs the CLI.
+  - 0002 and its downgrade now set `lock_timeout` (the foreign key locks `investigations`).
+  - 0004's downgrade copies the rows back, so the chain downgrades with data present.
+  - 0004 refuses to drop while the old table holds a row the new one lacks; a test covers it.
+  - 0003 takes the partition job's advisory lock. Without it, the swap, an attach and a writer could deadlock.
+  - Revisions now commit one at a time; the docs say to upgrade a live database one revision at a time.
+  - The partition job retries hourly after a failure, and the ATTACH lock wording is corrected.
+  - The test's backfill gets a CLI-like engine, and the numbering assertion can no longer pass on an empty result.
+  - Seeded groups now start at their window start, so no alert predates its group.
+  - Not changed: per-month savepoints in `ensure_partitions`, and reading the backfill's date range from `investigations`. The hourly retry and the CLI's 60 s timeout cover both; a `ponytail:` comment marks the range scan.
+- Outstanding: the stored step events and the StepRecorded queue messages have different v2 shapes; map them before step 6. The decision store still needs the outbox (step 4); both are in docs/todo.md. `.prettierignore` is unchanged because the config-protection hook blocks it, so run Prettier after `db:generate`.
+
 ### 2026-10-14: Approver credential
 
 - Changes:

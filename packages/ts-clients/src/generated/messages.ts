@@ -64,9 +64,9 @@ export interface InvestigationRequestedV1 {
 }
 
 /**
- * Every StepRecorded version a consumer must accept. Drop v1 here only after no v1 producer runs and the queue holds no v1 messages.
+ * Every StepRecorded version a consumer must accept. Producers emit v3 only. Drop a version here only after no producer emits it and the queue holds none of its messages.
  */
-export type StepRecorded = StepRecordedV1 | StepRecordedV2;
+export type StepRecorded = StepRecordedV1 | StepRecordedV2 | StepRecordedV3;
 
 /**
  * Agent to gateway: one step of the investigation loop, sent after its checkpoint.
@@ -124,6 +124,47 @@ export interface TokenUsage {
   output_tokens: number;
 }
 
+/**
+ * Agent to gateway: one step of the investigation loop, sent after its checkpoint. The payload is the agent's stored StepRecorded v2 event, field for field and with the same nullability and limits (StepRecordedV2 in services/agent/src/agent/steps.py), plus the investigation, seq and time. Producers emit this version.
+ */
+export interface StepRecordedV3 {
+  schema_version: 3;
+  investigation_id: string;
+  /**
+   * Position of the step in its investigation, starting at 1.
+   */
+  seq: number;
+  kind: "tool_call" | "hypothesis" | "action" | "report";
+  /**
+   * 1 to 2,000 characters, counted as Unicode code points.
+   */
+  summary: string;
+  /**
+   * Set on tool_call steps only.
+   */
+  tool_name: string | null;
+  /**
+   * Id of the tool result; evidence cites it. Set on tool_call steps only.
+   */
+  tool_call_id: string | null;
+  /**
+   * What the tool returned; null when the call failed or the step called no tool. Called observation in stored v1 events.
+   */
+  result: string | null;
+  /**
+   * How long the tool call took; null when unknown, as for steps first stored as v1.
+   */
+  latency_ms: number | null;
+  /**
+   * Model tokens the step used; null when unknown, as for steps first stored as v1.
+   */
+  tokens: {
+    input: number;
+    output: number;
+  } | null;
+  recorded_at: string;
+}
+
 export interface Messages {
   "action-approved.v1": ActionApprovedV1;
   "action-proposed.v1": ActionProposedV1;
@@ -131,6 +172,7 @@ export interface Messages {
   "step-recorded": StepRecorded;
   "step-recorded.v1": StepRecordedV1;
   "step-recorded.v2": StepRecordedV2;
+  "step-recorded.v3": StepRecordedV3;
 }
 
 export const schemas = {
@@ -338,13 +380,18 @@ export const schemas = {
   "step-recorded": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "StepRecorded",
-    "description": "Every StepRecorded version a consumer must accept. Drop v1 here only after no v1 producer runs and the queue holds no v1 messages.",
+    "description": "Every StepRecorded version a consumer must accept. Producers emit v3 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
     "oneOf": [
       {
         "$ref": "step-recorded.v1.schema.json"
       },
       {
-        "$ref": "step-recorded.v2.schema.json"
+        "$ref": "step-recorded.v2.schema.json",
+        "deprecated": true,
+        "description": "Deprecated: producers emit v3, which carries the stored step event unchanged. Accepted until the queue holds no v2 messages."
+      },
+      {
+        "$ref": "step-recorded.v3.schema.json"
       }
     ]
   },
@@ -558,6 +605,145 @@ export const schemas = {
           "output_tokens": 310
         },
         "recorded_at": "2026-10-14T12:00:52Z"
+      }
+    ]
+  },
+  "step-recorded.v3": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepRecordedV3",
+    "description": "Agent to gateway: one step of the investigation loop, sent after its checkpoint. The payload is the agent's stored StepRecorded v2 event, field for field and with the same nullability and limits (StepRecordedV2 in services/agent/src/agent/steps.py), plus the investigation, seq and time. Producers emit this version.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "investigation_id",
+      "seq",
+      "kind",
+      "summary",
+      "tool_name",
+      "tool_call_id",
+      "result",
+      "latency_ms",
+      "tokens",
+      "recorded_at"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": 3
+      },
+      "investigation_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "seq": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Position of the step in its investigation, starting at 1."
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "tool_call",
+          "hypothesis",
+          "action",
+          "report"
+        ]
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": "1 to 2,000 characters, counted as Unicode code points."
+      },
+      "tool_name": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Set on tool_call steps only."
+      },
+      "tool_call_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Id of the tool result; evidence cites it. Set on tool_call steps only."
+      },
+      "result": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "What the tool returned; null when the call failed or the step called no tool. Called observation in stored v1 events."
+      },
+      "latency_ms": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 0,
+        "description": "How long the tool call took; null when unknown, as for steps first stored as v1."
+      },
+      "tokens": {
+        "description": "Model tokens the step used; null when unknown, as for steps first stored as v1.",
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "input",
+              "output"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "recorded_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "examples": [
+      {
+        "schema_version": 3,
+        "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "seq": 4,
+        "kind": "tool_call",
+        "summary": "Log search timed out; deploy history is the only evidence for the v1.8.0 hypothesis so far.",
+        "tool_name": "search_logs",
+        "tool_call_id": "tc_01J9ZK4B2X",
+        "result": null,
+        "latency_ms": 10000,
+        "tokens": {
+          "input": 5120,
+          "output": 310
+        },
+        "recorded_at": "2026-10-14T12:00:52Z"
+      },
+      {
+        "schema_version": 3,
+        "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "seq": 3,
+        "kind": "tool_call",
+        "summary": "query_metrics on checkout",
+        "tool_name": "query_metrics",
+        "tool_call_id": "tc_01J9ZK3Q7M",
+        "result": "Error rate rose from 0.2% to 14% at 11:52.",
+        "latency_ms": null,
+        "tokens": null,
+        "recorded_at": "2026-10-14T12:00:41Z"
       }
     ]
   }

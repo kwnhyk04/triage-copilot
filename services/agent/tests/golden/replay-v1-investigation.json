@@ -1,0 +1,56 @@
+[
+  {
+    "kind": "tool_call",
+    "summary": "query_metrics on checkout",
+    "tool_name": "query_metrics",
+    "tool_call_id": "tc_01J9ZK3Q7M",
+    "result": "Error rate rose from 0.2% to 14% at 11:52.",
+    "latency_ms": null,
+    "tokens": null
+  },
+  {
+    "kind": "tool_call",
+    "summary": "search_logs on checkout timed out",
+    "tool_name": "search_logs",
+    "tool_call_id": "tc_01J9ZK4B2X",
+    "result": null,
+    "latency_ms": null,
+    "tokens": null
+  },
+  {
+    "kind": "tool_call",
+    "summary": "get_deploys on checkout",
+    "tool_name": "get_deploys",
+    "tool_call_id": "tc_01J9ZK5C3Y",
+    "result": "v1.8.0 shipped at 11:50, two minutes before the errors.",
+    "latency_ms": null,
+    "tokens": null
+  },
+  {
+    "kind": "hypothesis",
+    "summary": "bad_deploy in checkout",
+    "tool_name": null,
+    "tool_call_id": null,
+    "result": null,
+    "latency_ms": null,
+    "tokens": null
+  },
+  {
+    "kind": "action",
+    "summary": "propose rollback_deploy to v1.7.3 for checkout",
+    "tool_name": null,
+    "tool_call_id": null,
+    "result": null,
+    "latency_ms": null,
+    "tokens": null
+  },
+  {
+    "kind": "report",
+    "summary": "Checkout errors follow the v1.8.0 deploy; roll back to v1.7.3.",
+    "tool_name": null,
+    "tool_call_id": null,
+    "result": null,
+    "latency_ms": null,
+    "tokens": null
+  }
+]

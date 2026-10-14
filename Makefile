@@ -90,8 +90,9 @@ migrate: infra-up
 	pnpm --filter @triage/gateway db:migrate
 	uv run alembic -c services/agent/alembic.ini upgrade head
 
+# Fake history for both schemas. SEED_ARGS=--reset replaces existing rows; --large adds 2M steps.
 seed:
-	@echo seed: nothing to seed until build step 3, data
+	uv run python scripts/seed.py $(SEED_ARGS)
 
 eval:
 	@echo eval: no harness until build step 6, AI pipeline

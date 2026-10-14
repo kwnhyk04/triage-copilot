@@ -19,6 +19,7 @@ dev = [
   # Lite stubs: no per-service boto3.client overloads, so clients are annotated explicitly.
   "types-boto3-lite[sqs]>=1.43.113",
   "watchfiles>=1.3.0",
+  "faker>=40.43.0",
 ]
 
 [tool.uv.sources]
