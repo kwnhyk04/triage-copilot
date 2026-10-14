@@ -1,0 +1,27 @@
+{
+  "name": "@triage/ts-clients",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./agent": "./src/agent.ts",
+    "./gateway": "./src/generated/gateway.ts",
+    "./graphql": "./src/generated/graphql.ts",
+    "./messages": "./src/generated/messages.ts",
+    "./schema": "./src/generated/schema.ts"
+  },
+  "scripts": {
+    "codegen": "node scripts/codegen.ts",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^7.4.6",
+    "@graphql-codegen/typescript": "^6.1.2",
+    "@graphql-codegen/typescript-resolvers": "^6.1.1",
+    "graphql": "^17.0.2",
+    "json-schema-to-typescript": "^16.0.0",
+    "openapi-typescript": "^7.13.0"
+  }
+}

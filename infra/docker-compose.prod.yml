@@ -1,0 +1,41 @@
+# Production override, applied on top of docker-compose.yml:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
+# Postgres and the queue publish no ports; only containers on the compose network reach them.
+services:
+  postgres:
+    ports: !reset []
+    restart: unless-stopped
+    mem_limit: 512m
+
+  elasticmq:
+    ports: !reset []
+    restart: unless-stopped
+    mem_limit: 256m
+    # Repeated from the base file so production keeps queued messages even if dev drops the volume.
+    volumes:
+      - elasticmq-data:/data
+
+  # Fault injection is for tests; in production it starts only with --profile chaos.
+  toxiproxy:
+    profiles: [chaos]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  otel-collector:
+    restart: unless-stopped
+    mem_limit: 256m
+
+  jaeger:
+    restart: unless-stopped
+    mem_limit: 512m
+
+  prometheus:
+    restart: unless-stopped
+    mem_limit: 256m
+
+  grafana:
+    restart: unless-stopped
+    mem_limit: 256m
+
+volumes:
+  elasticmq-data:

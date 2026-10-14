@@ -1,0 +1,29 @@
+"""
+Gateway GraphQL API, consumed by the web backend-for-frontend.
+"""
+type Query {
+  "Gateway liveness for clients that only speak GraphQL."
+  health: Health!
+}
+
+type Health {
+  status: String!
+}
+
+type Subscription {
+  "Status changes of one investigation, streamed over server-sent events."
+  investigationUpdated(id: ID!): InvestigationUpdate!
+}
+
+type InvestigationUpdate {
+  investigationId: ID!
+  status: InvestigationStatus!
+}
+
+enum InvestigationStatus {
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  RESOLVED
+  FAILED
+}

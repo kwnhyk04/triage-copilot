@@ -9,10 +9,10 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
 - [ ] (manual, before step 7) GitHub repo created; provider keys added as Actions secrets.
 - [ ] (manual, before step 10) Vercel and Tailscale accounts created.
-- [ ] 1. Scaffolding: monorepo layout, docker-compose infra healthy, every service answers /healthz
 - [ ] 2. Contracts: OpenAPI and GraphQL contracts, typed clients generated, contracts-check and breaking-change check pass
 - [ ] 3. Data: schema and migrations apply from empty, expand/contract series tested, seed scripts run
 - [ ] 4. Workers: queue job with retries and dead-letter handling, backpressure and crash-recovery tests pass
+  - [ ] Recovery sweeper: re-enqueues alert groups stuck in `queued` with no investigation progress for more than N minutes (N from env): a test that simulates queue loss (purge the queue after enqueueing) shows each stuck group re-enqueued exactly once, and a second sweep re-enqueues nothing
 - [ ] 5. Tests: unit and integration suites green three runs in a row
 - [ ] 6. AI: pipeline built, golden dataset v1 created, eval report lists every target with pass or fail
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
@@ -27,6 +27,7 @@ None.
 ## Completed
 
 - [x] Project created from template (2026-10-13).
+- [x] 1. Scaffolding: monorepo layout, docker-compose infra healthy, every service answers /healthz (2026-10-14).
 
 ## Blocked
 

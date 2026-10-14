@@ -1,0 +1,81 @@
+# Local infrastructure. Run through the Makefile so .env is loaded.
+name: triagecopilot
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_DB: triage
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD:?set GATEWAY_DB_PASSWORD in .env}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:?set AGENT_DB_PASSWORD in .env}
+    ports:
+      - 127.0.0.1:${POSTGRES_PORT:-5434}:5432
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # TCP check: the init-time server listens on a socket only, so this waits for init to finish.
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres, -d, triage]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1
+    ports:
+      - 127.0.0.1:${SQS_PORT:-4566}:9324
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+      - elasticmq-data:/data
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    ports:
+      - 127.0.0.1:${TOXIPROXY_PORT:-8476}:8474
+      - 127.0.0.1:${TOXIPROXY_PROXY_PORTS:-15500-15509}:15500-15509
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    profiles: [observability]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - 127.0.0.1:${OTEL_GRPC_PORT:-4337}:4317
+      - 127.0.0.1:${OTEL_HTTP_PORT:-4338}:4318
+    depends_on: [jaeger]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    profiles: [observability]
+    ports:
+      - 127.0.0.1:${JAEGER_UI_PORT:-16688}:16686
+
+  prometheus:
+    image: prom/prometheus:v3.15.0-busybox
+    profiles: [observability]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - 127.0.0.1:${PROMETHEUS_PORT:-9092}:9090
+    healthcheck:
+      test: [CMD, wget, -qO-, http://localhost:9090/-/healthy]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - 127.0.0.1:${GRAFANA_PORT:-3201}:3000
+    depends_on: [prometheus, jaeger]
+
+volumes:
+  pgdata:
+  elasticmq-data:

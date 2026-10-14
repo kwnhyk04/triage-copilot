@@ -1,0 +1,44 @@
+openapi: 3.1.0
+info:
+  title: Triage Copilot gateway
+  version: 0.1.0
+  description: REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql.
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness probe.
+      responses:
+        '200':
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness probe. Checks Postgres.
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: A dependency is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+components:
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]

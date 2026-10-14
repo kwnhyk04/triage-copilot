@@ -1,0 +1,26 @@
+{
+  "name": "@triage/gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --import ./src/telemetry.ts src/main.ts",
+    "start": "node --import ./src/telemetry.ts src/main.ts",
+    "test": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest",
+    "test:int": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config jest.int.config.js",
+    "typecheck": "tsc",
+    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts"
+  },
+  "dependencies": {
+    "@triage/ts-clients": "workspace:*",
+    "@triage/ts-config": "workspace:*",
+    "@triage/ts-telemetry": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.7",
+    "graphql": "^17.0.2",
+    "graphql-yoga": "^5.24.4",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11"
+  }
+}

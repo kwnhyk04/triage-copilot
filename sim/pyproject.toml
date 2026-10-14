@@ -1,0 +1,22 @@
+[project]
+name = "sim"
+version = "0.1.0"
+description = "Scenario engine: metrics, paginated logs and deploy history for scripted incidents."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.143.0",
+  "py-config",
+  "py-telemetry",
+  "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+sim = "sim.main:run"
+
+[tool.uv.sources]
+py-config = { workspace = true }
+py-telemetry = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12,<0.14"]
+build-backend = "uv_build"

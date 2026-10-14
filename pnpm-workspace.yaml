@@ -1,0 +1,20 @@
+packages:
+  - apps/*
+  - packages/ts-*
+
+# POSIX syntax in package scripts (VAR=x cmd, ${VAR:-default}) also works on Windows.
+shellEmulator: true
+
+allowBuilds:
+  '@parcel/watcher': false
+  '@swc/core': false
+  esbuild: false
+  protobufjs: false
+  unrs-resolver: false
+
+peerDependencyRules:
+  allowedVersions:
+    # openapi-typescript declares ^5 but runs on the TS 6 compiler API.
+    openapi-typescript>typescript: '6'
+    # eslint-config-next supports ESLint 10; some of its plugins have stale peer ranges.
+    eslint: '10'

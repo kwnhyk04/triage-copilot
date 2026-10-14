@@ -1,0 +1,15 @@
+{
+  "name": "@triage/ts-telemetry",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@opentelemetry/instrumentation-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0"
+  }
+}

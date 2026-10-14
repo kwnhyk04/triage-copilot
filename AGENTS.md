@@ -4,7 +4,7 @@ Instructions for any AI coding agent working in this project. Read this file fir
 
 ## Project-Specific Instructions
 
-- Polyglot: TypeScript gateway and web (pnpm + Turborepo, Fastify, GraphQL Yoga, Next.js, Jest), Python agent, executor and sim (uv, FastAPI, SQLAlchemy 2 + Alembic, pytest). SQS FIFO via LocalStack in dev.
+- Polyglot: TypeScript gateway and web (pnpm + Turborepo, Fastify, GraphQL Yoga, Next.js, Jest), Python agent, executor and sim (uv, FastAPI, SQLAlchemy 2 + Alembic, pytest). SQS FIFO via ElasticMQ in dev.
 - The gateway owns the `gateway` Postgres schema (Drizzle). The agent owns the `agent` schema (Alembic). No cross-schema writes; services talk through APIs and messages.
 - The agent may only read. Only `services/executor` may perform mutating actions, and only after a recorded human approval. Enforce this in code and tests, never only in prompts.
 - The agent's final report is structured output so evals stay deterministic.
