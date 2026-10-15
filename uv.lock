@@ -398,6 +398,8 @@ version = "0.1.0"
 source = { editable = "services/executor" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx2" },
+    { name = "py-clients" },
     { name = "py-config" },
     { name = "py-telemetry" },
     { name = "uvicorn" },
@@ -406,6 +408,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.143.0" },
+    { name = "httpx2", specifier = ">=2.13.1" },
+    { name = "py-clients", editable = "packages/py-clients" },
     { name = "py-config", editable = "packages/py-config" },
     { name = "py-telemetry", editable = "packages/py-telemetry" },
     { name = "uvicorn", specifier = ">=0.54.0" },

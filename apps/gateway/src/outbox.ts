@@ -8,7 +8,9 @@ import type { Sql } from 'postgres';
 export const MAX_ATTEMPTS = 10;
 const BATCH = 10;
 
+export type Queue = 'investigations' | 'actions';
 export interface OutboxMessage {
+  queue: Queue;
   groupId: string;
   deduplicationId: string;
   body: string;
@@ -20,7 +22,7 @@ export interface Relay {
   stop: () => Promise<void>;
 }
 
-/** Sends to the named FIFO queue, looking up its URL once. */
+/** Sends to the named FIFO queue, looking up its URL once; the message's own queue is ignored. */
 export function sqsSender(sqs: SQSClient, queueName: string): Send {
   let queueUrl: string | undefined;
   return async ({ groupId, deduplicationId, body }) => {
@@ -39,7 +41,7 @@ export function sqsSender(sqs: SQSClient, queueName: string): Send {
 /**
  * Sends the due messages, oldest first, deleting each once SQS has it; returns how many it sent.
  * A failed send is retried after 2^attempts seconds (at most 5 minutes) and parked after
- * MAX_ATTEMPTS. SKIP LOCKED keeps two relays from sending one row. A crash between the send and
+ * MAX_ATTEMPTS; until then, later messages of its FIFO group wait, so none overtakes it. SKIP LOCKED keeps two relays from sending one row. A crash between the send and
  * the delete sends it again, which SQS drops within its 5-minute deduplication window.
  */
 export async function relayOnce(sql: Sql, send: Send): Promise<number> {
@@ -47,18 +49,25 @@ export async function relayOnce(sql: Sql, send: Send): Promise<number> {
     const due = await tx<
       {
         id: string;
+        queue: Queue;
         message_group_id: string;
         deduplication_id: string;
         body: unknown;
         attempts: number;
       }[]
     >`
-      SELECT id, message_group_id, deduplication_id, body, attempts FROM gateway.outbox
+      SELECT id, queue, message_group_id, deduplication_id, body, attempts FROM gateway.outbox o
       WHERE failed_at IS NULL AND next_attempt_at <= now()
+        -- FIFO per group: a row waits while an earlier one of its group is still to be sent.
+        AND NOT EXISTS (
+          SELECT FROM gateway.outbox e
+          WHERE e.queue = o.queue AND e.message_group_id = o.message_group_id AND e.id < o.id
+            AND e.failed_at IS NULL)
       ORDER BY id LIMIT ${BATCH} FOR UPDATE SKIP LOCKED`;
     for (const row of due) {
       try {
         await send({
+          queue: row.queue,
           groupId: row.message_group_id,
           deduplicationId: row.deduplication_id,
           body: JSON.stringify(row.body),

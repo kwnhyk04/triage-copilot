@@ -15,6 +15,59 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-15: Step 5 tests
+
+- Changes:
+  - Test harness (user decisions: scratch databases, not Testcontainers):
+    - Scratch databases are named `triage_test_<unix seconds>_<run>_<id>` and dropped after each test.
+    - A stale cleanup drops only names in that exact format, over an hour old.
+    - Both harnesses repoint the database URL variables at a database that does not exist, and refuse a dev database name with the prefix.
+    - `db.int.test.ts` and `test_infra_int.py` moved off the dev database.
+  - Gateway fingerprints: `fingerprint()` ports Prometheus's `LabelSet.Fingerprint`, and the webhook deduplicates on it and logs mismatches. The contract example's made-up fingerprint was fixed, and a real Alertmanager 0.28.1 payload was captured as a fixture.
+  - Gateway decisions: the real decision store (`decisions.ts`), with ActionApproved through the outbox (new `queue` column, `ACTIONS_QUEUE`, `actions.fifo` in ElasticMQ). The relay keeps each FIFO group in order after a failed send. A store failure answers 503.
+  - Gateway API: X-API-Key (`GATEWAY_API_KEY`) on every route except the probes, the webhook and approve or reject. `GET /v1/investigations` with keyset pagination (limit 25 by default, 1 to 100). The web helper sends the key.
+  - Executor (user decisions): `executions` table (Drizzle 0003), with a foreign key to approved decisions only.
+    - Claim and result routes sit on a separate listener (`GATEWAY_INTERNAL_PORT` 4201, 127.0.0.1) behind `EXECUTOR_SERVICE_TOKEN`; the sweeper logs stuck claims.
+    - `executor.run.run_action` checks the allowlist, claims (idempotent, fail closed) and refuses when the approved action differs from the message. A dry run records a plan.
+    - `py_clients.ExecutionsClient`.
+  - The gateway refuses to start when two of its four credentials are equal.
+  - Agent: an investigation stops at 15 tool calls or 150,000 tokens with a partial report (`Report.partial`).
+  - Migrations: agent 0001 sets `lock_timeout`; docs/migrations.md marks 0005's downgrade as a maintenance-window step. Gateway API 0.3.0; clients regenerated.
+  - `.env.example` gains `ACTIONS_QUEUE`, `GATEWAY_API_KEY`, `GATEWAY_INTERNAL_HOST`, `GATEWAY_INTERNAL_PORT` and `EXECUTOR_SERVICE_TOKEN`. Random values for the two secrets were appended to `.env` without being shown.
+  - New dev dependency: fast-check 4.10.2 (gateway). The executor now depends on the workspace `py-clients` and on httpx2, which was already locked.
+- Files:
+  - apps/gateway:
+    - src: app.ts, config.ts, decisions.ts (new), executions.ts (new), intake.ts, internal.ts (new), investigations.ts (new), main.ts, outbox.ts, schema.ts, sweeper.ts, testing.ts.
+    - Tests: app.test.ts, intake.test.ts, internal.test.ts and investigations.test.ts (new), db.int.test.ts, decisions.int.test.ts, executions.int.test.ts and investigations.int.test.ts (new), intake.int.test.ts, sweeper.int.test.ts.
+    - src/testdata/alertmanager-0.28.1-webhook.json (new); drizzle/0003_decisions.sql and meta/; package.json.
+  - apps/web: src/lib (config.ts, gateway.ts, gateway.test.ts), src/app (page.tsx, readyz/route.ts).
+  - Contracts and clients: contracts/openapi (gateway.yaml, examples/alertmanager-webhook.json), packages/ts-clients (src/gateway.ts, generated), packages/py-clients (clients.py, generated, tests).
+  - services/agent: src/agent (job.py, model.py), migrations/versions/0001_baseline.py, tests (conftest.py, test_infra_int.py, test_parking_int.py, test_workers_int.py, test_executor_int.py (new)).
+  - services/executor: src/executor/run.py (new), tests/test_executor_run.py (new), pyproject.toml.
+  - Infra, config and docs: infra/elasticmq.conf, .env.example, uv.lock, pnpm-lock.yaml, README.md, docs/.
+- Validation:
+  - `make lint`, `typecheck`, `contracts-check` and `contracts-breaking` pass; oasdiff reports no breaking change.
+  - Unit, forced past Turbo's cache (`pnpm turbo run test --force`, 0 cached): Jest 72 tests (ts-config 2, ts-clients 29, web 3, gateway 38) in 4.1 s. `uv run pytest -m "not integration"`: 80 passed in 7.2 s (8.2 s wall).
+  - `make test-int`, three runs in a row, all green. pnpm runs `test:int` directly, never through Turbo, so nothing was replayed.
+    - Run 1: Jest 23/23 in 5.9 s, pytest 30 in 102.6 s, 1 m 51 s, storm p99 79.7 ms.
+    - Run 2: Jest 23/23 in 5.6 s, pytest 30 in 101.1 s, 1 m 49 s, storm p99 78.8 ms.
+    - Run 3: Jest 23/23 in 5.7 s, pytest 30 in 101.3 s, 1 m 49 s, storm p99 80.1 ms.
+    - The partition-swap tests (`test_partitioning_int.py`, 3) and the upcaster and migration tests (`test_migrations_int.py`, 3) are among the 30.
+  - Mutation check: the old `::timestamptz` cursor cast failed 2 of 3 keyset tests. That bug was real: postgres.js turns the parameter into a JS Date and drops the microseconds, so a page skipped the rest of a millisecond tie group.
+  - A first full run failed the parking storm test: its 40 alerts had identical labels, which now correctly dedupe into one. They got distinct labels.
+- Review fixes (independent review: 0 high, 1 medium, 5 low):
+  - Fixed, low:
+    - The executor runs nothing that differs from the approved message.
+    - A cursor naming an impossible instant gets 400, not 500.
+    - The four credentials must differ.
+    - The relay keeps FIFO-group order after a failed send (new test).
+    - The stale cleanup ignores names it did not make.
+  - Not changed, medium: key guessing is not throttled, because each invented credential gets its own rate-limit count. This predates the step and is now part of the Funnel item in docs/todo.md.
+- Outstanding:
+  - The executor's queue consumer and effectors, and the gateway's ActionProposed consumer.
+  - Keeping the internal listener off Funnel (step 10); alerts on stuck executions (step 8).
+  - Degraded-tool and `query_logs` tests (step 6). All are in docs/todo.md.
+
 ### 2026-10-15: Step 4 follow-up, parking and recovery sweeper
 
 - Changes:

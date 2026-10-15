@@ -15,6 +15,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("""
+        SET LOCAL lock_timeout = '3s';
         CREATE TYPE agent.investigation_status AS ENUM
             ('queued', 'running', 'awaiting_approval', 'resolved', 'failed', 'cancelled');
         CREATE TYPE agent.action_kind AS ENUM
@@ -79,6 +80,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("""
+        SET LOCAL lock_timeout = '3s';
         DROP TABLE agent.proposed_actions, agent.runbook_chunks, agent.tool_calls,
             agent.investigation_steps, agent.investigations;
         DROP TYPE agent.action_status, agent.action_kind, agent.investigation_status;

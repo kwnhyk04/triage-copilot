@@ -116,6 +116,62 @@ class ActionStatus(StrEnum):
     rejected = "rejected"
 
 
+class ExecutionClaim(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    dry_run: Annotated[
+        bool,
+        Field(
+            description="True when the executor only plans the action. The claim is used up either way, so an old approval never runs later."
+        ),
+    ]
+
+
+class ExecutionOutcome(StrEnum):
+    succeeded = "succeeded"
+    failed = "failed"
+
+
+class ExecutionResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    state: ExecutionOutcome
+    detail: Annotated[
+        str | None,
+        Field(description="A dry run's plan, or why the action failed.", max_length=2000),
+    ] = None
+
+
+class ExecutionState(StrEnum):
+    """
+    claimed: the executor took the action and has not reported how it ended. succeeded and failed are final. No execution is retried automatically.
+    """
+
+    claimed = "claimed"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
+class Execution(BaseModel):
+    """
+    The executor's claim on an approved action, with the action as approved.
+    """
+
+    action_id: Annotated[UUID, Field(description="The approved action; also the idempotency key.")]
+    kind: ActionKind
+    target: str
+    parameters: dict[str, str | int | float | bool]
+    approved_by: str
+    approved_at: AwareDatetime
+    state: ExecutionState
+    dry_run: bool
+    detail: str | None
+    claimed_at: AwareDatetime
+    finished_at: AwareDatetime | None
+
+
 class Decision(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -157,7 +213,10 @@ class Alert(BaseModel):
     generatorURL: Annotated[str, Field(description="Link to the rule that fired.")]
     fingerprint: Annotated[
         str,
-        Field(description="Identifies the alert; the gateway deduplicates on it.", min_length=1),
+        Field(
+            description="Alertmanager's fingerprint of the labels. The gateway computes its own with the same algorithm (Prometheus's LabelSet fingerprint) and deduplicates on that; a payload whose value differs is accepted, and the mismatch is logged.",
+            min_length=1,
+        ),
     ]
 
 

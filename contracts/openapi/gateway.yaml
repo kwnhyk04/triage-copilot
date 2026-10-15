@@ -1,13 +1,15 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.2.0
+  version: 0.3.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
     Alertmanager webhook takes the tenant's bearer token, approve and reject take X-Approver-Key,
     every other route the X-API-Key header. /graphql takes the same X-API-Key. Requests are rate
-    limited per credential, or per client address without one.
+    limited per credential, or per client address without one. The /internal routes are served
+    only on a separate listener bound to 127.0.0.1 (the internal Docker network in production),
+    which the public listener does not expose; only the executor calls them, with its own token.
 security:
   - apiKey: []
 paths:
@@ -90,12 +92,12 @@ paths:
       parameters:
         - name: limit
           in: query
-          description: Page size.
+          description: Page size; outside 1 to 100 gets 400.
           schema:
             type: integer
             minimum: 1
             maximum: 100
-            default: 20
+            default: 25
         - name: cursor
           in: query
           description: The next_cursor of the previous page; omit for the first page.
@@ -199,6 +201,93 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /internal/actions/{id}/execution:
+    servers:
+      - url: http://127.0.0.1:4201
+        description: >-
+          The internal listener (GATEWAY_INTERNAL_HOST and GATEWAY_INTERNAL_PORT). The public
+          listener answers 404 here.
+    parameters:
+      - $ref: '#/components/parameters/ActionId'
+    post:
+      operationId: claimExecution
+      summary: Claims an approved action for the executor, once.
+      description: >-
+        Inserts the execution in one transaction. Only an action whose decision is approved can be
+        claimed: the database refuses any other. The action id is the idempotency key, so a second
+        claim returns the first one with 200, and the executor must not run the action again. An
+        execution left in claimed is never retried; it waits for a human.
+      security:
+        - executorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionClaim'
+      responses:
+        '201':
+          description: Claimed now. The executor runs the action, or in a dry run only plans it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '200':
+          description: Claimed before. The executor must not run the action again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/ExecutorUnauthorized'
+        '404':
+          description: No approved action has this id; it is unknown, pending or rejected.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /internal/actions/{id}/execution/result:
+    servers:
+      - url: http://127.0.0.1:4201
+        description: The internal listener; the public listener answers 404 here.
+    parameters:
+      - $ref: '#/components/parameters/ActionId'
+    post:
+      operationId: reportExecutionResult
+      summary: Records how a claimed execution ended. Each execution takes one result.
+      security:
+        - executorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionResult'
+      responses:
+        '200':
+          description: The result was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/ExecutorUnauthorized'
+        '404':
+          description: No execution has this id.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: The execution already has its result.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     apiKey:
@@ -223,6 +312,12 @@ components:
         A tenant's own secret, set as the bearer credentials in its Alertmanager webhook
         http_config. It identifies the tenant; the gateway stores only its SHA-256. Valid on POST
         /v1/alerts only.
+    executorToken:
+      type: http
+      scheme: bearer
+      description: >-
+        EXECUTOR_SERVICE_TOKEN, held only by the gateway and the executor and distinct from the
+        agent's service token. Valid on the internal listener's /internal routes only.
   parameters:
     InvestigationId:
       name: id
@@ -289,6 +384,18 @@ components:
       headers:
         WWW-Authenticate:
           $ref: '#/components/headers/WWW-Authenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ExecutorUnauthorized:
+      description: The executor service token is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          description: The Bearer challenge.
+          required: true
+          schema:
+            type: string
       content:
         application/problem+json:
           schema:
@@ -451,7 +558,10 @@ components:
         fingerprint:
           type: string
           minLength: 1
-          description: Identifies the alert; the gateway deduplicates on it.
+          description: >-
+            Alertmanager's fingerprint of the labels. The gateway computes its own with the same
+            algorithm (Prometheus's LabelSet fingerprint) and deduplicates on that; a payload whose
+            value differs is accepted, and the mismatch is logged.
     AlertStatus:
       type: string
       enum: [firing, resolved]
@@ -635,6 +745,81 @@ components:
     ActionStatus:
       type: string
       enum: [pending, approved, rejected]
+    ExecutionClaim:
+      type: object
+      additionalProperties: false
+      required: [dry_run]
+      properties:
+        dry_run:
+          type: boolean
+          description: >-
+            True when the executor only plans the action. The claim is used up either way, so an
+            old approval never runs later.
+    ExecutionOutcome:
+      type: string
+      enum: [succeeded, failed]
+    ExecutionResult:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          $ref: '#/components/schemas/ExecutionOutcome'
+        detail:
+          type: string
+          maxLength: 2000
+          description: A dry run's plan, or why the action failed.
+    ExecutionState:
+      type: string
+      description: >-
+        claimed: the executor took the action and has not reported how it ended. succeeded and
+        failed are final. No execution is retried automatically.
+      enum: [claimed, succeeded, failed]
+    Execution:
+      type: object
+      description: The executor's claim on an approved action, with the action as approved.
+      required:
+        - action_id
+        - kind
+        - target
+        - parameters
+        - approved_by
+        - approved_at
+        - state
+        - dry_run
+        - detail
+        - claimed_at
+        - finished_at
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The approved action; also the idempotency key.
+        kind:
+          $ref: '#/components/schemas/ActionKind'
+        target:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: [string, integer, number, boolean]
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+        state:
+          $ref: '#/components/schemas/ExecutionState'
+        dry_run:
+          type: boolean
+        detail:
+          type: [string, 'null']
+        claimed_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
     Decision:
       type: object
       additionalProperties: false

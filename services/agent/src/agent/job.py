@@ -9,6 +9,9 @@ row. As StepRecorded v3 defines them, `result` and `latency_ms` belong to tool r
 An investigation that must wait for a slot under its tenant's cap or for model budget parks: it is
 marked waiting and its message is deleted, so it holds no worker slot and uses up no receives. The
 gateway's recovery sweeper re-queues it once `Job.resumable` says its slot or budget is free.
+
+At MAX_TOOL_CALLS tool calls or MAX_TOKENS model tokens an investigation ends with a partial report
+(`Report.partial`) instead of another model turn; that is a finished investigation, not an error.
 """
 
 import asyncio
@@ -16,7 +19,7 @@ import logging
 import random
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal
 from uuid import UUID
 
@@ -24,7 +27,7 @@ from sqlalchemy import Connection, Date, Engine, cast, func, insert, select, tex
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from agent.db import AiUsage, DeadLetter, Investigation, ToolCall
-from agent.model import Model, ModelError, ModelTurn, ToolRequest, is_model_turn
+from agent.model import Model, ModelError, ModelTurn, Report, ToolRequest, is_model_turn
 from agent.steps import StepRecordedV2, record_step, replay
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
@@ -43,6 +46,9 @@ MODEL_TIMEOUT = 60.0
 MODEL_RETRIES = 3
 TOOL_TIMEOUT = 10.0
 TOOL_RETRIES = 3
+# Hard caps per investigation: a model turn starts only while both are under them.
+MAX_TOOL_CALLS = 15
+MAX_TOKENS = 150_000
 # Not "failed": a failed investigation resumes when its message is replayed from the DLQ.
 FINISHED = ("awaiting_approval", "resolved", "cancelled")
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -137,6 +143,14 @@ class Job:
                 if last is not None and last.kind == "tool_call" and is_model_turn(last):
                     steps.append(await self._call_tool(conn, inv, last, stopping))
                     continue
+                # ponytail: checked before each turn, so the last turn can pass MAX_TOKENS by its
+                # own tokens; step 6 can cap a turn's output at the tokens left.
+                calls, tokens = usage(steps)
+                if calls >= MAX_TOOL_CALLS or tokens >= MAX_TOKENS:
+                    await asyncio.to_thread(
+                        _record_partial_report, conn, inv, calls, tokens, self.dual_write
+                    )
+                    return "done"
                 # With AI_ENABLED=false even a resumed investigation parks at its next model turn.
                 if not await asyncio.to_thread(self._model_available, conn, not steps):
                     return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
@@ -254,6 +268,44 @@ class Job:
 
 def _elapsed_ms(started: float) -> int:
     return round((time.monotonic() - started) * 1000)
+
+
+def usage(steps: Sequence[StepRecordedV2]) -> tuple[int, int]:
+    """Tool calls the model asked for and the tokens it spent, from the recorded steps."""
+    calls = sum(step.kind == "tool_call" and is_model_turn(step) for step in steps)
+    tokens = sum(s.tokens.input + s.tokens.output for s in steps if s.tokens is not None)
+    return calls, tokens
+
+
+def _record_partial_report(
+    conn: Connection, inv: UUID, calls: int, tokens: int, dual_write: bool
+) -> None:
+    """Ends an investigation at its budget with a partial report instead of an error."""
+    summary = (
+        f"Stopped at the investigation budget after {calls} tool calls and {tokens} model tokens "
+        f"(caps: {MAX_TOOL_CALLS} tool calls, {MAX_TOKENS} tokens). The findings are incomplete."
+    )
+    report = Report(summary=summary, hypotheses=[], partial=True)
+    event = StepRecordedV2(
+        kind="report",
+        summary=summary,
+        tool_name=None,
+        tool_call_id=None,
+        result=None,
+        latency_ms=None,
+        tokens=None,
+    )
+    with conn.begin():
+        record_step(conn, inv, event, dual_write=dual_write)
+        conn.execute(
+            update(Investigation)
+            .where(Investigation.id == inv)
+            .values(final_report=report.model_dump(mode="json"), status="resolved")
+        )
+    log.info(
+        "investigation stopped at its budget",
+        extra={"investigation_id": str(inv), "tool_calls": calls, "tokens": tokens},
+    )
 
 
 def _tool_call_id() -> str:

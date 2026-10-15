@@ -6,7 +6,7 @@ import { gatewayStatus } from '../lib/gateway.ts';
 export default async function Home() {
   // Render per request: gateway status is live data and GATEWAY_URL exists only at runtime.
   await connection();
-  const status = await gatewayStatus(loadWebConfig().GATEWAY_URL);
+  const status = await gatewayStatus(loadWebConfig());
   return (
     <main>
       <h1>Triage Copilot</h1>

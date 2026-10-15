@@ -23,7 +23,7 @@ from agent.api import add_internal_api
 from agent.consumer import Consumer
 from agent.db import AiUsage, DeadLetter, Investigation, ToolCall
 from agent.dlq import replay_dead_letters, replay_dlq
-from agent.job import UTC_TODAY, Job, Outcome, Request, Tool
+from agent.job import MAX_TOOL_CALLS, UTC_TODAY, Job, Outcome, Request, Tool
 from agent.model import Model, ModelTurn, Report, ScriptedModel, ToolRequest
 from agent.steps import StepRecordedV2, TokenUsage, record_step, replay
 from py_clients.generated.gateway import Hypothesis, RootCauseClass
@@ -465,6 +465,43 @@ def test_resumed_investigations_pass_the_budget_but_not_ai_off(engine: Engine) -
 
     assert model.calls == 1
     assert [step.kind for _, step in recorded(engine, inv)] == ["tool_call"] * 2 + ["report"]
+
+
+@pytest.mark.parametrize(
+    ("per_turn", "calls", "tokens"),
+    [
+        pytest.param(TokenUsage(input=1_000, output=100), MAX_TOOL_CALLS, 16_500, id="tool-calls"),
+        # 40,000 tokens a turn: under 150,000 after three turns, so a fourth starts.
+        pytest.param(TokenUsage(input=39_000, output=1_000), 4, 160_000, id="tokens"),
+    ],
+)
+def test_the_budget_ends_the_loop_with_a_partial_report(
+    engine: Engine, per_turn: TokenUsage, calls: int, tokens: int
+) -> None:
+    # A model that never reports: without the caps it would run off the end of its script.
+    script: list[ToolRequest | Report] = [
+        ToolRequest(tool=TOOLS[n % 3], args={"service": "checkout"}, reason=f"Look again ({n}).")
+        for n in range(MAX_TOOL_CALLS + 5)
+    ]
+    model = Counting(ScriptedModel(script, per_turn))
+    tools = Tools()
+    request = new_request()
+
+    assert asyncio.run(make_job(engine, tools.all(), model).run(request, asyncio.Event())) == "done"
+
+    assert model.calls == len(tools.calls) == calls
+    query = select(
+        Investigation.status, Investigation.final_report, Investigation.budget_tokens_used
+    )
+    with engine.connect() as conn:
+        found, final, used = conn.execute(
+            query.where(Investigation.id == request.investigation_id)
+        ).one()
+    report = Report.model_validate(final)
+    assert (found, used, report.partial, report.hypotheses) == ("resolved", tokens, True, [])
+    assert f"after {calls} tool calls and {tokens} model tokens" in report.summary
+    steps = [step.kind for _, step in recorded(engine, request.investigation_id)]
+    assert steps == ["tool_call"] * (2 * calls) + ["report"]
 
 
 def test_tenant_cap_parks_investigations_over_it(engine: Engine) -> None:

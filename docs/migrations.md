@@ -2,6 +2,19 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-15: Decisions, executions and the API key (gateway 0003, gateway API 0.3.0, agent 0001 lock_timeout)
+
+Expand only: nothing is dropped or rewritten.
+
+- Gateway `0003_decisions.sql` (drizzle-kit, from `apps/gateway/src/schema.ts`):
+  - `outbox.queue` (`gateway.outbox_queue`: `investigations` or `actions`, `NOT NULL DEFAULT 'investigations'`; a constant default rewrites no rows). The relay sends each row to its queue; the sweeper reads only `investigations` rows.
+  - `approvals_action_id_decision_key`, unique `(action_id, decision)`, the target of the next foreign key. Building it scans `approvals` under `lock_timeout` 3 s.
+  - `executions`, the executor's claims: `action_id` primary key (the idempotency key), `state` (`gateway.execution_state`: claimed, succeeded, failed), `dry_run`, `detail`, `claimed_at`, `finished_at`. A foreign key on `(action_id, decision)` to `approvals` and a check that `decision` is `approved` let no row exist without an approved decision; a second check ties `finished_at` to a final state.
+  - drizzle-kit wrote the unique constraint after the foreign key that needs it; it was moved up by hand. `SET LOCAL lock_timeout = '3s'` was added by hand.
+- Agent 0001 sets `lock_timeout` 3 s in both directions. Nothing changes for a database already past 0001.
+- Gateway API 0.3.0: `POST /internal/actions/{id}/execution` and `.../execution/result` (internal listener only, `executorToken`), the list's `limit` default 20 to 25, and the `fingerprint` description. oasdiff: no breaking change. Clients regenerated.
+- Tests: every gateway integration suite applies 0000 to 0003 to its scratch database; `test_migrations_int.py` applies both chains from empty and downgrades the agent chain to base and back.
+
 ## 2026-10-15: Parking and recovery sweeper (agent 0006, gateway 0002, agent API 0.3.0)
 
 Expand only: nothing is dropped or rewritten.
@@ -23,7 +36,7 @@ Expand only: nothing is dropped or rewritten.
   - `tenants.webhook_token_sha256`: nullable and unique. A tenant without one cannot post alerts; `pnpm --filter @triage/gateway tenant:token <name>` sets it.
   - `outbox`: InvestigationRequested messages, committed with the alert group that caused them. The relay deletes each row once SQS has the message. A row whose send fails 10 times gets `failed_at` (the gateway's failure store) until `outbox:replay` clears it. The partial index `outbox_due_idx` covers `next_attempt_at` where `failed_at` is null.
 - Agent 0005:
-  - `investigation_status` gains `queued_budget` (`ADD VALUE ... AFTER 'queued'`, which Postgres 12+ allows in a transaction; nothing uses the value before the commit). The downgrade maps it back to `queued` and rebuilds the type, which rewrites `investigations` under an ACCESS EXCLUSIVE lock.
+  - `investigation_status` gains `queued_budget` (`ADD VALUE ... AFTER 'queued'`, which Postgres 12+ allows in a transaction; nothing uses the value before the commit). The downgrade maps it back to `queued` and rebuilds the type, which rewrites `investigations` under an ACCESS EXCLUSIVE lock. Maintenance-window step: run that downgrade only with every agent stopped, since all step writes wait on the lock.
   - `dead_letters`: messages that failed schema validation (body, MessageGroupId, the validation errors). `uv run python -m agent.dlq replay` re-sends them and sets `replayed_at`.
   - `ai_usage`: model tokens per UTC day, which the budget guard reads.
   - `tool_calls.latency_ms` drops NOT NULL: the row is written when the model asks for the call, with its arguments, and completed with the result. The downgrade deletes calls that never returned, then restores NOT NULL.

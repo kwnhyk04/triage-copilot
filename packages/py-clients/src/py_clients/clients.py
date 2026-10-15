@@ -51,6 +51,21 @@ class _Client:
     def close(self) -> None:
         self._http.close()
 
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: BaseModel | None = None,
+        params: dict[str, str | int] | None = None,
+    ) -> httpx2.Response:
+        # Unset optional fields are left out: the request schemas allow no nulls.
+        json = body.model_dump(mode="json", exclude_none=True) if body else None
+        response = self._http.request(method, url, json=json, params=params)
+        if not response.is_success:
+            raise ApiError(response)
+        return response
+
     def _send(
         self,
         method: str,
@@ -59,12 +74,7 @@ class _Client:
         body: BaseModel | None = None,
         params: dict[str, str | int] | None = None,
     ) -> bytes:
-        # Unset optional fields are left out: the request schemas allow no nulls.
-        json = body.model_dump(mode="json", exclude_none=True) if body else None
-        response = self._http.request(method, url, json=json, params=params)
-        if not response.is_success:
-            raise ApiError(response)
-        return response.content
+        return self._request(method, url, body=body, params=params).content
 
 
 class AlertsClient(_Client):
@@ -135,3 +145,27 @@ class AgentClient(_Client):
     def get_investigation_state(self, investigation_id: UUID) -> agent.InvestigationState:
         content = self._send("GET", f"/internal/investigations/{investigation_id}/state")
         return agent.InvestigationState.model_validate_json(content)
+
+
+class ExecutionsClient(_Client):
+    """The gateway's internal listener, authenticated with the executor's own service token."""
+
+    def __init__(
+        self,
+        base_url: str,
+        service_token: str,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        transport: httpx2.BaseTransport | None = None,
+    ) -> None:
+        super().__init__(base_url, {"Authorization": f"Bearer {service_token}"}, timeout, transport)
+
+    def claim(self, action_id: UUID, *, dry_run: bool) -> tuple[bool, gateway.Execution]:
+        """Claims an approved action: True when claimed now, False when claimed before."""
+        claim = gateway.ExecutionClaim(dry_run=dry_run)
+        response = self._request("POST", f"/internal/actions/{action_id}/execution", body=claim)
+        return response.status_code == 201, gateway.Execution.model_validate_json(response.content)
+
+    def report(self, action_id: UUID, result: gateway.ExecutionResult) -> gateway.Execution:
+        url = f"/internal/actions/{action_id}/execution/result"
+        return gateway.Execution.model_validate_json(self._send("POST", url, body=result))

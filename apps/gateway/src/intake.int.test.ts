@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -11,10 +11,11 @@ import {
   SQSClient,
 } from '@aws-sdk/client-sqs';
 import { parseMessage } from '@triage/ts-clients/messages';
+import fc from 'fast-check';
 
 import { buildApp, createUpdates } from './app.ts';
 import { connectDb } from './db.ts';
-import { createFindTenant, createIntake, sha256 } from './intake.ts';
+import { createFindTenant, createIntake, fingerprint, sha256 } from './intake.ts';
 import {
   MAX_ATTEMPTS,
   type OutboxMessage,
@@ -23,7 +24,7 @@ import {
   sqsSender,
   startRelay,
 } from './outbox.ts';
-import { env, eventually, scratchDb, webhook } from './testing.ts';
+import { APP_CONFIG, env, eventually, newTenant, scratchDb, webhook } from './testing.ts';
 
 const GATEWAY_DIR = fileURLToPath(new URL('..', import.meta.url));
 
@@ -45,18 +46,10 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     await scratch.drop();
   });
   beforeEach(() => db.sql`DELETE FROM gateway.outbox`);
-
-  const newTenant = async () => {
-    const token = randomBytes(32).toString('base64url');
-    const [tenant] = await db.sql<{ id: string }[]>`
-      INSERT INTO gateway.tenants (name, webhook_token_sha256)
-      VALUES (${randomUUID()}, ${sha256(token)}) RETURNING id`;
-    if (tenant === undefined) throw new Error('no tenant');
-    return { tenantId: tenant.id, token };
-  };
+  const unused = () => Promise.reject(new Error('unused by this test'));
 
   it('dedupes by fingerprint and opens one group and investigation per 5-minute window', async () => {
-    const { tenantId } = await newTenant();
+    const { tenantId } = await newTenant(db.sql);
     let queued = 0;
     const intake = createIntake(
       db.sql,
@@ -66,21 +59,21 @@ describe('alert intake against Postgres and ElasticMQ', () => {
       5,
     );
     const key = '{}:{alertname="DiskFull", service="checkout"}';
-    const store = (alerts: { fingerprint: string; status?: string }[]) =>
+    const store = (alerts: { alert: string; status?: string }[]) =>
       intake(tenantId, webhook(key, alerts));
 
-    const first = await store([{ fingerprint: 'a' }]);
+    const first = await store([{ alert: 'a' }]);
     expect(first.deduped).toBe(false);
-    expect(await store([{ fingerprint: 'a' }])).toEqual({ ...first, deduped: true });
-    expect(await store([{ fingerprint: 'a', status: 'resolved' }])).toEqual(first);
-    expect(await store([{ fingerprint: 'b' }, { fingerprint: 'b' }])).toEqual(first);
+    expect(await store([{ alert: 'a' }])).toEqual({ ...first, deduped: true });
+    expect(await store([{ alert: 'a', status: 'resolved' }])).toEqual(first);
+    expect(await store([{ alert: 'b' }, { alert: 'b' }])).toEqual(first);
     expect(queued).toBe(1);
 
     // Once the window is 5 minutes old, new alerts open the next group and investigation.
     await db.sql`
       UPDATE gateway.alert_groups SET window_start = window_start - interval '5 minutes'
       WHERE id = ${first.group_id}`;
-    const next = await store([{ fingerprint: 'c' }]);
+    const next = await store([{ alert: 'c' }]);
     expect(next.group_id).not.toBe(first.group_id);
     expect(queued).toBe(2);
 
@@ -88,7 +81,7 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     await db.sql`
       UPDATE gateway.alert_groups SET window_start = window_start - interval '5 minutes'
       WHERE id = ${next.group_id}`;
-    const late = await store([{ fingerprint: 'd', status: 'resolved' }]);
+    const late = await store([{ alert: 'd', status: 'resolved' }]);
     expect(late.group_id).not.toBe(next.group_id);
     expect(queued).toBe(2);
 
@@ -113,10 +106,95 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     }
   });
 
+  it('puts the alerts of one window in one group per group key, whatever order their labels are in', async () => {
+    const app = await buildApp({
+      config: APP_CONFIG,
+      ping: db.ping,
+      updates: createUpdates(),
+      decide: unused,
+      findTenant: createFindTenant(db.sql),
+      intake: createIntake(db.sql, () => undefined, 5),
+      listInvestigations: unused,
+    });
+    // Up to 6 alerts over up to 4 group keys (each alert's key is one of its labels, as with
+    // Alertmanager's group_by). Each is sent once, then any of them again, labels in either order.
+    const name = fc.string({ unit: fc.constantFrom('a', 'b', 'c'), minLength: 1, maxLength: 2 });
+    const alert = fc.record({ key: fc.nat(3), labels: fc.dictionary(name, name, { maxKeys: 3 }) });
+    const labelsOf = ({ key, labels }: { key: number; labels: Record<string, string> }) => ({
+      ...labels,
+      alertname: 'Storm',
+      group: `k${String(key)}`,
+    });
+    const run = fc.record({
+      alerts: fc.uniqueArray(alert, {
+        minLength: 1,
+        maxLength: 6,
+        selector: (a) => fingerprint(labelsOf(a)),
+      }),
+      resends: fc.array(fc.tuple(fc.nat(), fc.boolean()), { maxLength: 10 }),
+    });
+    try {
+      await fc.assert(
+        fc.asyncProperty(run, async ({ alerts, resends }) => {
+          const { tenantId, token } = await newTenant(db.sql);
+          const sends = [
+            ...alerts.map((a) => [a, false] as const),
+            ...resends.map(([n, reversed]) => [alerts[n % alerts.length], reversed] as const),
+          ];
+          for (const [sent, reversed] of sends) {
+            if (sent === undefined) continue;
+            const entries = Object.entries(labelsOf(sent));
+            const labels = Object.fromEntries(reversed ? entries.reverse() : entries);
+            const payload = {
+              ...webhook(`{}:{group="k${String(sent.key)}"}`, [{ alert: 'unused' }]),
+              alerts: [
+                {
+                  status: 'firing',
+                  labels,
+                  annotations: {},
+                  startsAt: '2026-10-14T11:54:12.481Z',
+                  endsAt: '0001-01-01T00:00:00Z',
+                  generatorURL: 'http://prometheus.example:9090/graph',
+                  // Never trusted: deduplication uses the fingerprint the labels give.
+                  fingerprint: 'what-the-sender-claims',
+                },
+              ],
+            };
+            const response = await app.inject({
+              method: 'POST',
+              url: '/v1/alerts',
+              headers: { authorization: `Bearer ${token}` },
+              payload,
+            });
+            expect(response.statusCode).toBe(202);
+          }
+          const groups = await db.sql<{ group_key: string; alerts: number }[]>`
+            SELECT g.group_key, count(a.id)::int AS alerts
+            FROM gateway.alert_groups g LEFT JOIN gateway.alerts a ON a.group_id = g.id
+            WHERE g.tenant_id = ${tenantId} GROUP BY g.id, g.group_key`;
+          const expected = new Map<string, number>();
+          for (const { key } of alerts) {
+            const groupKey = `{}:{group="k${String(key)}"}`;
+            expected.set(groupKey, (expected.get(groupKey) ?? 0) + 1);
+          }
+          expect(new Map(groups.map((g) => [g.group_key, g.alerts]))).toEqual(expected);
+          const stored = await db.sql<{ fingerprint: string }[]>`
+            SELECT fingerprint FROM gateway.alerts WHERE tenant_id = ${tenantId}`;
+          expect(stored.map((row) => row.fingerprint).sort()).toEqual(
+            alerts.map((a) => fingerprint(labelsOf(a))).sort(),
+          );
+        }),
+        { numRuns: 25 },
+      );
+    } finally {
+      await app.close();
+    }
+  }, 60_000);
+
   it('retries a failed send, parks it after the last attempt and sends it after a replay', async () => {
-    const { tenantId } = await newTenant();
+    const { tenantId } = await newTenant(db.sql);
     const intake = createIntake(db.sql, () => undefined, 5);
-    await intake(tenantId, webhook('{}:{alertname="Relay"}', [{ fingerprint: 'r' }]));
+    await intake(tenantId, webhook('{}:{alertname="Relay"}', [{ alert: 'r' }]));
     const failing: Send = () => Promise.reject(new Error('SQS unreachable'));
     const state = async () => {
       const [row] = await db.sql<
@@ -152,6 +230,32 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     expect(await state()).toBeUndefined();
   });
 
+  it('keeps each FIFO group in order when a send fails', async () => {
+    for (const id of ['first', 'second']) {
+      await db.sql`
+        INSERT INTO gateway.outbox (queue, message_group_id, deduplication_id, body)
+        VALUES ('actions', 'one-target', ${id}, ${db.sql.json({ id })})`;
+    }
+    const sent: string[] = [];
+    const failFirst: Send = (message) => {
+      if (message.deduplicationId === 'first') return Promise.reject(new Error('SQS down'));
+      sent.push(message.deduplicationId);
+      return Promise.resolve();
+    };
+    expect(await relayOnce(db.sql, failFirst)).toBe(0);
+    // The first waits out its backoff, and the second may not overtake it meanwhile.
+    expect(await relayOnce(db.sql, failFirst)).toBe(0);
+    expect(sent).toEqual([]);
+    await db.sql`UPDATE gateway.outbox SET next_attempt_at = now()`;
+    const working: Send = (message) => {
+      sent.push(message.deduplicationId);
+      return Promise.resolve();
+    };
+    await relayOnce(db.sql, working);
+    await relayOnce(db.sql, working);
+    expect(sent).toEqual(['first', 'second']);
+  });
+
   it('issues a webhook token per tenant and replaces it when issued again', async () => {
     const findTenant = createFindTenant(db.sql);
     const first = (await cli('tenant-token', 'acme')).stdout.trim();
@@ -163,7 +267,7 @@ describe('alert intake against Postgres and ElasticMQ', () => {
   });
 
   it('acks a 500-alert storm with p99 under 200 ms and queues 5 or fewer investigations', async () => {
-    const { tenantId, token } = await newTenant();
+    const { tenantId, token } = await newTenant(db.sql);
     const sqs = new SQSClient({ region: env.AWS_REGION, endpoint: env.SQS_ENDPOINT_URL });
     const queueName = `storm-${randomUUID().slice(0, 8)}.fifo`;
     const { QueueUrl } = await sqs.send(
@@ -171,14 +275,11 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     );
     let nudge: () => void = () => undefined;
     const app = await buildApp({
-      config: {
-        LOG_LEVEL: 'error',
-        APPROVER_API_KEY: 'unused-by-this-test-0000000000000',
-        RATE_LIMIT_PER_MINUTE: 600,
-      },
+      config: APP_CONFIG,
       ping: db.ping,
       updates: createUpdates(),
-      decide: () => Promise.resolve('not_found'),
+      decide: unused,
+      listInvestigations: unused,
       findTenant: createFindTenant(db.sql),
       intake: createIntake(
         db.sql,
@@ -199,7 +300,7 @@ describe('alert intake against Postgres and ElasticMQ', () => {
       );
       const bodies = Array.from({ length: 500 }, (_, i) => {
         const n = i % 400;
-        return JSON.stringify(webhook(keys[n % 8] ?? '', [{ fingerprint: `storm-${String(n)}` }]));
+        return JSON.stringify(webhook(keys[n % 8] ?? '', [{ alert: `storm-${String(n)}` }]));
       });
       const latencies: number[] = [];
       const statuses = new Set<number>();

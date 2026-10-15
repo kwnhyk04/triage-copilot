@@ -1,0 +1,55 @@
+{
+  "receiver": "capture",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "CheckoutHighErrorRate",
+        "pod": "checkout-7d9f8b6c5-q8m2z",
+        "service": "checkout",
+        "severity": "critical"
+      },
+      "annotations": {
+        "summary": "Checkout error rate above 5% for 5 minutes"
+      },
+      "startsAt": "2026-10-15T04:36:11.481008213Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.example:9090/graph?g0.expr=checkout_error_ratio+%3E+0.05",
+      "fingerprint": "2f09d8d93d1d4d16"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "Zone": "eu-west-1",
+        "alertname": "CheckoutHighErrorRate",
+        "pod": "checkout-7d9f8b6c5-x2k4p",
+        "service": "checkout",
+        "severity": "critical",
+        "team": "über-ops"
+      },
+      "annotations": {
+        "summary": "Checkout error rate above 5% for 5 minutes"
+      },
+      "startsAt": "2026-10-15T04:36:11.466189144Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.example:9090/graph?g0.expr=checkout_error_ratio+%3E+0.05",
+      "fingerprint": "70fb7a16eb9a8e33"
+    }
+  ],
+  "groupLabels": {
+    "alertname": "CheckoutHighErrorRate"
+  },
+  "commonLabels": {
+    "alertname": "CheckoutHighErrorRate",
+    "service": "checkout",
+    "severity": "critical"
+  },
+  "commonAnnotations": {
+    "summary": "Checkout error rate above 5% for 5 minutes"
+  },
+  "externalURL": "http://alertmanager.example:9093",
+  "version": "4",
+  "groupKey": "{}:{alertname=\"CheckoutHighErrorRate\"}",
+  "truncatedAlerts": 0
+}

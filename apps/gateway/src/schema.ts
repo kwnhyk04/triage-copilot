@@ -1,7 +1,8 @@
-import type { InvestigationRequestedV2 } from '@triage/ts-clients/messages';
+import type { ActionApprovedV1, InvestigationRequestedV2 } from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -37,6 +38,9 @@ export const actionKind = gateway.enum('action_kind', [
   'disable_feature_flag',
 ]);
 export const decision = gateway.enum('decision', ['approved', 'rejected']);
+// The queue each outbox message goes to (INVESTIGATIONS_QUEUE or ACTIONS_QUEUE).
+export const outboxQueue = gateway.enum('outbox_queue', ['investigations', 'actions']);
+export const executionState = gateway.enum('execution_state', ['claimed', 'succeeded', 'failed']);
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
 const createdAt = () => timestamptz('created_at').notNull().defaultNow();
@@ -180,9 +184,10 @@ export const outbox = gateway.table(
   'outbox',
   {
     id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    queue: outboxQueue('queue').notNull().default('investigations'),
     messageGroupId: text('message_group_id').notNull(),
     deduplicationId: text('deduplication_id').notNull(),
-    body: jsonb('body').$type<InvestigationRequestedV2>().notNull(),
+    body: jsonb('body').$type<InvestigationRequestedV2 | ActionApprovedV1>().notNull(),
     attempts: integer('attempts').notNull().default(0),
     nextAttemptAt: timestamptz('next_attempt_at').notNull().defaultNow(),
     lastError: text('last_error'),
@@ -197,12 +202,47 @@ export const outbox = gateway.table(
 );
 
 // One human decision per action: a second approve or reject hits the primary key.
-export const approvals = gateway.table('approvals', {
-  actionId: uuid('action_id')
-    .primaryKey()
-    .references(() => proposedActions.id),
-  approver: text('approver').notNull(),
-  decision: decision('decision').notNull(),
-  reason: text('reason'),
-  decidedAt: timestamptz('decided_at').notNull().defaultNow(),
-});
+export const approvals = gateway.table(
+  'approvals',
+  {
+    actionId: uuid('action_id')
+      .primaryKey()
+      .references(() => proposedActions.id),
+    approver: text('approver').notNull(),
+    decision: decision('decision').notNull(),
+    reason: text('reason'),
+    decidedAt: timestamptz('decided_at').notNull().defaultNow(),
+  },
+  // The target of executions' foreign key, which accepts approved decisions only.
+  (t) => [unique('approvals_action_id_decision_key').on(t.actionId, t.decision)],
+);
+
+// The executor's claim on an approved action, keyed by ActionApproved's action_id, its idempotency
+// key: a second claim finds this row instead of running the action again. The foreign key and the
+// check let no row exist without an approval whose decision is approved. A row left in claimed is
+// never retried; the sweeper reports it for a human.
+export const executions = gateway.table(
+  'executions',
+  {
+    actionId: uuid('action_id').primaryKey(),
+    decision: decision('decision').notNull().default('approved'),
+    state: executionState('state').notNull().default('claimed'),
+    dryRun: boolean('dry_run').notNull(),
+    // What the executor reported: a dry run's plan, or why the action failed.
+    detail: text('detail'),
+    claimedAt: timestamptz('claimed_at').notNull().defaultNow(),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (t) => [
+    foreignKey({
+      name: 'executions_approval_fk',
+      columns: [t.actionId, t.decision],
+      foreignColumns: [approvals.actionId, approvals.decision],
+    }),
+    check('executions_approved_only', sql`${t.decision} = 'approved'`),
+    check(
+      'executions_finished_matches_state',
+      sql`(${t.finishedAt} is null) = (${t.state} = 'claimed')`,
+    ),
+  ],
+);

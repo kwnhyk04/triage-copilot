@@ -10,7 +10,14 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { createPubSub, createSchema, createYoga } from 'graphql-yoga';
 
 import type { GatewayConfig } from './config.ts';
-import { type FindTenant, type Intake, sha256, webhookSchema } from './intake.ts';
+import {
+  type FindTenant,
+  type Intake,
+  sha256,
+  webhookSchema,
+  withComputedFingerprints,
+} from './intake.ts';
+import type { ListInvestigations } from './investigations.ts';
 
 type Schemas = components['schemas'];
 
@@ -28,14 +35,27 @@ export type Decide = (
 ) => Promise<Schemas['ProposedAction'] | 'not_found' | 'already_decided'>;
 
 export interface AppDeps {
-  config: Pick<GatewayConfig, 'LOG_LEVEL' | 'APPROVER_API_KEY' | 'RATE_LIMIT_PER_MINUTE'>;
+  config: Pick<
+    GatewayConfig,
+    'LOG_LEVEL' | 'APPROVER_API_KEY' | 'GATEWAY_API_KEY' | 'RATE_LIMIT_PER_MINUTE'
+  >;
   /** Rejects when a dependency the gateway needs is unreachable. */
   ping: () => Promise<void>;
   updates: Updates;
   decide: Decide;
   findTenant: FindTenant;
   intake: Intake;
+  listInvestigations: ListInvestigations;
 }
+
+// Routes that take no X-API-Key: the probes, and the routes with a credential of their own.
+const OWN_CREDENTIAL = new Set([
+  '/healthz',
+  '/readyz',
+  '/v1/alerts',
+  '/v1/actions/:id/approve',
+  '/v1/actions/:id/reject',
+]);
 
 /** Webhook bodies over 1 MB get 413. */
 export const BODY_LIMIT = 1024 * 1024;
@@ -46,27 +66,45 @@ const header = (request: FastifyRequest, name: string) => {
   const value = request.headers[name];
   return typeof value === 'string' && value !== '' ? value : undefined;
 };
-const bearer = (request: FastifyRequest) =>
+export const bearer = (request: FastifyRequest) =>
   /^Bearer (\S+)$/i.exec(header(request, 'authorization') ?? '')?.[1];
-const httpError = (statusCode: number, message: string) =>
+export const httpError = (statusCode: number, message: string) =>
   Object.assign(new Error(message), { statusCode });
 
 const decisionBody = z.strictObject({
   approver: z.string().min(1).max(200),
   reason: z.string().max(2000).exactOptional(),
 });
+const listQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().min(1).max(512).optional(),
+});
 
 const digest = (value: string) => createHash('sha256').update(value).digest();
 // Equal-length digests let timingSafeEqual compare without revealing how much matched.
-const sameSecret = (given: string, expected: string) =>
+export const sameSecret = (given: string, expected: string) =>
   timingSafeEqual(digest(given), digest(expected));
 
 /** RFC 9457 problem details, the contract's error format. */
-const problem = (reply: FastifyReply, status: number, title: string, detail?: string) =>
+export const problem = (reply: FastifyReply, status: number, title: string, detail?: string) =>
   reply
     .code(status)
     .type('application/problem+json')
     .send({ title, status, ...(detail === undefined ? {} : { detail }) });
+
+export const badRequest = (reply: FastifyReply, issues: readonly { message: string }[]) =>
+  problem(reply, 400, 'Bad Request', issues.map((issue) => issue.message).join('; '));
+
+/** Errors thrown anywhere, Fastify's own included, leave as problem details. */
+export function answerWithProblems(app: FastifyInstance) {
+  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
+    const status = error.statusCode ?? 500;
+    const title = STATUS_CODES[status] ?? 'Error';
+    if (status < 500) return problem(reply, status, title, error.message);
+    app.log.error({ err: error }, 'request failed');
+    return problem(reply, status, title);
+  });
+}
 
 export async function buildApp({
   config,
@@ -75,20 +113,13 @@ export async function buildApp({
   decide,
   findTenant,
   intake,
+  listInvestigations,
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL, base: { service: 'gateway' } },
     requestTimeout: REQUEST_TIMEOUT_MS,
   });
-
-  // Errors thrown anywhere, Fastify's own included, leave as problem details.
-  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
-    const status = error.statusCode ?? 500;
-    const title = STATUS_CODES[status] ?? 'Error';
-    if (status < 500) return problem(reply, status, title, error.message);
-    app.log.error({ err: error }, 'request failed');
-    return problem(reply, status, title);
-  });
+  answerWithProblems(app);
 
   // Registered before the routes, which it hooks as they are added.
   await app.register(rateLimit, {
@@ -104,6 +135,18 @@ export async function buildApp({
     },
     // RateLimit-Limit, RateLimit-Remaining and RateLimit-Reset, and Retry-After on 429.
     enableDraftSpec: true,
+  });
+
+  // Every other route takes X-API-Key, routes added later included. preParsing runs after the
+  // rate limit's onRequest hook and before the body is read.
+  app.addHook('preParsing', async (request, reply, payload) => {
+    if (OWN_CREDENTIAL.has(request.routeOptions.url ?? '')) return payload;
+    const key = header(request, 'x-api-key');
+    if (key === undefined || !sameSecret(key, config.GATEWAY_API_KEY)) {
+      reply.header('WWW-Authenticate', 'ApiKey header="X-API-Key"');
+      throw httpError(401, 'Send a valid X-API-Key.');
+    }
+    return payload;
   });
 
   const probe = { config: { rateLimit: false } } as const;
@@ -158,10 +201,16 @@ export async function buildApp({
       const tenantId = tenants.get(request);
       if (tenantId === undefined)
         throw new Error('webhook request reached its handler unauthenticated');
+      // Deduplication uses fingerprints computed from the labels; a sender's differing value is
+      // counted, never refused.
+      const { webhook: computed, mismatches } = withComputedFingerprints(webhook.data);
+      if (mismatches > 0) {
+        request.log.warn({ mismatches }, 'payload fingerprints differ from their labels');
+      }
       let accepted;
       try {
         // Only stores the alerts; the agent investigates from the queue, never in this request.
-        accepted = await intake(tenantId, webhook.data);
+        accepted = await intake(tenantId, computed);
       } catch (error) {
         request.log.error({ err: error }, 'alert intake failed');
         reply.header('Retry-After', '5');
@@ -188,10 +237,16 @@ export async function buildApp({
       const id = z.guid().safeParse(request.params.id);
       const body = decisionBody.safeParse(request.body);
       if (!id.success || !body.success) {
-        const issues = [...(id.error?.issues ?? []), ...(body.error?.issues ?? [])];
-        return problem(reply, 400, 'Bad Request', issues.map((issue) => issue.message).join('; '));
+        return badRequest(reply, [...(id.error?.issues ?? []), ...(body.error?.issues ?? [])]);
       }
-      const result = await decide(id.data, verdict, body.data);
+      let result;
+      try {
+        result = await decide(id.data, verdict, body.data);
+      } catch (error) {
+        request.log.error({ err: error }, 'decision failed');
+        reply.header('Retry-After', '5');
+        return problem(reply, 503, 'Service Unavailable', 'The decision could not be recorded.');
+      }
       if (result === 'not_found') return problem(reply, 404, 'Not Found', 'No action has this id.');
       if (result === 'already_decided') {
         return problem(reply, 409, 'Conflict', 'The action was already approved or rejected.');
@@ -199,6 +254,17 @@ export async function buildApp({
       return result;
     });
   }
+
+  // Newest first, keyset paginated; the limit is enforced here, whatever the client asks.
+  app.get('/v1/investigations', async (request, reply) => {
+    const query = listQuery.safeParse(request.query);
+    if (!query.success) return badRequest(reply, query.error.issues);
+    const page = await listInvestigations(query.data);
+    if (page === 'bad_cursor') {
+      return problem(reply, 400, 'Bad Request', 'cursor: pass a next_cursor this API returned');
+    }
+    return page;
+  });
 
   const resolvers: Resolvers = {
     Query: { health: () => ({ status: 'ok' }) },

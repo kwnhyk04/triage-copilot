@@ -49,6 +49,7 @@ Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; c
 | Postgres (pgvector) | 5434 |
 | SQS (ElasticMQ; container port 9324, stats UI 9325 not published) | 4566 |
 | gateway / agent / executor / sim | 4200 / 4210 / 4220 / 4230 |
+| gateway internal listener (executor only) | 4201 |
 | web (Next.js) | 3200 |
 | Grafana | 3201 |
 | Jaeger UI | 16688 |
@@ -89,7 +90,8 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 
 - Gateway schema (`apps/gateway/src/schema.ts`, SQL migrations in `apps/gateway/drizzle/`, written by `pnpm --filter @triage/gateway db:generate`):
   - `tenants`, with `webhook_token_sha256`; `services` and `service_dependencies` (the dependency graph; writers keep it acyclic).
-  - `outbox`: InvestigationRequested messages waiting for the relay; parked rows (`failed_at`) are the gateway's failure store.
+  - `outbox`: messages waiting for the relay, each for its `queue` (`investigations`: InvestigationRequested; `actions`: ActionApproved); parked rows (`failed_at`) are the gateway's failure store.
+  - `executions`: the executor's claims (`action_id` primary key, the idempotency key; states claimed, succeeded, failed). A foreign key on `(action_id, decision)` to `approvals` and a check accept only approved decisions.
   - `alert_groups`: `group_key` and `window_start` are unique per tenant. `status` holds the API's investigation statuses plus `queued_not_investigated`, and a CHECK ties a null `investigation_id` to exactly that status.
   - `alerts`: one row per firing, unique on `(tenant_id, fingerprint, starts_at)`.
   - `proposed_actions`: a copy of the agent's proposals for the UI. Its status comes from `approvals`, whose primary key `action_id` allows one decision per action.
@@ -124,9 +126,16 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 - `scripts/seed.py` (`make seed`): Faker with a fixed seed.
   - 5 tenants, 50 services, 79 dependency edges, 10,000 alerts in 2,523 groups, 2,000 investigations (21,867 steps: v1 before 2026-06-01, v2 after), 17,486 tool calls, 784 actions, 714 decisions.
   - Each schema is written by its own role. It refuses to overwrite data without `--reset`; `--large` tops the agent up to 2,000,000 steps.
-- Migration tests (`services/agent/tests/conftest.py`) create a throwaway database `triage_test_*` per test as the Postgres superuser (`POSTGRES_PASSWORD`) and drop it afterwards.
+- Integration tests (`services/agent/tests/conftest.py`, `apps/gateway/src/testing.ts`) create a scratch database per test (Python) or suite (Jest), `triage_test_<unix seconds>_<run>_<id>`, as the Postgres superuser (`POSTGRES_PASSWORD`), and drop it afterwards. Each run first drops prefixed databases over an hour old. Both helpers repoint the database URL variables at `tests_never_use_the_dev_database`, so no test reaches the dev database, and refuse to run if the dev database name has the prefix.
+- Gateway decisions (`apps/gateway/src/decisions.ts`): approve and reject insert into `approvals` (`ON CONFLICT DO NOTHING`; a second decision gets 409) and, for an approval, queue ActionApproved v1 through the outbox in the same transaction. Its FIFO group is the hash of tenant and target, so one service's actions run in order; its deduplication id is the action id. A store failure answers 503 with `Retry-After`.
+- Gateway list (`apps/gateway/src/investigations.ts`): `GET /v1/investigations`, investigated alert groups of every tenant, newest first by (created_at, investigation id), with an opaque base64url cursor holding created_at to the microsecond. `limit` defaults to 25; outside 1 to 100, or with a cursor the gateway never issued, it answers 400. The title is the first alert's alertname and service.
+- Gateway credentials (`apps/gateway/src/app.ts`): a `preParsing` hook asks for `GATEWAY_API_KEY` as X-API-Key (constant-time) on every route, unknown ones included, except the probes, the webhook and approve or reject; 401 problem details with `WWW-Authenticate: ApiKey header="X-API-Key"`. The web helpers send it.
+- Gateway internal listener (`apps/gateway/src/internal.ts`, `executions.ts`), on `GATEWAY_INTERNAL_HOST`:`GATEWAY_INTERNAL_PORT` (127.0.0.1:4201), behind `EXECUTOR_SERVICE_TOKEN`: `POST /internal/actions/{id}/execution` claims an approved action (201 new, 200 an earlier claim, 404 no approved decision); `.../execution/result` records succeeded or failed once (409 after). The public listener has no such route. The sweeper logs executions stuck in claimed past `SWEEPER_STUCK_AFTER_MINUTES`.
+- Webhook fingerprints (`apps/gateway/src/intake.ts`): `fingerprint()` ports Prometheus's `LabelSet.Fingerprint`; the webhook replaces each alert's fingerprint with it before deduplication and logs how many differed.
+- Executor (`services/executor/src/executor/run.py`): `run_action(message, client, dry_run, effectors)` validates ActionApproved v1, checks `ALLOWED_KINDS` (and the effector) before any call, claims through `py_clients.ExecutionsClient`, checks the approved kind again, then runs the effector or, in a dry run, records the plan, and reports the result. Gateway unreachable or any error: refused. A claim found claimed is never retried. No consumer runs it yet.
+- Agent budget (`services/agent/src/agent/job.py`): before each model turn, an investigation at `MAX_TOOL_CALLS` (15) tool calls or `MAX_TOKENS` (150,000) tokens ends with a partial report (`Report.partial`, no hypotheses), status `resolved`.
 
-Still planned: agent tools and model providers (step 6), executor safety checks, scenario engine, eval harness.
+Still planned: agent tools and model providers (step 6), the executor's queue consumer and effectors, scenario engine, eval harness.
 
 ## Implemented Functionality
 
@@ -145,7 +154,7 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 - gateway: `POST /v1/actions/{id}/approve` and `/reject`. They take only `X-Approver-Key`, compared in constant time against `APPROVER_API_KEY`:
   - `X-API-Key` or a bearer token instead: 403.
   - Missing or wrong key: 401 with `WWW-Authenticate`.
-  - Then the id and body are validated (400), and an injected decision store gives 200, 404 or 409.
+  - Then the id and body are validated (400), and the decision store (`decisions.ts`) gives 200, 404, 409, or 503 when it cannot record the decision.
   - Errors, including Fastify's own, are problem+json.
 - Approver key: `APPROVER_API_KEY` (at least 32 characters) is required by the gateway and the web server and checked at startup. The Makefile unexports it and passes it only to `dev-ts` (gateway and web), so the agent, executor, sim, tests and tools never receive it. `apps/web/src/lib/decisions.ts` (`decideAction`) is the only code that sends it.
 - web: home page shows gateway status through a server-side GraphQL call; `/healthz`, `/readyz` (gateway reachable).
@@ -163,21 +172,31 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
   - Queue loss (`apps/gateway/src/sweeper.int.test.ts`): after a purge, one sweep re-queues exactly the lost, resumable and stuck investigations, each with a new deduplication id; parked, budget, busy, failed and uninvestigated groups stay; a second sweep re-queues nothing; one that parks again goes back once resumable.
   - The resumable order (`test_workers_int.py`): with both slots held, three parked investigations are not resumable; each freed slot goes to the earliest parked.
   - The internal API answers 401 problem details with `WWW-Authenticate` without the token, with a wrong one, or with another scheme (`test_agent_api.py`).
-- executor and sim: `/healthz` and `/readyz` only.
+- executor: `/healthz`, `/readyz`, and the safety checks in `executor.run` (no consumer yet). sim: `/healthz` and `/readyz` only.
+- Step 5 (tests), checked by tests:
+  - Fingerprints: golden vectors from prometheus/common, a real Alertmanager 0.28.1 payload, UTF-8 byte order, and fast-check properties (same labels in any order, the same fingerprint; different sets, different ones). Grouping property: alerts sent within one window join one group per group key, whatever their label order or claimed fingerprint (`intake.int.test.ts`).
+  - Decisions (`decisions.int.test.ts`): a second approval and an approval after a rejection get 409; of 20 concurrent decisions exactly one is recorded, with at most one ActionApproved; when queueing fails, no decision is recorded.
+  - Keyset (`investigations.int.test.ts`): no duplicate and no gap while a writer inserts before and behind the cursor; pages ending inside one millisecond and one microsecond.
+  - Credentials (`app.test.ts`): the webhook needs no X-API-Key; every other `/v1` route and `/graphql` answer 401 without it; the public listener answers 404 on the executor's routes.
+  - Executor (`test_executor_run.py`; end to end against the gateway process in `test_executor_int.py`): no approval row, a rejection or an unknown action is refused; a kind off the allowlist is refused before any call; a replayed idempotency key runs once; a dry run never acts; an unreachable or failing gateway means no action. The database refuses an execution without an approved decision (`executions.int.test.ts`).
+  - Agent loop (`test_workers_int.py`): with the scripted model, the loop stops at 15 tool calls or at 150,000 tokens with a partial report and no exception.
+  - Story A (partition swap) and story B (upcaster) run in the integration layer: `test_partitioning_int.py`, `test_migrations_int.py`.
 - Both schemas, migrated by Drizzle (`gateway.__drizzle_migrations`) and Alembic (`agent.alembic_version`). Tests apply both chains to an empty database, run the seed, and check the models against the result (`alembic check`). They also downgrade the agent chain to empty and back.
 - Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms. Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
 - Story B (event versioning): replaying stored v1 steps returns v2 objects; a golden snapshot pins the result, and stored rows are never rewritten.
 
 ## Current Development Status
 
-Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper) on 2026-10-15. Next: step 5, tests.
+Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper) and step 5 (tests) on 2026-10-15. Next: step 6, AI.
 
 ## Known Limitations
 
 - All targets are design goals and have not been measured.
 - The contracts are ahead of the code:
-  - Approve, reject and the alert webhook are the only `/v1` routes served. Their decision store still answers not found. The `proposed_actions` and `approvals` tables exist, but recording a decision must also queue ActionApproved, which needs an outbox (step 4).
-  - X-API-Key is not enforced yet; the webhook enforces per-tenant tokens and the agent's internal API its service token.
+  - `GET /v1/investigations/{id}` is not served (step 9). Nothing but the seed writes `proposed_actions`: no consumer copies ActionProposed into the gateway yet.
+  - The executor has no queue consumer and no effectors: ActionApproved messages wait in `actions.fifo`, and `executor.run` runs only in tests.
+  - Executions stuck in claimed are only logged by the sweeper; alerting on them belongs to step 8.
+  - The investigation list spans every tenant, since X-API-Key is not tied to one.
   - The agent serves `GET .../state` only; `POST .../cancel` is not built, and `cancel_requested` is always false.
   - The GraphQL `investigations` and `investigation` queries have no resolvers (step 9).
 - `RootCauseClass` and `ActionKind` are initial enums; the scenario engine and eval steps may extend them. A new value in a response breaks older generated Python clients (pydantic enums reject unknown values), so ship the gateway and the clients together.

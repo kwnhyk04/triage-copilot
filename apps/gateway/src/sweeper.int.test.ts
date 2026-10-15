@@ -77,10 +77,10 @@ describe('recovery sweeper against Postgres and ElasticMQ', () => {
     const intake = createIntake(db.sql, () => undefined, 20);
     const names = ['lost', 'resumable', 'parked', 'budget', 'stuck', 'busy', 'done', 'failed'];
     for (const name of names) {
-      await intake(tenant.id, webhook(`{}:{alertname="${name}"}`, [{ fingerprint: name }]));
+      await intake(tenant.id, webhook(`{}:{alertname="${name}"}`, [{ alert: name }]));
     }
     // Resolved alerts only: the group has no investigation, and no sweep touches it.
-    const calm = webhook('{}:{alertname="calm"}', [{ fingerprint: 'calm', status: 'resolved' }]);
+    const calm = webhook('{}:{alertname="calm"}', [{ alert: 'calm', status: 'resolved' }]);
     await intake(tenant.id, calm);
 
     // The relay sends the 8 investigations, then the queue loses them.
@@ -125,6 +125,10 @@ describe('recovery sweeper against Postgres and ElasticMQ', () => {
       return Promise.resolve(states.get(investigationId));
     };
     const sweep = () => sweepOnce(db.sql, getState, STUCK_AFTER_MINUTES, log);
+    // An approved action's message names the investigation too; it must not pass for a re-queue.
+    await db.sql`
+      INSERT INTO gateway.outbox (queue, message_group_id, deduplication_id, body)
+      VALUES ('actions', 'g', 'd', ${db.sql.json({ investigation_id: id('lost') })})`;
     const rows = async () =>
       (
         await db.sql<{ name: string; status: string; requeue_count: number }[]>`
@@ -134,6 +138,7 @@ describe('recovery sweeper against Postgres and ElasticMQ', () => {
 
     expect(await sweep()).toBe(3);
     expect(asked).toHaveLength(8);
+    await db.sql`DELETE FROM gateway.outbox WHERE queue = 'actions'`;
     expect(await rows()).toEqual([
       ['budget', 'queued', 0],
       ['busy', 'queued', 0],

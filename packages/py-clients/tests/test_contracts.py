@@ -62,4 +62,4 @@ def test_action_kinds_outside_the_allowlist_are_rejected(name: str) -> None:
 def test_alertmanager_example_matches_the_webhook_schema() -> None:
     example = CONTRACTS / "openapi/examples/alertmanager-webhook.json"
     payload = AlertmanagerWebhook.model_validate_json(example.read_bytes())
-    assert payload.alerts[0].fingerprint == "3f9c2a7b1e5d8c40"
+    assert payload.alerts[0].fingerprint == "8a0461e5e216f2b5"

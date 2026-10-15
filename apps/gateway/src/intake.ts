@@ -46,6 +46,42 @@ export type FindTenant = (tokenSha256: string) => Promise<string | undefined>;
 
 export const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 
+const FNV_OFFSET = 14695981039346656037n;
+const FNV_PRIME = 1099511628211n;
+const SEPARATOR = Buffer.from([0xff]);
+
+/**
+ * Alertmanager's fingerprint of a label set, ported from Prometheus's LabelSet.Fingerprint: FNV-1a
+ * 64 over each name and value, names in byte order, each followed by the separator byte 0xff.
+ */
+export function fingerprint(labels: Record<string, string>): string {
+  const pairs = Object.entries(labels)
+    .map(([name, value]) => [Buffer.from(name), Buffer.from(value)] as const)
+    .sort(([a], [b]) => Buffer.compare(a, b));
+  let hash = FNV_OFFSET;
+  for (const part of pairs.flatMap(([name, value]) => [name, SEPARATOR, value, SEPARATOR])) {
+    for (const byte of part) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * FNV_PRIME);
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
+/**
+ * The webhook with every alert's fingerprint computed from its labels, so deduplication never
+ * trusts the sender's; `mismatches` counts the alerts whose payload value differed.
+ */
+export function withComputedFingerprints(webhook: Webhook): {
+  webhook: Webhook;
+  mismatches: number;
+} {
+  let mismatches = 0;
+  const alerts = webhook.alerts.map((alert) => {
+    const computed = fingerprint(alert.labels);
+    if (computed !== alert.fingerprint) mismatches++;
+    return { ...alert, fingerprint: computed };
+  });
+  return { webhook: { ...webhook, alerts }, mismatches };
+}
+
 const SEVERITIES = ['critical', 'warning', 'info'] as const;
 
 /**

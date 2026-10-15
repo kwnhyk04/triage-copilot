@@ -30,6 +30,8 @@ class Report(BaseModel):
 
     summary: Annotated[str, Field(min_length=1, max_length=2000)]
     hypotheses: list[Hypothesis]
+    # True when the investigation stopped at its budget before the model reported.
+    partial: bool = False
 
 
 class ModelTurn(BaseModel):

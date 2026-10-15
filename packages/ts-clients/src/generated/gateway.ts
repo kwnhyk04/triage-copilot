@@ -129,6 +129,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/actions/{id}/execution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claims an approved action for the executor, once.
+         * @description Inserts the execution in one transaction. Only an action whose decision is approved can be claimed: the database refuses any other. The action id is the idempotency key, so a second claim returns the first one with 200, and the executor must not run the action again. An execution left in claimed is never retried; it waits for a human.
+         */
+        post: operations["claimExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/actions/{id}/execution/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records how a claimed execution ended. Each execution takes one result. */
+        post: operations["reportExecutionResult"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -187,7 +228,7 @@ export interface components {
             endsAt: string;
             /** @description Link to the rule that fired. */
             generatorURL: string;
-            /** @description Identifies the alert; the gateway deduplicates on it. */
+            /** @description Alertmanager's fingerprint of the labels. The gateway computes its own with the same algorithm (Prometheus's LabelSet fingerprint) and deduplicates on that; a payload whose value differs is accepted, and the mismatch is logged. */
             fingerprint: string;
         };
         /** @enum {string} */
@@ -287,6 +328,45 @@ export interface components {
         ActionKind: "rollback_deploy" | "restart_service" | "scale_service" | "disable_feature_flag";
         /** @enum {string} */
         ActionStatus: "pending" | "approved" | "rejected";
+        ExecutionClaim: {
+            /** @description True when the executor only plans the action. The claim is used up either way, so an old approval never runs later. */
+            dry_run: boolean;
+        };
+        /** @enum {string} */
+        ExecutionOutcome: "succeeded" | "failed";
+        ExecutionResult: {
+            state: components["schemas"]["ExecutionOutcome"];
+            /** @description A dry run's plan, or why the action failed. */
+            detail?: string;
+        };
+        /**
+         * @description claimed: the executor took the action and has not reported how it ended. succeeded and failed are final. No execution is retried automatically.
+         * @enum {string}
+         */
+        ExecutionState: "claimed" | "succeeded" | "failed";
+        /** @description The executor's claim on an approved action, with the action as approved. */
+        Execution: {
+            /**
+             * Format: uuid
+             * @description The approved action; also the idempotency key.
+             */
+            action_id: string;
+            kind: components["schemas"]["ActionKind"];
+            target: string;
+            parameters: {
+                [key: string]: string | number | boolean;
+            };
+            approved_by: string;
+            /** Format: date-time */
+            approved_at: string;
+            state: components["schemas"]["ExecutionState"];
+            dry_run: boolean;
+            detail: string | null;
+            /** Format: date-time */
+            claimed_at: string;
+            /** Format: date-time */
+            finished_at: string | null;
+        };
         Decision: {
             /** @description Identity of the human deciding, as authenticated by the web backend-for-frontend (for example an email address). */
             approver: string;
@@ -339,6 +419,17 @@ export interface components {
         Unauthorized: {
             headers: {
                 "WWW-Authenticate": components["headers"]["WWW-Authenticate"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The executor service token is missing or invalid. */
+        ExecutorUnauthorized: {
+            headers: {
+                /** @description The Bearer challenge. */
+                "WWW-Authenticate": string;
                 [name: string]: unknown;
             };
             content: {
@@ -520,7 +611,7 @@ export interface operations {
     listInvestigations: {
         parameters: {
             query?: {
-                /** @description Page size. */
+                /** @description Page size; outside 1 to 100 gets 400. */
                 limit?: number;
                 /** @description The next_cursor of the previous page; omit for the first page. */
                 cursor?: string;
@@ -615,6 +706,98 @@ export interface operations {
             409: components["responses"]["AlreadyDecided"];
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    claimExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionClaim"];
+            };
+        };
+        responses: {
+            /** @description Claimed before. The executor must not run the action again. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Execution"];
+                };
+            };
+            /** @description Claimed now. The executor runs the action, or in a dry run only plans it. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Execution"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["ExecutorUnauthorized"];
+            /** @description No approved action has this id; it is unknown, pending or rejected. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reportExecutionResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionResult"];
+            };
+        };
+        responses: {
+            /** @description The result was recorded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Execution"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["ExecutorUnauthorized"];
+            /** @description No execution has this id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The execution already has its result. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
 }

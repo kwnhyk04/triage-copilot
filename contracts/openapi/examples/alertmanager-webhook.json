@@ -25,7 +25,7 @@
       "startsAt": "2026-10-14T11:54:12.481516234Z",
       "endsAt": "0001-01-01T00:00:00Z",
       "generatorURL": "http://prometheus.example:9090/graph?g0.expr=checkout_error_ratio+%3E+0.05",
-      "fingerprint": "3f9c2a7b1e5d8c40"
+      "fingerprint": "8a0461e5e216f2b5"
     }
   ]
 }

@@ -5,6 +5,8 @@ description = "Runs approved, allowlisted actions; the only service allowed to m
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.143.0",
+  "httpx2>=2.13.1",
+  "py-clients",
   "py-config",
   "py-telemetry",
   "uvicorn>=0.54.0",
@@ -14,6 +16,7 @@ dependencies = [
 executor = "executor.main:run"
 
 [tool.uv.sources]
+py-clients = { workspace = true }
 py-config = { workspace = true }
 py-telemetry = { workspace = true }
 

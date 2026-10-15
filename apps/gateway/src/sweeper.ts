@@ -4,6 +4,7 @@ import { type components, createAgentClient } from '@triage/ts-clients/agent';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Sql } from 'postgres';
 
+import { stuckExecutions } from './executions.ts';
 import { investigationRequest } from './intake.ts';
 
 /** The agent's checkpoint of an investigation (its internal API's InvestigationState). */
@@ -89,7 +90,8 @@ export async function sweepOnce(
              requeue_count, now() AS now
       FROM gateway.alert_groups g
       WHERE status = 'queued' AND NOT EXISTS (
-        SELECT FROM gateway.outbox o WHERE o.body->>'investigation_id' = g.investigation_id::text)
+        SELECT FROM gateway.outbox o
+        WHERE o.queue = 'investigations' AND o.body->>'investigation_id' = g.investigation_id::text)
       ORDER BY created_at
       FOR NO KEY UPDATE SKIP LOCKED`;
     let requeued = 0;
@@ -137,7 +139,10 @@ export async function sweepOnce(
   });
 }
 
-/** Sweeps every intervalMs until stopped; `onQueued` wakes the relay after re-queues commit. */
+/**
+ * Sweeps every intervalMs until stopped; `onQueued` wakes the relay after re-queues commit. Each
+ * sweep also reports executions stuck in claimed, which nothing retries, so a human sees them.
+ */
 export function startSweeper(
   sql: Sql,
   getState: GetState,
@@ -150,6 +155,10 @@ export function startSweeper(
     while (!stopped.signal.aborted) {
       try {
         if ((await sweepOnce(sql, getState, stuckAfterMinutes, log)) > 0) onQueued();
+        const stuck = await stuckExecutions(sql, stuckAfterMinutes);
+        if (stuck.length > 0) {
+          log.error({ actions: stuck }, 'executions stuck in claimed; a human must check them');
+        }
       } catch (error) {
         log.error({ err: error }, 'recovery sweep failed');
       }

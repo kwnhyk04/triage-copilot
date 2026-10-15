@@ -7,7 +7,13 @@ import httpx2
 import pytest
 
 from py_clients import clients
-from py_clients.clients import AgentClient, AlertsClient, ApiError, GatewayClient
+from py_clients.clients import (
+    AgentClient,
+    AlertsClient,
+    ApiError,
+    ExecutionsClient,
+    GatewayClient,
+)
 from py_clients.generated import gateway
 
 ID = UUID("9f8b6c1e-3d2a-4f5b-8e7d-6c5b4a392817")
@@ -61,7 +67,7 @@ def test_alerts_client_sends_only_the_alertmanager_token() -> None:
 
     assert seen[0].headers["authorization"] == "Bearer am-token"
     assert "x-api-key" not in seen[0].headers
-    assert json.loads(seen[0].content)["alerts"][0]["fingerprint"] == "3f9c2a7b1e5d8c40"
+    assert json.loads(seen[0].content)["alerts"][0]["fingerprint"] == "8a0461e5e216f2b5"
 
 
 def test_agent_client_sends_the_service_token() -> None:
@@ -84,3 +90,33 @@ def test_agent_client_sends_the_service_token() -> None:
 
     assert seen[0].url.path == f"/internal/investigations/{ID}/cancel"
     assert seen[0].headers["authorization"] == "Bearer svc-token"
+
+
+@pytest.mark.parametrize(("status", "created"), [(201, True), (200, False)])
+def test_executions_client_sends_its_token_and_tells_a_new_claim_from_an_earlier_one(
+    status: int, created: bool
+) -> None:
+    execution = {
+        "action_id": str(ID),
+        "kind": "rollback_deploy",
+        "target": "checkout",
+        "parameters": {"to_version": "v1.7.3"},
+        "approved_by": "oncall@example.com",
+        "approved_at": "2026-10-15T12:03:12Z",
+        "state": "claimed",
+        "dry_run": True,
+        "detail": None,
+        "claimed_at": "2026-10-15T12:03:13Z",
+        "finished_at": None,
+    }
+    seen, transport = recorder(httpx2.Response(status, json=execution))
+
+    with ExecutionsClient("http://gateway.test", "exec-token", transport=transport) as client:
+        assert client.claim(ID, dry_run=True) == (
+            created,
+            gateway.Execution.model_validate(execution),
+        )
+
+    assert seen[0].url.path == f"/internal/actions/{ID}/execution"
+    assert seen[0].headers["authorization"] == "Bearer exec-token"
+    assert json.loads(seen[0].content) == {"dry_run": True}

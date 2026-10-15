@@ -34,8 +34,8 @@ make dev
 | --- | --- |
 | `make dev` | Infra plus every app with reload |
 | `make build` | Next.js build and Python wheels |
-| `make test` | Jest and pytest unit tests |
-| `make test-int` | Integration tests against the infra, about a minute (the partitioning test seeds 2,000,000 steps) |
+| `make test` | Jest and pytest unit tests; for repeated runs use `pnpm turbo run test --force`, since Turbo replays cached output |
+| `make test-int` | Integration tests against the infra, about 3 minutes (the partitioning test seeds 2,000,000 steps). Each test gets a scratch database `triage_test_*`, dropped afterwards; tests never touch the dev database |
 | `make lint` | ESLint, Prettier, ruff |
 | `make typecheck` | tsc and pyright |
 | `make codegen` | Regenerates clients from `contracts/` |

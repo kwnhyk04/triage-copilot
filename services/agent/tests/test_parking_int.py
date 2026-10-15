@@ -44,6 +44,8 @@ pytestmark = pytest.mark.integration
 
 GATEWAY_DIR = Path(__file__).resolve().parents[3] / "apps" / "gateway"
 SERVICE_TOKEN = secrets.token_urlsafe(32)
+EXECUTOR_TOKEN = secrets.token_urlsafe(32)
+APPROVER_KEY = secrets.token_urlsafe(32)
 CAP = 2
 
 
@@ -94,17 +96,24 @@ def ready(url: str) -> bool:
 
 
 @contextlib.contextmanager
-def gateway(queue_url: str, agent_url: str) -> Generator[str]:
-    """The gateway process on the scratch database, sweeping every second."""
+def gateway(queue_url: str, agent_url: str, internal_port: int | None = None) -> Generator[str]:
+    """The gateway process on the scratch database, sweeping every second.
+
+    Its internal listener, for the executor, takes internal_port, or a free port of its own.
+    """
     port = free_port()
     env = os.environ | {
         "GATEWAY_PORT": str(port),
+        "GATEWAY_INTERNAL_PORT": str(internal_port or free_port()),
         "INVESTIGATIONS_QUEUE": queue_url.rsplit("/", 1)[1],
+        "ACTIONS_QUEUE": "actions-unused-by-these-tests.fifo",
         "AGENT_URL": agent_url,
         "AGENT_SERVICE_TOKEN": SERVICE_TOKEN,
+        "EXECUTOR_SERVICE_TOKEN": EXECUTOR_TOKEN,
         "SWEEPER_INTERVAL_SECONDS": "1",
         "MAX_NEW_INVESTIGATIONS": "5",
-        "APPROVER_API_KEY": "unused-by-this-test-0000000000000",
+        "APPROVER_API_KEY": APPROVER_KEY,
+        "GATEWAY_API_KEY": secrets.token_urlsafe(32),
         "LOG_LEVEL": "warn",
     }
     command = [shutil.which("node") or "node", "--import", "./src/telemetry.ts", "src/main.ts"]
@@ -141,9 +150,14 @@ def new_tenant() -> str:
 def post_alerts(url: str, token: str, keys: Sequence[str], count: int) -> None:
     with AlertsClient(url, token) as client:
         for n in range(count):
+            # Labels of their own: the gateway deduplicates on the fingerprint the labels give.
             alert = {
                 "status": "firing",
-                "labels": {"alertname": "HighErrorRate", "severity": "critical"},
+                "labels": {
+                    "alertname": "HighErrorRate",
+                    "severity": "critical",
+                    "instance": f"instance-{n}",
+                },
                 "annotations": {},
                 "startsAt": "2026-10-15T11:54:12.481Z",
                 "endsAt": "0001-01-01T00:00:00Z",
