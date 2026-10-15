@@ -1,0 +1,1214 @@
+{
+  "id": "e9c2645a-6c50-4106-b740-4a85f419d0de",
+  "prevId": "4e40632f-ed66-49d9-aad5-28cf4286560e",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "gateway.alert_groups": {
+      "name": "alert_groups",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "group_key": {
+          "name": "group_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_start": {
+          "name": "window_start",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "severity": {
+          "name": "severity",
+          "type": "alert_severity",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "alert_group_status",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "investigation_id": {
+          "name": "investigation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "requeued_at": {
+          "name": "requeued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requeue_count": {
+          "name": "requeue_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "alert_groups_keyset_idx": {
+          "name": "alert_groups_keyset_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "alert_groups_tenant_id_tenants_id_fk": {
+          "name": "alert_groups_tenant_id_tenants_id_fk",
+          "tableFrom": "alert_groups",
+          "tableTo": "tenants",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "alert_groups_investigation_id_unique": {
+          "name": "alert_groups_investigation_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "investigation_id"
+          ]
+        },
+        "alert_groups_tenant_id_group_key_window_start_unique": {
+          "name": "alert_groups_tenant_id_group_key_window_start_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "group_key",
+            "window_start"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "alert_groups_investigation_matches_status": {
+          "name": "alert_groups_investigation_matches_status",
+          "value": "(\"gateway\".\"alert_groups\".\"investigation_id\" is null) = (\"gateway\".\"alert_groups\".\"status\" = 'queued_not_investigated')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "gateway.alerts": {
+      "name": "alerts",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "group_id": {
+          "name": "group_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fingerprint": {
+          "name": "fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "labels": {
+          "name": "labels",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "alert_status",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "alerts_keyset_idx": {
+          "name": "alerts_keyset_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "alerts_group_id_idx": {
+          "name": "alerts_group_id_idx",
+          "columns": [
+            {
+              "expression": "group_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "alerts_tenant_id_tenants_id_fk": {
+          "name": "alerts_tenant_id_tenants_id_fk",
+          "tableFrom": "alerts",
+          "tableTo": "tenants",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "alerts_group_id_alert_groups_id_fk": {
+          "name": "alerts_group_id_alert_groups_id_fk",
+          "tableFrom": "alerts",
+          "tableTo": "alert_groups",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "group_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "alerts_tenant_id_fingerprint_starts_at_unique": {
+          "name": "alerts_tenant_id_fingerprint_starts_at_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "fingerprint",
+            "starts_at"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.approvals": {
+      "name": "approvals",
+      "schema": "gateway",
+      "columns": {
+        "action_id": {
+          "name": "action_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "approver": {
+          "name": "approver",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision": {
+          "name": "decision",
+          "type": "decision",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "approvals_action_id_proposed_actions_id_fk": {
+          "name": "approvals_action_id_proposed_actions_id_fk",
+          "tableFrom": "approvals",
+          "tableTo": "proposed_actions",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "action_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "approvals_action_id_decision_key": {
+          "name": "approvals_action_id_decision_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "action_id",
+            "decision"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.executions": {
+      "name": "executions",
+      "schema": "gateway",
+      "columns": {
+        "action_id": {
+          "name": "action_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "decision": {
+          "name": "decision",
+          "type": "decision",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'approved'"
+        },
+        "state": {
+          "name": "state",
+          "type": "execution_state",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'claimed'"
+        },
+        "dry_run": {
+          "name": "dry_run",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detail": {
+          "name": "detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "executions_approval_fk": {
+          "name": "executions_approval_fk",
+          "tableFrom": "executions",
+          "tableTo": "approvals",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "action_id",
+            "decision"
+          ],
+          "columnsTo": [
+            "action_id",
+            "decision"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "executions_approved_only": {
+          "name": "executions_approved_only",
+          "value": "\"gateway\".\"executions\".\"decision\" = 'approved'"
+        },
+        "executions_finished_matches_state": {
+          "name": "executions_finished_matches_state",
+          "value": "(\"gateway\".\"executions\".\"finished_at\" is null) = (\"gateway\".\"executions\".\"state\" = 'claimed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "gateway.investigation_reports": {
+      "name": "investigation_reports",
+      "schema": "gateway",
+      "columns": {
+        "investigation_id": {
+          "name": "investigation_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "alert_group_status",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "report": {
+          "name": "report",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "investigation_reports_investigation_id_fk": {
+          "name": "investigation_reports_investigation_id_fk",
+          "tableFrom": "investigation_reports",
+          "tableTo": "alert_groups",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "investigation_id"
+          ],
+          "columnsTo": [
+            "investigation_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "investigation_reports_status_final": {
+          "name": "investigation_reports_status_final",
+          "value": "\"gateway\".\"investigation_reports\".\"status\" in ('resolved', 'awaiting_approval')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "gateway.investigation_steps": {
+      "name": "investigation_steps",
+      "schema": "gateway",
+      "columns": {
+        "investigation_id": {
+          "name": "investigation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "step_kind",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tool_name": {
+          "name": "tool_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tool_call_id": {
+          "name": "tool_call_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tokens_input": {
+          "name": "tokens_input",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tokens_output": {
+          "name": "tokens_output",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tool_status": {
+          "name": "tool_status",
+          "type": "tool_call_status",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "investigation_steps_tool_call_idx": {
+          "name": "investigation_steps_tool_call_idx",
+          "columns": [
+            {
+              "expression": "investigation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tool_call_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "investigation_steps_investigation_id_fk": {
+          "name": "investigation_steps_investigation_id_fk",
+          "tableFrom": "investigation_steps",
+          "tableTo": "alert_groups",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "investigation_id"
+          ],
+          "columnsTo": [
+            "investigation_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "investigation_steps_investigation_id_seq_pk": {
+          "name": "investigation_steps_investigation_id_seq_pk",
+          "columns": [
+            "investigation_id",
+            "seq"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.outbox": {
+      "name": "outbox",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "outbox_id_seq",
+            "schema": "gateway",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "queue": {
+          "name": "queue",
+          "type": "outbox_queue",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'investigations'"
+        },
+        "message_group_id": {
+          "name": "message_group_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "deduplication_id": {
+          "name": "deduplication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failed_at": {
+          "name": "failed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "outbox_due_idx": {
+          "name": "outbox_due_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"gateway\".\"outbox\".\"failed_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.proposed_actions": {
+      "name": "proposed_actions",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "investigation_id": {
+          "name": "investigation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "action_kind",
+          "typeSchema": "gateway",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target": {
+          "name": "target",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parameters": {
+          "name": "parameters",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rationale": {
+          "name": "rationale",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposed_at": {
+          "name": "proposed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "proposed_actions_keyset_idx": {
+          "name": "proposed_actions_keyset_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposed_actions_investigation_id_idx": {
+          "name": "proposed_actions_investigation_id_idx",
+          "columns": [
+            {
+              "expression": "investigation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "proposed_actions_tenant_id_tenants_id_fk": {
+          "name": "proposed_actions_tenant_id_tenants_id_fk",
+          "tableFrom": "proposed_actions",
+          "tableTo": "tenants",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "proposed_actions_investigation_id_fk": {
+          "name": "proposed_actions_investigation_id_fk",
+          "tableFrom": "proposed_actions",
+          "tableTo": "alert_groups",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "investigation_id"
+          ],
+          "columnsTo": [
+            "investigation_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.service_dependencies": {
+      "name": "service_dependencies",
+      "schema": "gateway",
+      "columns": {
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "depends_on_id": {
+          "name": "depends_on_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_dependencies_depends_on_id_idx": {
+          "name": "service_dependencies_depends_on_id_idx",
+          "columns": [
+            {
+              "expression": "depends_on_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_dependencies_service_id_services_id_fk": {
+          "name": "service_dependencies_service_id_services_id_fk",
+          "tableFrom": "service_dependencies",
+          "tableTo": "services",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "service_dependencies_depends_on_id_services_id_fk": {
+          "name": "service_dependencies_depends_on_id_services_id_fk",
+          "tableFrom": "service_dependencies",
+          "tableTo": "services",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "depends_on_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_dependencies_service_id_depends_on_id_pk": {
+          "name": "service_dependencies_service_id_depends_on_id_pk",
+          "columns": [
+            "service_id",
+            "depends_on_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_dependencies_not_self": {
+          "name": "service_dependencies_not_self",
+          "value": "\"gateway\".\"service_dependencies\".\"service_id\" <> \"gateway\".\"service_dependencies\".\"depends_on_id\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "gateway.services": {
+      "name": "services",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "services_tenant_id_tenants_id_fk": {
+          "name": "services_tenant_id_tenants_id_fk",
+          "tableFrom": "services",
+          "tableTo": "tenants",
+          "schemaTo": "gateway",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "services_tenant_id_name_unique": {
+          "name": "services_tenant_id_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "gateway.tenants": {
+      "name": "tenants",
+      "schema": "gateway",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "webhook_token_sha256": {
+          "name": "webhook_token_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "tenants_name_unique": {
+          "name": "tenants_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
+          ]
+        },
+        "tenants_webhook_token_sha256_unique": {
+          "name": "tenants_webhook_token_sha256_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "webhook_token_sha256"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "gateway.action_kind": {
+      "name": "action_kind",
+      "schema": "gateway",
+      "values": [
+        "rollback_deploy",
+        "restart_service",
+        "scale_service",
+        "disable_feature_flag"
+      ]
+    },
+    "gateway.alert_group_status": {
+      "name": "alert_group_status",
+      "schema": "gateway",
+      "values": [
+        "queued",
+        "running",
+        "awaiting_approval",
+        "resolved",
+        "failed",
+        "cancelled",
+        "queued_not_investigated"
+      ]
+    },
+    "gateway.alert_severity": {
+      "name": "alert_severity",
+      "schema": "gateway",
+      "values": [
+        "critical",
+        "warning",
+        "info"
+      ]
+    },
+    "gateway.alert_status": {
+      "name": "alert_status",
+      "schema": "gateway",
+      "values": [
+        "firing",
+        "resolved"
+      ]
+    },
+    "gateway.decision": {
+      "name": "decision",
+      "schema": "gateway",
+      "values": [
+        "approved",
+        "rejected"
+      ]
+    },
+    "gateway.execution_state": {
+      "name": "execution_state",
+      "schema": "gateway",
+      "values": [
+        "claimed",
+        "succeeded",
+        "failed"
+      ]
+    },
+    "gateway.outbox_queue": {
+      "name": "outbox_queue",
+      "schema": "gateway",
+      "values": [
+        "investigations",
+        "actions"
+      ]
+    },
+    "gateway.step_kind": {
+      "name": "step_kind",
+      "schema": "gateway",
+      "values": [
+        "tool_call",
+        "hypothesis",
+        "action",
+        "report"
+      ]
+    },
+    "gateway.tool_call_status": {
+      "name": "tool_call_status",
+      "schema": "gateway",
+      "values": [
+        "ok",
+        "error",
+        "timeout"
+      ]
+    }
+  },
+  "schemas": {
+    "gateway": "gateway"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

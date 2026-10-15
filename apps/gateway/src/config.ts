@@ -28,6 +28,10 @@ export const loadGatewayConfig = (env?: Env) =>
         INVESTIGATIONS_QUEUE: z.string().min(1).default('investigations.fifo'),
         // Approved actions (ActionApproved) for the executor.
         ACTIONS_QUEUE: z.string().min(1).default('actions.fifo'),
+        // StepRecorded and ReportRecorded from the agent, copied into the mirror tables.
+        AGENT_EVENTS_QUEUE: z.string().min(1).default('agent-events.fifo'),
+        // Agent events the gateway can never store go here at once; `make dlq-replay` returns them.
+        AGENT_EVENTS_DLQ: z.string().min(1).default('agent-events-dlq.fifo'),
         // Requests per minute for each credential, or each client address without one.
         RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
         // Investigations one tenant may start within any 5 minutes; later groups go uninvestigated.

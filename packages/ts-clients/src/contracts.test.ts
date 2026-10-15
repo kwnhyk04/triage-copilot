@@ -6,6 +6,7 @@ import {
   type ActionApprovedV1,
   type ActionProposedV1,
   type Messages,
+  type ReportRecordedV1,
   type StepRecordedV1,
   type StepRecordedV2,
   type StepRecordedV3,
@@ -22,8 +23,11 @@ const examples = Object.entries(schemas).flatMap(([name, schema]) =>
 );
 const [stepV1] = schemas['step-recorded.v1'].examples;
 const [stepV3] = schemas['step-recorded.v3'].examples;
+const [reportV1] = schemas['report-recorded.v1'].examples;
+if (reportV1 === undefined) throw new Error('report-recorded.v1 has no example');
 
 type Rest = GatewayComponents['schemas'];
+type Reported = ReportRecordedV1['report'];
 type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 // Enums copied across REST, messages and GraphQL; `make typecheck` fails here when one drifts.
 const enumsAgree: [
@@ -40,7 +44,9 @@ const enumsAgree: [
   Equal<Rest['InvestigationStatus'], AgentComponents['schemas']['InvestigationStatus']>,
   Equal<Uppercase<Rest['InvestigationStatus']>, GraphQL.InvestigationStatus>,
   Equal<Uppercase<Rest['RootCauseClass']>, GraphQL.RootCauseClass>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Equal<Rest['RootCauseClass'], Reported['hypotheses'][number]['root_cause_class']>,
+  Equal<Rest['ActionKind'], Reported['proposed_actions'][number]['kind']>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 describe('message contracts', () => {
   it.each(examples)('%s example validates', (name, example) => {
@@ -115,6 +121,35 @@ describe('message contracts', () => {
       );
     },
   );
+
+  it('marks ActionProposed v1 unused, since proposals ride in ReportRecorded v1', () => {
+    const [branch] = schemas['action-proposed'].oneOf;
+    expect(branch?.deprecated).toBe(true);
+    expect(branch?.description).toMatch(/Unused/);
+  });
+
+  // The same cases run against the Python models in packages/py-clients/tests/test_contracts.py.
+  it.each([
+    ['an evidence id that names no tool result', { evidence_ids: ['step-4'] }],
+    ['a confidence over 1', { confidence: 1.5 }],
+    ['an unknown root-cause class', { root_cause_class: 'cosmic_rays' }],
+  ])('ReportRecorded v1 rejects %s', (_, change) => {
+    const [hypothesis, ...rest] = reportV1.report.hypotheses;
+    const report = { ...reportV1.report, hypotheses: [{ ...hypothesis, ...change }, ...rest] };
+    expect(() => parseMessage('report-recorded.v1', { ...reportV1, report })).toThrow(
+      /invalid report-recorded.v1/,
+    );
+  });
+
+  it('ReportRecorded v1 rejects proposed actions outside the allowlist or without evidence', () => {
+    const [action] = reportV1.report.proposed_actions;
+    for (const change of [{ kind: 'delete_namespace' }, { evidence_ids: [] }]) {
+      const report = { ...reportV1.report, proposed_actions: [{ ...action, ...change }] };
+      expect(() => parseMessage('report-recorded.v1', { ...reportV1, report })).toThrow(
+        /invalid report-recorded.v1/,
+      );
+    }
+  });
 
   it('keeps enums copied across contracts in sync (asserted by the type checker)', () => {
     expect(enumsAgree.every(Boolean)).toBe(true);

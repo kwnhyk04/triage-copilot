@@ -5,9 +5,11 @@ import type { FastifyInstance } from 'fastify';
 import { connectDb } from './db.ts';
 import { createClaim, createReport, stuckExecutions } from './executions.ts';
 import { buildInternalApp } from './internal.ts';
+import { createAlertContext } from './investigations.ts';
 import { newTenant, scratchDb } from './testing.ts';
 
 const TOKEN = 'executor-token-for-these-tests-000000';
+const AGENT_SERVICE_TOKEN = 'agent-token-for-these-tests-0000000000';
 
 describe('executions against Postgres', () => {
   let scratch: Awaited<ReturnType<typeof scratchDb>>;
@@ -18,9 +20,10 @@ describe('executions against Postgres', () => {
     scratch = await scratchDb();
     db = connectDb(scratch.url);
     internal = buildInternalApp({
-      config: { LOG_LEVEL: 'error', EXECUTOR_SERVICE_TOKEN: TOKEN },
+      config: { LOG_LEVEL: 'error', EXECUTOR_SERVICE_TOKEN: TOKEN, AGENT_SERVICE_TOKEN },
       claim: createClaim(db.sql),
       report: createReport(db.sql),
+      alertContext: createAlertContext(db.sql),
     });
   }, 60_000);
   afterAll(async () => {

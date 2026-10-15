@@ -5,6 +5,7 @@ description = "Scenario engine: metrics, paginated logs and deploy history for s
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.143.0",
+  "google-re2>=1.1.20251105",
   "py-config",
   "py-telemetry",
   "uvicorn>=0.54.0",

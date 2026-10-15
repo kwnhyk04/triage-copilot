@@ -39,6 +39,8 @@ for (const file of (await readdir(messages)).filter((f) => f.endsWith('.schema.j
     await compileFromFile(fileURLToPath(url), {
       bannerComment: '',
       declareExternallyReferenced: !refsOtherFiles,
+      // Plain arrays instead of one tuple per length; ajv still enforces minItems and maxItems.
+      maxItems: -1,
     }),
   );
   names.push(`  ${JSON.stringify(name)}: ${schema.title};`);

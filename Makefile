@@ -5,12 +5,14 @@
 export
 # Only dev-ts (gateway and web) gets the approver key; the Python services, tests and tools never do.
 unexport APPROVER_API_KEY
+# Only the agent gets the model provider keys; tests use fake models and never see them.
+unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	dlq-replay
+	dlq-replay embed-model runbooks smoke
 
 install:
 	pnpm install
@@ -32,6 +34,9 @@ dev-ts: export APPROVER_API_KEY := $(APPROVER_API_KEY)
 dev-ts:
 	pnpm turbo run dev --env-mode=loose
 
+dev-agent: export GEMINI_API_KEY := $(GEMINI_API_KEY)
+dev-agent: export NVIDIA_API_KEY := $(NVIDIA_API_KEY)
+dev-agent: export OPENROUTER_API_KEY := $(OPENROUTER_API_KEY)
 dev-agent:
 	uv run agent --reload
 
@@ -96,10 +101,26 @@ seed:
 	uv run python scripts/seed.py $(SEED_ARGS)
 
 eval:
-	@echo eval: no harness until build step 6, AI pipeline
+	@echo eval: the full eval arrives in step 6b; make smoke runs one scenario
 
-# Replays both failure stores: parked gateway outbox messages (the running gateway sends them),
-# then investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
+# The embedding model for search_runbooks, into FASTEMBED_CACHE_PATH; the only command that
+# downloads it (about 0.5 GB). Everything else loads it offline.
+embed-model:
+	uv run python -m agent.runbooks download
+
+# Embeds runbooks/ into agent.runbook_chunks.
+runbooks:
+	uv run python -m agent.runbooks ingest
+
+# One scenario against the running stack (make dev with AI_ENABLED=true); SCENARIO=bad-deploy.
+SCENARIO ?= bad-deploy
+smoke:
+	uv run python evals/harness/run.py $(SCENARIO)
+
+# Replays every failure store: parked gateway outbox messages (the running gateway sends them),
+# agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then
+# investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
 dlq-replay:
 	pnpm --filter @triage/gateway outbox:replay
+	pnpm --filter @triage/gateway events:replay
 	uv run python -m agent.dlq replay

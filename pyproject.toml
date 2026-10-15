@@ -48,7 +48,7 @@ known-first-party = ["agent", "executor", "sim", "py_clients", "py_config", "py_
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["services", "sim", "packages/py-*", "scripts"]
+include = ["services", "sim", "packages/py-*", "scripts", "evals"]
 # Resolve workspace packages as local source, not as untyped installed libraries.
 extraPaths = [
   "services/agent/src",

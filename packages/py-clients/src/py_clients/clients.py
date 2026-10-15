@@ -147,6 +147,24 @@ class AgentClient(_Client):
         return agent.InvestigationState.model_validate_json(content)
 
 
+class AlertContextClient(_Client):
+    """The gateway's internal listener, read only, authenticated with the agent's service token."""
+
+    def __init__(
+        self,
+        base_url: str,
+        service_token: str,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        transport: httpx2.BaseTransport | None = None,
+    ) -> None:
+        super().__init__(base_url, {"Authorization": f"Bearer {service_token}"}, timeout, transport)
+
+    def get(self, investigation_id: UUID) -> gateway.AlertContext:
+        content = self._send("GET", f"/internal/investigations/{investigation_id}/alerts")
+        return gateway.AlertContext.model_validate_json(content)
+
+
 class ExecutionsClient(_Client):
     """The gateway's internal listener, authenticated with the executor's own service token."""
 

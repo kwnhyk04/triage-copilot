@@ -92,6 +92,33 @@ def test_agent_client_sends_the_service_token() -> None:
     assert seen[0].headers["authorization"] == "Bearer svc-token"
 
 
+def test_alert_context_client_reads_with_the_agent_token() -> None:
+    context = {
+        "investigation_id": str(ID),
+        "group_id": str(ID),
+        "tenant_id": str(ID),
+        "group_key": '{}:{alertname="CheckoutHighErrorRate"}',
+        "window_start": "2026-10-14T12:00:05Z",
+        "severity": "critical",
+        "alert_count": 1,
+        "alerts": [
+            {
+                "fingerprint": "8a0461e5e216f2b5",
+                "labels": {"alertname": "CheckoutHighErrorRate", "service": "checkout"},
+                "starts_at": "2026-10-14T12:00:05Z",
+                "status": "firing",
+            }
+        ],
+    }
+    seen, transport = recorder(httpx2.Response(200, json=context))
+
+    with clients.AlertContextClient("http://gw.test", "agent-token", transport=transport) as client:
+        assert client.get(ID).alerts[0].labels.root["service"] == "checkout"
+
+    assert (seen[0].method, seen[0].url.path) == ("GET", f"/internal/investigations/{ID}/alerts")
+    assert seen[0].headers["authorization"] == "Bearer agent-token"
+
+
 @pytest.mark.parametrize(("status", "created"), [(201, True), (200, False)])
 def test_executions_client_sends_its_token_and_tells_a_new_claim_from_an_earlier_one(
     status: int, created: bool

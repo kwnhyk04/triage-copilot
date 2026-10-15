@@ -55,6 +55,52 @@ const title = ({ labels, group_key }: Row) => {
   return service === undefined ? name : `${name} on ${service}`;
 };
 
+/** An investigation's alert group for the agent's get_alert_context; undefined when unknown. */
+export type GetAlertContext = (
+  investigationId: string,
+) => Promise<Schemas['AlertContext'] | undefined>;
+
+/** The group and its 200 oldest alerts, with how many it holds in all. */
+export const createAlertContext =
+  (sql: Sql): GetAlertContext =>
+  async (investigationId) => {
+    const [group] = await sql<
+      {
+        id: string;
+        tenant_id: string;
+        group_key: string;
+        window_start: Date;
+        severity: Schemas['AlertContext']['severity'];
+        alert_count: number;
+      }[]
+    >`
+      SELECT id, tenant_id, group_key, window_start, severity,
+             (SELECT count(*)::int FROM gateway.alerts a WHERE a.group_id = g.id) AS alert_count
+      FROM gateway.alert_groups g WHERE investigation_id = ${investigationId}`;
+    if (group === undefined) return undefined;
+    const alerts = await sql<
+      {
+        fingerprint: string;
+        labels: Record<string, string>;
+        starts_at: Date;
+        status: Schemas['AlertStatus'];
+      }[]
+    >`
+      SELECT fingerprint, labels, starts_at, status FROM gateway.alerts
+      WHERE group_id = ${group.id}
+      ORDER BY starts_at, created_at, id LIMIT 200`;
+    return {
+      investigation_id: investigationId,
+      group_id: group.id,
+      tenant_id: group.tenant_id,
+      group_key: group.group_key,
+      window_start: group.window_start.toISOString(),
+      severity: group.severity,
+      alert_count: group.alert_count,
+      alerts: alerts.map((alert) => ({ ...alert, starts_at: alert.starts_at.toISOString() })),
+    };
+  };
+
 /** Keyset pagination over investigated alert groups, ordered by (created_at, id) descending. */
 export const createListInvestigations =
   (sql: Sql): ListInvestigations =>

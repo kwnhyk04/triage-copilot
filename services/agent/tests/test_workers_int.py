@@ -7,7 +7,7 @@ import contextlib
 import secrets
 import time
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -16,17 +16,26 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import Engine, create_engine, delete, insert, select, text
+from sqlalchemy import Connection, Engine, create_engine, delete, insert, select, text
 from types_boto3_sqs import SQSClient
 
 from agent.api import add_internal_api
 from agent.consumer import Consumer
 from agent.db import AiUsage, DeadLetter, Investigation, ToolCall
 from agent.dlq import replay_dead_letters, replay_dlq
-from agent.job import MAX_TOOL_CALLS, UTC_TODAY, Job, Outcome, Request, Tool
-from agent.model import Model, ModelTurn, Report, ScriptedModel, ToolRequest
+from agent.job import MAX_TOOL_CALLS, UTC_TODAY, Job, Outcome, Request
+from agent.model import (
+    HypothesisDraft,
+    Model,
+    ModelTurn,
+    Report,
+    ReportDraft,
+    ScriptedModel,
+    ToolRequest,
+    TurnRequest,
+)
 from agent.steps import StepRecordedV2, TokenUsage, record_step, replay
-from py_clients.generated.gateway import Hypothesis, RootCauseClass
+from agent.tools import Tool, ToolContext
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
 
 if TYPE_CHECKING:
@@ -36,26 +45,26 @@ pytestmark = pytest.mark.integration
 
 TENANT = UUID("6f1c2a9e-8b3d-4e5f-9a7b-2c4d6e8f0a1b")
 TOOLS = ("query_metrics", "search_logs", "get_deploys")
-REPORT = Report(
+REPORT = ReportDraft(
     summary="Checkout errors follow the v1.8.0 deploy.",
     hypotheses=[
-        Hypothesis(
-            rank=1,
-            root_cause_class=RootCauseClass.bad_deploy,
-            summary="v1.8.0 broke checkout.",
+        HypothesisDraft(
+            root_cause_class="bad_deploy",
+            service="checkout",
             confidence=0.8,
-            evidence=[],
+            summary="v1.8.0 broke checkout.",
+            evidence_ids=[],
         )
     ],
 )
-SCRIPT: list[ToolRequest | Report] = [
+SCRIPT: list[ToolRequest | ReportDraft] = [
     *(
         ToolRequest(tool=name, args={"service": "checkout"}, reason=f"Run {name}.")
         for name in TOOLS
     ),
     REPORT,
 ]
-ONE_CALL: list[ToolRequest | Report] = [SCRIPT[0], REPORT]
+ONE_CALL: list[ToolRequest | ReportDraft] = [SCRIPT[0], REPORT]
 STEP_SEQS = text(
     "SELECT seq FROM agent.investigation_steps WHERE investigation_id = :id ORDER BY 1"
 )
@@ -70,7 +79,7 @@ class Tools:
 
     def all(self, **behaviors: Callable[[], Awaitable[None]]) -> dict[str, Tool]:
         def make(name: str) -> Tool:
-            async def call(args: dict[str, Any]) -> str:
+            async def call(ctx: ToolContext, args: dict[str, Any]) -> str:
                 self.calls.append(name)
                 if name in behaviors:
                     await behaviors[name]()
@@ -88,18 +97,24 @@ class Counting:
         self.model = model
         self.calls = 0
 
-    async def turn(self, steps: Sequence[StepRecordedV2]) -> ModelTurn:
+    async def turn(self, request: TurnRequest) -> ModelTurn:
         self.calls += 1
-        return await self.model.turn(steps)
+        return await self.model.turn(request)
+
+    def available(self, conn: Connection) -> bool:
+        return True
 
 
 class BrokenModel:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def turn(self, steps: Sequence[StepRecordedV2]) -> ModelTurn:
+    async def turn(self, request: TurnRequest) -> ModelTurn:
         self.calls += 1
         raise RuntimeError("model bug")
+
+    def available(self, conn: Connection) -> bool:
+        return True
 
 
 class CountedJob(Job):
@@ -467,29 +482,21 @@ def test_resumed_investigations_pass_the_budget_but_not_ai_off(engine: Engine) -
     assert [step.kind for _, step in recorded(engine, inv)] == ["tool_call"] * 2 + ["report"]
 
 
-@pytest.mark.parametrize(
-    ("per_turn", "calls", "tokens"),
-    [
-        pytest.param(TokenUsage(input=1_000, output=100), MAX_TOOL_CALLS, 16_500, id="tool-calls"),
-        # 40,000 tokens a turn: under 150,000 after three turns, so a fourth starts.
-        pytest.param(TokenUsage(input=39_000, output=1_000), 4, 160_000, id="tokens"),
-    ],
-)
-def test_the_budget_ends_the_loop_with_a_partial_report(
-    engine: Engine, per_turn: TokenUsage, calls: int, tokens: int
-) -> None:
-    # A model that never reports: without the caps it would run off the end of its script.
-    script: list[ToolRequest | Report] = [
+def test_the_tool_call_cap_ends_the_loop_with_a_partial_report(engine: Engine) -> None:
+    # A model that never reports: without the cap it would run off the end of its script. The
+    # forced final turn finds no report in the script either, so the job writes its own.
+    script: list[ToolRequest | ReportDraft] = [
         ToolRequest(tool=TOOLS[n % 3], args={"service": "checkout"}, reason=f"Look again ({n}).")
         for n in range(MAX_TOOL_CALLS + 5)
     ]
-    model = Counting(ScriptedModel(script, per_turn))
+    model = Counting(ScriptedModel(script, TokenUsage(input=1_000, output=100)))
     tools = Tools()
     request = new_request()
 
     assert asyncio.run(make_job(engine, tools.all(), model).run(request, asyncio.Event())) == "done"
 
-    assert model.calls == len(tools.calls) == calls
+    # 15 tool-call turns, then the forced report turn, which fails without spending tokens.
+    assert (model.calls, len(tools.calls)) == (MAX_TOOL_CALLS + 1, MAX_TOOL_CALLS)
     query = select(
         Investigation.status, Investigation.final_report, Investigation.budget_tokens_used
     )
@@ -498,10 +505,11 @@ def test_the_budget_ends_the_loop_with_a_partial_report(
             query.where(Investigation.id == request.investigation_id)
         ).one()
     report = Report.model_validate(final)
-    assert (found, used, report.partial, report.hypotheses) == ("resolved", tokens, True, [])
-    assert f"after {calls} tool calls and {tokens} model tokens" in report.summary
+    assert (found, used, report.partial, report.hypotheses) == ("resolved", 16_500, True, [])
+    assert f"after {MAX_TOOL_CALLS} tool calls and 16500 model tokens" in report.summary
+    assert report.missing_evidence[0].root.startswith("The investigation stopped early")
     steps = [step.kind for _, step in recorded(engine, request.investigation_id)]
-    assert steps == ["tool_call"] * (2 * calls) + ["report"]
+    assert steps == ["tool_call"] * (2 * MAX_TOOL_CALLS) + ["report"]
 
 
 def test_tenant_cap_parks_investigations_over_it(engine: Engine) -> None:

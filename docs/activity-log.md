@@ -15,6 +15,62 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-15: Independent review of the events consumer and the sim
+
+- Changes:
+  - Two fresh agents reviewed the gateway's agent-events consumer and `sim/`, with repros. Separate agents fixed the high and medium findings.
+  - Gateway:
+    - One message per receive.
+    - Permanent failures quarantined to `agent-events-dlq.fifo` at once; transient ones retried in-process for up to 15 minutes without costing receives.
+    - Tool-call pairing that does not depend on arrival order, and redeliveries that rewrite no row.
+    - Report actions and status only from a newly inserted report; the status update skips the sweeper's locked row.
+    - `events:replay` added to `make dlq-replay`.
+  - Sim:
+    - RE2 for every regex (`google-re2`, user decision; import checked on this PC), with rejected patterns as 400 `bad_data`.
+    - A 2 s per-request time limit and a 250,000-point cap.
+    - The down switch answers before parameter validation.
+    - Out-of-range inputs answer 400; the docs routes are off; `per_minute` is at most 6000.
+  - Agent: `get_dependencies` validates and quotes the service name (path traversal reached `/admin/state`).
+  - todo item for storing Alertmanager annotations; the low findings listed in docs/todo.md.
+- Files: apps/gateway/src (events, events.test, events.int.test, config, main, outbox, cli), apps/gateway/package.json, sim/src/sim (promql, logql, world, main, scenario), sim/tests (test_sim_limits, test_sim_api), sim/pyproject.toml, uv.lock, services/agent/src/agent/tools.py, services/agent/tests/test_llm.py, Makefile, .env.example, README.md, docs/
+- Validation:
+  - `make test` (Turbo forced) and `make test-int` pass, once each after the fixes: TypeScript 84 unit and 33 integration tests, Python 222 unit and 38 integration tests (sim 114).
+  - `make lint`, `typecheck` and `contracts-check` pass.
+  - Sim determinism digests are unchanged, and `(\w+\s*)+timeout` answers in 45 to 167 ms.
+  - Live smoke on bad-deploy (run 2):
+    - Result: `awaiting_approval`, 6 turns, 35,218 tokens, the same root cause and rollback.
+    - Tool latencies: get_alert_context 8 ms, query_metrics 5 ms, query_logs 30 ms, list_deploys 4 ms, propose_action under 1 ms.
+    - The gateway mirrored the report and 11 steps.
+- Outstanding: the low findings in docs/todo.md.
+
+### 2026-10-15: Step 6a, AI core
+
+- Changes:
+  - Provider layer: Gemini (google-genai 2.27.0) and OpenAI-compatible clients. Roles come from env vars: primary `gemini-3.5-flash-lite`, fallback `deepseek-ai/deepseek-v4.1-flash` on NIM, small `gemini-3.1-flash-lite`. A 429 or a spent day falls back outside evals. An RPM and RPD limiter keeps each role under its limits, and `model_calls` records every request. `AI_ENABLED` now defaults to false.
+  - Tools with pydantic arguments, results cited by id:
+    - `get_alert_context` reads the new gateway internal route with the agent's token.
+    - `query_metrics`, `query_logs` (later pages summarized), `list_deploys` and `get_dependencies` read the sim.
+    - `search_runbooks` uses fastembed nomic with task prefixes, over 4 new runbooks.
+    - `propose_action` writes only a pending row.
+  - Agent loop:
+    - It stops at the report, 15 tool calls, 5 minutes or the token reserve, then forces a final report.
+    - 150,000 tokens is a hard cap, enforced by an input bound on every call.
+    - The report is structured, with evidence ids, missing evidence and confidence ceilings enforced in code.
+  - Delivery: ReportRecorded v1 (spec-first, codegen in both languages, contract tests). The agent outbox relays to `agent-events.fifo`, and a gateway consumer fills the mirror tables, pairing tool calls by id. ActionProposed v1 is marked unused in a union file.
+  - Sim: a deterministic scenario engine (Prometheus, Loki-style and deploy APIs, a down switch), plus scenarios bad-deploy and db-pool-exhaustion. The sim and the gateway side were built by forked agents and checked through their tests and the live smoke run, not line by line.
+  - Harness runner `evals/harness/run.py` (`make smoke`) and Makefile targets `embed-model` and `runbooks`. Provider keys are unexported except for `dev-agent`.
+- Files: contracts/ (report-recorded.v1, action-proposed union, gateway.yaml 0.4.0), packages/ts-clients (codegen, contract tests), packages/py-clients (AlertContextClient, tests), services/agent (0007, db, settings, model, providers, llm, prompt, tools, runbooks, outbox, job, main, tests), apps/gateway (0004, schema, events, internal, investigations, config, main, tests), sim/, evals/scenarios, evals/harness/run.py, runbooks/, infra/elasticmq.conf, Makefile, pyproject.toml, uv.lock, .env.example, README.md, docs/
+- Validation:
+  - `make test` (Turbo forced) and `make test-int` passed three runs in a row: Python 189 unit and 38 integration tests; TypeScript 83 unit and 27 integration tests.
+  - `make lint`, `typecheck`, `contracts-check` and `contracts-breaking` pass.
+  - The hard-cap, degraded-tool and pagination tests pass.
+  - Live smoke with `AI_ENABLED=true` on bad-deploy:
+    - Result: `awaiting_approval` after 6 Gemini turns and 35,090 tokens, every turn's input under its bound.
+    - Report: `bad_deploy` on checkout at 0.95, with a rollback to v1.7.3 proposed.
+    - The gateway mirrored the report and 11 steps.
+  - Live probe: deepseek-v4.1-flash answered with a tool call. nemotron-3-super gave none, kimi-k3 is end of life, glm-5.3 timed out.
+- Outstanding: docs/todo.md (6b, `FASTEMBED_CACHE_PATH` in `.env`, AI Studio limits, ActionProposed v1, outbox replay, alert annotations).
+
 ### 2026-10-15: Step 5 tests
 
 - Changes:

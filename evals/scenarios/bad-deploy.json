@@ -1,0 +1,239 @@
+{
+  "id": "bad-deploy",
+  "title": "checkout v1.8.0 throws on bundle carts and raises the 5xx ratio",
+  "seed": 1801,
+  "alert": {
+    "labels": {
+      "alertname": "CheckoutHighErrorRate",
+      "service": "checkout",
+      "severity": "critical"
+    },
+    "annotations": {
+      "summary": "checkout 5xx ratio above 5% for 2 minutes",
+      "description": "http_error_ratio{service=\"checkout\"} > 0.05 for 2m"
+    }
+  },
+  "services": {
+    "frontend": { "depends_on": ["checkout", "catalog"] },
+    "checkout": { "depends_on": ["payments", "orders-db", "catalog"] },
+    "payments": {},
+    "catalog": {},
+    "orders-db": {}
+  },
+  "deploys": [
+    {
+      "service": "checkout",
+      "version": "v1.8.0",
+      "previous_version": "v1.7.3",
+      "at": "-6m",
+      "author": "ci-bot",
+      "change": "Rework cart total calculation for bundle discounts (PR #4812)"
+    },
+    {
+      "service": "frontend",
+      "version": "v2.3.1",
+      "previous_version": "v2.3.0",
+      "at": "-50m",
+      "author": "ana.lopez",
+      "change": "Update header copy and footer links"
+    }
+  ],
+  "background_deploys_days": 7,
+  "metrics": [
+    {
+      "name": "http_requests_per_second",
+      "labels": { "service": "checkout" },
+      "base": 120,
+      "noise": 6
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "checkout" },
+      "base": 0.002,
+      "noise": 0.0005,
+      "changes": [{ "at": "-5m", "value": 0.14, "ramp": "1m" }]
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "checkout" },
+      "base": 0.28,
+      "noise": 0.02,
+      "changes": [{ "at": "-5m", "value": 0.65, "ramp": "1m" }]
+    },
+    {
+      "name": "cpu_usage_ratio",
+      "labels": { "service": "checkout" },
+      "base": 0.42,
+      "noise": 0.03
+    },
+    {
+      "name": "memory_usage_ratio",
+      "labels": { "service": "checkout" },
+      "base": 0.55,
+      "noise": 0.02
+    },
+    {
+      "name": "db_pool_in_use",
+      "labels": { "service": "checkout" },
+      "base": 12,
+      "noise": 2
+    },
+    {
+      "name": "db_pool_max",
+      "labels": { "service": "checkout" },
+      "base": 50
+    },
+    {
+      "name": "http_requests_per_second",
+      "labels": { "service": "frontend" },
+      "base": 300,
+      "noise": 12
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "frontend" },
+      "base": 0.003,
+      "noise": 0.0008,
+      "changes": [{ "at": "-5m", "value": 0.05, "ramp": "1m" }]
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "frontend" },
+      "base": 0.35,
+      "noise": 0.03
+    },
+    {
+      "name": "http_requests_per_second",
+      "labels": { "service": "payments" },
+      "base": 80,
+      "noise": 4
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "payments" },
+      "base": 0.001,
+      "noise": 0.0003
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "payments" },
+      "base": 0.18,
+      "noise": 0.015,
+      "changes": [{ "at": "-14m", "value": 0.62, "ramp": "30s", "until": "-10m" }]
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "catalog" },
+      "base": 0.001,
+      "noise": 0.0003
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "catalog" },
+      "base": 0.09,
+      "noise": 0.01
+    },
+    {
+      "name": "cache_hit_ratio",
+      "labels": { "service": "catalog" },
+      "base": 0.93,
+      "noise": 0.01
+    },
+    {
+      "name": "db_connections",
+      "labels": { "service": "orders-db" },
+      "base": 42,
+      "noise": 3
+    },
+    {
+      "name": "db_lock_wait_seconds",
+      "labels": { "service": "orders-db" },
+      "base": 0.004,
+      "noise": 0.002
+    },
+    {
+      "name": "db_slow_queries_per_second",
+      "labels": { "service": "orders-db" },
+      "base": 0.2,
+      "noise": 0.1
+    }
+  ],
+  "logs": [
+    {
+      "labels": { "service": "checkout", "level": "info" },
+      "per_minute": 30,
+      "lines": [
+        "GET /cart 200 {ms}ms request_id={rid}",
+        "GET /cart/total 200 {ms}ms request_id={rid}",
+        "POST /checkout 200 {ms}ms request_id={rid}"
+      ]
+    },
+    {
+      "labels": { "service": "checkout", "level": "info" },
+      "per_minute": 2,
+      "from": "-6m",
+      "to": "-5m",
+      "lines": ["Rolling update: pod checkout-{rid} started version=v1.8.0"]
+    },
+    {
+      "labels": { "service": "checkout", "level": "error" },
+      "per_minute": 40,
+      "from": "-5m",
+      "lines": [
+        "java.lang.NullPointerException: Cannot invoke \"BundlePrice.amount()\" because \"line.bundle\" is null at CartTotal.compute(CartTotal.java:88) version=v1.8.0 request_id={rid}",
+        "POST /checkout 500 {ms}ms version=v1.8.0 request_id={rid}",
+        "GET /cart/total 500 {ms}ms version=v1.8.0 request_id={rid}"
+      ]
+    },
+    {
+      "labels": { "service": "frontend", "level": "info" },
+      "per_minute": 30,
+      "lines": ["GET / 200 {ms}ms", "GET /product/{n} 200 {ms}ms", "GET /cart 200 {ms}ms"]
+    },
+    {
+      "labels": { "service": "frontend", "level": "info" },
+      "per_minute": 2,
+      "from": "-50m",
+      "to": "-49m",
+      "lines": ["Rolling update: pod frontend-{rid} started version=v2.3.1"]
+    },
+    {
+      "labels": { "service": "frontend", "level": "error" },
+      "per_minute": 15,
+      "from": "-5m",
+      "lines": ["upstream checkout returned 500 for POST /checkout request_id={rid}"]
+    },
+    {
+      "labels": { "service": "payments", "level": "info" },
+      "per_minute": 20,
+      "lines": ["POST /charge 200 {ms}ms", "POST /refund 200 {ms}ms"]
+    },
+    {
+      "labels": { "service": "payments", "level": "warn" },
+      "per_minute": 6,
+      "from": "-14m",
+      "to": "-10m",
+      "lines": ["slow upstream response from card-network latency_ms={ms}"]
+    },
+    {
+      "labels": { "service": "orders-db", "level": "info" },
+      "per_minute": 4,
+      "lines": ["checkpoint complete: wrote {n} buffers"]
+    }
+  ],
+  "expected": {
+    "root_cause_class": "bad_deploy",
+    "service": "checkout",
+    "allowed_actions": [
+      {
+        "kind": "rollback_deploy",
+        "target": "checkout",
+        "parameters": { "to_version": "v1.7.3" }
+      }
+    ],
+    "red_herrings": [
+      "frontend v2.3.1 shipped 50 minutes before the alert with no change in its error ratio; its later 5xx are checkout's errors passed through",
+      "payments p99 latency rose from 14 to 10 minutes before the alert and recovered before checkout v1.8.0 shipped"
+    ]
+  }
+}

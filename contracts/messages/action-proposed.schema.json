@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActionProposed",
+  "description": "Every ActionProposed version a consumer must accept. No producer emits it: since step 6a the agent's proposals reach the gateway inside ReportRecorded v1. Remove it in a contract step, or use it again, as docs/todo.md tracks.",
+  "oneOf": [
+    {
+      "$ref": "action-proposed.v1.schema.json",
+      "deprecated": true,
+      "description": "Unused: proposals ride in ReportRecorded v1. The released v1 file stays unchanged."
+    }
+  ]
+}

@@ -25,15 +25,15 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from pydantic import SecretStr
-from sqlalchemy import Engine, create_engine, delete, insert, select
+from sqlalchemy import Connection, Engine, create_engine, delete, insert, select
 from test_workers_int import REPORT, agent, depth, eventually, make_consumer, make_job
 from types_boto3_sqs import SQSClient
 
 from agent.api import add_internal_api
 from agent.db import AiUsage, DeadLetter, Investigation
 from agent.job import UTC_TODAY, Job
-from agent.model import ModelTurn, ScriptedModel
-from agent.steps import StepRecordedV2, TokenUsage
+from agent.model import ModelTurn, ScriptedModel, TurnRequest
+from agent.steps import TokenUsage
 from py_clients.clients import AlertsClient
 from py_clients.generated.gateway import AlertmanagerWebhook
 
@@ -56,9 +56,12 @@ class Slow:
         self.seconds = seconds
         self.model = ScriptedModel([REPORT], tokens)
 
-    async def turn(self, steps: Sequence[StepRecordedV2]) -> ModelTurn:
+    async def turn(self, request: TurnRequest) -> ModelTurn:
         await asyncio.sleep(self.seconds)
-        return await self.model.turn(steps)
+        return await self.model.turn(request)
+
+    def available(self, conn: Connection) -> bool:
+        return True
 
 
 def free_port() -> int:
@@ -107,6 +110,8 @@ def gateway(queue_url: str, agent_url: str, internal_port: int | None = None) ->
         "GATEWAY_INTERNAL_PORT": str(internal_port or free_port()),
         "INVESTIGATIONS_QUEUE": queue_url.rsplit("/", 1)[1],
         "ACTIONS_QUEUE": "actions-unused-by-these-tests.fifo",
+        # Never the dev queue: these agents publish no events, and the dev gateway owns those.
+        "AGENT_EVENTS_QUEUE": "agent-events-unused-by-these-tests.fifo",
         "AGENT_URL": agent_url,
         "AGENT_SERVICE_TOKEN": SERVICE_TOKEN,
         "EXECUTOR_SERVICE_TOKEN": EXECUTOR_TOKEN,

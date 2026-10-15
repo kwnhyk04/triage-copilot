@@ -29,6 +29,11 @@ export interface ActionApprovedV1 {
 }
 
 /**
+ * Every ActionProposed version a consumer must accept. No producer emits it: since step 6a the agent's proposals reach the gateway inside ReportRecorded v1. Remove it in a contract step, or use it again, as docs/todo.md tracks.
+ */
+export type ActionProposed = ActionProposedV1;
+
+/**
  * Agent to gateway: a remediation the agent proposes. Nothing runs until a human approves it.
  */
 export interface ActionProposedV1 {
@@ -77,6 +82,92 @@ export interface InvestigationRequestedV2 {
   tenant_id: string;
   group_key: string;
   requested_at: string;
+}
+
+/**
+ * Id of a tool result, as StepRecorded's tool_call_id.
+ */
+export type ToolCallId = string;
+
+/**
+ * Agent to gateway on agent-events.fifo: an investigation's final report, sent once after the transaction that stored it. MessageGroupId is the investigation id, so it arrives after every StepRecorded of its investigation; MessageDeduplicationId is report-<investigation_id>. The report carries the actions the agent proposed: none runs until a human approves it.
+ */
+export interface ReportRecordedV1 {
+  schema_version: 1;
+  investigation_id: string;
+  /**
+   * awaiting_approval when the report proposes actions, resolved otherwise.
+   */
+  status: "resolved" | "awaiting_approval";
+  report: Report;
+  recorded_at: string;
+}
+export interface Report {
+  summary: string;
+  /**
+   * Best first.
+   *
+   * @maxItems 5
+   */
+  hypotheses: Hypothesis[];
+  /**
+   * What the investigation could not check, such as a tool that failed.
+   *
+   * @maxItems 20
+   */
+  missing_evidence: string[];
+  /**
+   * @maxItems 10
+   */
+  proposed_actions: ProposedAction[];
+  /**
+   * True when the investigation stopped at a budget before the model chose to report.
+   */
+  partial: boolean;
+}
+export interface Hypothesis {
+  root_cause_class:
+    | "bad_deploy"
+    | "config_change"
+    | "dependency_failure"
+    | "resource_exhaustion"
+    | "traffic_surge"
+    | "database"
+    | "infrastructure"
+    | "certificate_expiry"
+    | "unknown";
+  service: string;
+  confidence: number;
+  summary: string;
+  /**
+   * Ids of the tool results that support the hypothesis.
+   *
+   * @maxItems 20
+   */
+  evidence_ids: ToolCallId[];
+}
+export interface ProposedAction {
+  action_id: string;
+  /**
+   * Allowlisted action kinds; any other kind fails validation.
+   */
+  kind: "rollback_deploy" | "restart_service" | "scale_service" | "disable_feature_flag";
+  /**
+   * Service the action applies to.
+   */
+  target: string;
+  /**
+   * Kind-specific arguments, for example {"to_version": "v1.7.3"}.
+   */
+  parameters: {
+    [k: string]: string | number | boolean;
+  };
+  rationale: string;
+  /**
+   * @minItems 1
+   * @maxItems 20
+   */
+  evidence_ids: [ToolCallId, ...ToolCallId[]];
 }
 
 /**
@@ -183,10 +274,12 @@ export interface StepRecordedV3 {
 
 export interface Messages {
   "action-approved.v1": ActionApprovedV1;
+  "action-proposed": ActionProposed;
   "action-proposed.v1": ActionProposedV1;
   "investigation-requested": InvestigationRequested;
   "investigation-requested.v1": InvestigationRequestedV1;
   "investigation-requested.v2": InvestigationRequestedV2;
+  "report-recorded.v1": ReportRecordedV1;
   "step-recorded": StepRecorded;
   "step-recorded.v1": StepRecordedV1;
   "step-recorded.v2": StepRecordedV2;
@@ -273,6 +366,18 @@ export const schemas = {
         },
         "approved_by": "oncall@example.com",
         "approved_at": "2026-10-14T12:03:12Z"
+      }
+    ]
+  },
+  "action-proposed": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ActionProposed",
+    "description": "Every ActionProposed version a consumer must accept. No producer emits it: since step 6a the agent's proposals reach the gateway inside ReportRecorded v1. Remove it in a contract step, or use it again, as docs/todo.md tracks.",
+    "oneOf": [
+      {
+        "$ref": "action-proposed.v1.schema.json",
+        "deprecated": true,
+        "description": "Unused: proposals ride in ReportRecorded v1. The released v1 file stays unchanged."
       }
     ]
   },
@@ -451,6 +556,272 @@ export const schemas = {
         "tenant_id": "6f1c2a9e-8b3d-4e5f-9a7b-2c4d6e8f0a1b",
         "group_key": "{}:{alertname=\"CheckoutHighErrorRate\"}",
         "requested_at": "2026-10-14T12:00:05Z"
+      }
+    ]
+  },
+  "report-recorded.v1": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReportRecordedV1",
+    "description": "Agent to gateway on agent-events.fifo: an investigation's final report, sent once after the transaction that stored it. MessageGroupId is the investigation id, so it arrives after every StepRecorded of its investigation; MessageDeduplicationId is report-<investigation_id>. The report carries the actions the agent proposed: none runs until a human approves it.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "investigation_id",
+      "status",
+      "report",
+      "recorded_at"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": 1
+      },
+      "investigation_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "resolved",
+          "awaiting_approval"
+        ],
+        "description": "awaiting_approval when the report proposes actions, resolved otherwise."
+      },
+      "report": {
+        "$ref": "#/$defs/Report"
+      },
+      "recorded_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "$defs": {
+      "Report": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "summary",
+          "hypotheses",
+          "missing_evidence",
+          "proposed_actions",
+          "partial"
+        ],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "hypotheses": {
+            "type": "array",
+            "maxItems": 5,
+            "description": "Best first.",
+            "items": {
+              "$ref": "#/$defs/Hypothesis"
+            }
+          },
+          "missing_evidence": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "What the investigation could not check, such as a tool that failed.",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "proposed_actions": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/$defs/ProposedAction"
+            }
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "True when the investigation stopped at a budget before the model chose to report."
+          }
+        }
+      },
+      "Hypothesis": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "root_cause_class",
+          "service",
+          "confidence",
+          "summary",
+          "evidence_ids"
+        ],
+        "properties": {
+          "root_cause_class": {
+            "type": "string",
+            "enum": [
+              "bad_deploy",
+              "config_change",
+              "dependency_failure",
+              "resource_exhaustion",
+              "traffic_surge",
+              "database",
+              "infrastructure",
+              "certificate_expiry",
+              "unknown"
+            ]
+          },
+          "service": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "Ids of the tool results that support the hypothesis.",
+            "items": {
+              "$ref": "#/$defs/ToolCallId"
+            }
+          }
+        }
+      },
+      "ProposedAction": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "kind",
+          "target",
+          "parameters",
+          "rationale",
+          "evidence_ids"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rollback_deploy",
+              "restart_service",
+              "scale_service",
+              "disable_feature_flag"
+            ],
+            "description": "Allowlisted action kinds; any other kind fails validation."
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Service the action applies to."
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Kind-specific arguments, for example {\"to_version\": \"v1.7.3\"}."
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/$defs/ToolCallId"
+            }
+          }
+        }
+      },
+      "ToolCallId": {
+        "type": "string",
+        "pattern": "^tc_[0-9A-HJKMNP-TV-Z]{10}$",
+        "description": "Id of a tool result, as StepRecorded's tool_call_id."
+      }
+    },
+    "examples": [
+      {
+        "schema_version": 1,
+        "investigation_id": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "status": "awaiting_approval",
+        "report": {
+          "summary": "checkout v1.8.0 raised the 5xx rate from 0.2% to 14% two minutes after it shipped.",
+          "hypotheses": [
+            {
+              "root_cause_class": "bad_deploy",
+              "service": "checkout",
+              "confidence": 0.85,
+              "summary": "Errors began right after checkout v1.8.0 and every failing request ran it.",
+              "evidence_ids": [
+                "tc_01J9ZK3Q7M",
+                "tc_01J9ZK4B2X"
+              ]
+            },
+            {
+              "root_cause_class": "dependency_failure",
+              "service": "payments",
+              "confidence": 0.1,
+              "summary": "A payments latency blip at the same time, already over before the errors began.",
+              "evidence_ids": [
+                "tc_01J9ZK3Q7M"
+              ]
+            }
+          ],
+          "missing_evidence": [
+            "query_logs failed for payments: the log backend timed out."
+          ],
+          "proposed_actions": [
+            {
+              "action_id": "9f8b6c1e-3d2a-4f5b-8e7d-6c5b4a392817",
+              "kind": "rollback_deploy",
+              "target": "checkout",
+              "parameters": {
+                "to_version": "v1.7.3"
+              },
+              "rationale": "Roll back to the version that ran before the errors began.",
+              "evidence_ids": [
+                "tc_01J9ZK4B2X"
+              ]
+            }
+          ],
+          "partial": false
+        },
+        "recorded_at": "2026-10-14T12:02:10Z"
+      },
+      {
+        "schema_version": 1,
+        "investigation_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "status": "resolved",
+        "report": {
+          "summary": "Stopped at the investigation budget after 15 tool calls; the findings are incomplete.",
+          "hypotheses": [],
+          "missing_evidence": [
+            "The investigation stopped at its tool call budget."
+          ],
+          "proposed_actions": [],
+          "partial": true
+        },
+        "recorded_at": "2026-10-14T12:05:00Z"
       }
     ]
   },

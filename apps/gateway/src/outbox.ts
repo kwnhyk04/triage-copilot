@@ -1,12 +1,24 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { GetQueueUrlCommand, SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import { GetQueueUrlCommand, SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Sql } from 'postgres';
 
 /** Failed sends after which a message is parked (failed_at) until `pnpm outbox:replay`. */
 export const MAX_ATTEMPTS = 10;
 const BATCH = 10;
+
+/** An SQS client bounded like every external call: 3 s to connect, two attempts, requestTimeout. */
+export const sqsClient = (
+  config: { AWS_REGION: string; SQS_ENDPOINT_URL?: string | undefined },
+  requestTimeout: number,
+) =>
+  new SQSClient({
+    region: config.AWS_REGION,
+    ...(config.SQS_ENDPOINT_URL === undefined ? {} : { endpoint: config.SQS_ENDPOINT_URL }),
+    maxAttempts: 2,
+    requestHandler: { connectionTimeout: 3000, requestTimeout },
+  });
 
 export type Queue = 'investigations' | 'actions';
 export interface OutboxMessage {

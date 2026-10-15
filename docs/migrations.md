@@ -2,6 +2,21 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-15: AI pipeline (agent 0007, gateway 0004, gateway API 0.4.0, ReportRecorded v1)
+
+Expand only: nothing is dropped or rewritten.
+
+- Agent 0007 (`lock_timeout` 3 s):
+  - `model_calls`: every request to a model provider (role, model, outcome, input, output, cached and thinking tokens, the input bound, latency). Enums `agent.model_role` and `agent.model_call_outcome`. Indexes on `investigation_id` and `(model, created_at)`; the limiter counts a model's requests since midnight Pacific.
+  - `outbox`: StepRecorded and ReportRecorded events for the gateway, committed with their step; a partial index on `next_attempt_at` where `failed_at` is null.
+  - Nullable `investigations.started_at` (the 5-minute limit counts from it) and `tool_calls.provider_state` (Gemini thought signatures); `proposed_actions.evidence_ids jsonb NOT NULL DEFAULT '[]'` (a constant default rewrites no rows).
+  - The downgrade drops them all; unsent outbox rows are lost, so let the relay drain first.
+- `investigations.final_report` holds a new shape: ReportRecorded v1's `report` (summary, hypotheses with `service` and `evidence_ids`, `missing_evidence`, `proposed_actions`, `partial`). Older rows, from the seed and the step 4 placeholder, keep the gateway API's hypothesis shape; nothing reads them. `make seed SEED_ARGS=--reset` rewrites the dev data.
+- Gateway `0004_agent_events.sql` (drizzle-kit, `lock_timeout` set by hand): enums `gateway.step_kind` and `gateway.tool_call_status`; `investigation_steps` (key `(investigation_id, seq)`, index `(investigation_id, tool_call_id)`, `tool_status` and `duration_ms` paired from the result step) and `investigation_reports` (one per investigation, status `resolved` or `awaiting_approval`). Both reference `alert_groups.investigation_id` with cascading foreign keys, added after the tables; the constraint names are set by hand (over 63 characters otherwise).
+- Gateway API 0.4.0: `GET /internal/investigations/{id}/alerts` on the internal listener, `agentToken` scheme. oasdiff: no breaking change.
+- Messages: `report-recorded.v1.schema.json` (new). `action-proposed.schema.json` (new union) marks ActionProposed v1 deprecated and unused, since released versions stay byte-identical. Codegen for json-schema-to-typescript now passes `maxItems: -1`, so limited arrays stay plain arrays (ajv still checks the limits); no existing message had array limits.
+- Queues: `agent-events.fifo` and `agent-events-dlq.fifo` in `infra/elasticmq.conf`; restart the elasticmq service to create them.
+
 ## 2026-10-15: Decisions, executions and the API key (gateway 0003, gateway API 0.3.0, agent 0001 lock_timeout)
 
 Expand only: nothing is dropped or rewritten.

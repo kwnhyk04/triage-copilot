@@ -10,10 +10,12 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Identity,
+    Index,
     MetaData,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -75,6 +77,8 @@ class Investigation(Base):
         Enum("tenant_cap", "budget", name="wait_reason")
     )
     waiting_since: Mapped[datetime | None]
+    # When the investigation first took a slot; its 5-minute wall clock counts from here.
+    started_at: Mapped[datetime | None]
 
 
 class InvestigationStep(Base):
@@ -109,6 +113,8 @@ class ToolCall(Base):
     latency_ms: Mapped[int | None]
     error: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Opaque provider data the model must get back with this call, such as a thought signature.
+    provider_state: Mapped[str | None]
 
 
 class RunbookChunk(Base):
@@ -150,6 +156,8 @@ class ProposedAction(Base):
         Enum("pending", "approved", "rejected", name="action_status"), server_default="pending"
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Ids of the tool results the proposal rests on.
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
 
 
 class DeadLetter(Base):
@@ -174,3 +182,52 @@ class AiUsage(Base):
 
     day: Mapped[date] = mapped_column(primary_key=True)
     tokens: Mapped[int] = mapped_column(BigInteger, server_default="0")
+
+
+class ModelCall(Base):
+    """Every request to a model provider: the limiter counts them, and evals read their usage."""
+
+    __tablename__ = "model_calls"
+    __table_args__ = (Index(None, "model", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    investigation_id: Mapped[UUID] = mapped_column(
+        ForeignKey(Investigation.id, ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(Enum("primary", "fallback", "small", name="model_role"))
+    provider: Mapped[str]
+    model: Mapped[str]
+    outcome: Mapped[str] = mapped_column(
+        Enum("ok", "rate_limited", "quota_exhausted", "error", name="model_call_outcome")
+    )
+    input_tokens: Mapped[int]
+    # Thinking tokens included: they are billed as output.
+    output_tokens: Mapped[int]
+    cached_tokens: Mapped[int]
+    thought_tokens: Mapped[int]
+    # The hard cap's upper bound on input_tokens, kept to check that it held.
+    input_bound: Mapped[int | None]
+    max_output_tokens: Mapped[int | None]
+    latency_ms: Mapped[int]
+    error: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Outbox(Base):
+    """Events committed with the rows that caused them; the relay sends them to the gateway."""
+
+    __tablename__ = "outbox"
+    __table_args__ = (Index(None, "next_attempt_at", postgresql_where=text("failed_at IS NULL")),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    # The SQS message attribute message_type: step-recorded or report-recorded.
+    message_type: Mapped[str]
+    group_id: Mapped[str]
+    deduplication_id: Mapped[str]
+    body: Mapped[dict[str, Any]]
+    attempts: Mapped[int] = mapped_column(server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    last_error: Mapped[str | None]
+    # Set after too many failed sends; such rows wait for a human.
+    failed_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

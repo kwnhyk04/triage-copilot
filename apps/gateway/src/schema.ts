@@ -1,4 +1,8 @@
-import type { ActionApprovedV1, InvestigationRequestedV2 } from '@triage/ts-clients/messages';
+import type {
+  ActionApprovedV1,
+  InvestigationRequestedV2,
+  ReportRecordedV1,
+} from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -41,6 +45,9 @@ export const decision = gateway.enum('decision', ['approved', 'rejected']);
 // The queue each outbox message goes to (INVESTIGATIONS_QUEUE or ACTIONS_QUEUE).
 export const outboxQueue = gateway.enum('outbox_queue', ['investigations', 'actions']);
 export const executionState = gateway.enum('execution_state', ['claimed', 'succeeded', 'failed']);
+// The API's StepKind and ToolCallStatus, for the steps the agent reports.
+export const stepKind = gateway.enum('step_kind', ['tool_call', 'hypothesis', 'action', 'report']);
+export const toolCallStatus = gateway.enum('tool_call_status', ['ok', 'error', 'timeout']);
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
 const createdAt = () => timestamptz('created_at').notNull().defaultNow();
@@ -175,6 +182,61 @@ export const proposedActions = gateway.table(
       columns: [t.investigationId],
       foreignColumns: [alertGroups.investigationId],
     }),
+  ],
+);
+
+// Copy of the agent's StepRecorded messages (src/events.ts). A tool call is two steps, the model's
+// request and the tool's result; the result fills tool_status and duration_ms on both.
+export const investigationSteps = gateway.table(
+  'investigation_steps',
+  {
+    investigationId: uuid('investigation_id').notNull(),
+    seq: integer('seq').notNull(),
+    kind: stepKind('kind').notNull(),
+    summary: text('summary').notNull(),
+    toolName: text('tool_name'),
+    toolCallId: text('tool_call_id'),
+    result: text('result'),
+    latencyMs: integer('latency_ms'),
+    tokensInput: integer('tokens_input'),
+    tokensOutput: integer('tokens_output'),
+    toolStatus: toolCallStatus('tool_status'),
+    durationMs: integer('duration_ms'),
+    recordedAt: timestamptz('recorded_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.investigationId, t.seq] }),
+    index('investigation_steps_tool_call_idx').on(t.investigationId, t.toolCallId),
+    // Named by hand: the generated name is over Postgres's 63-character limit.
+    foreignKey({
+      name: 'investigation_steps_investigation_id_fk',
+      columns: [t.investigationId],
+      foreignColumns: [alertGroups.investigationId],
+    }).onDelete('cascade'),
+  ],
+);
+
+// The agent's final report (ReportRecorded); its proposed actions go to proposed_actions.
+export const investigationReports = gateway.table(
+  'investigation_reports',
+  {
+    investigationId: uuid('investigation_id').primaryKey(),
+    status: alertGroupStatus('status').notNull(),
+    report: jsonb('report').$type<ReportRecordedV1['report']>().notNull(),
+    recordedAt: timestamptz('recorded_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check(
+      'investigation_reports_status_final',
+      sql`${t.status} in ('resolved', 'awaiting_approval')`,
+    ),
+    foreignKey({
+      name: 'investigation_reports_investigation_id_fk',
+      columns: [t.investigationId],
+      foreignColumns: [alertGroups.investigationId],
+    }).onDelete('cascade'),
   ],
 );
 

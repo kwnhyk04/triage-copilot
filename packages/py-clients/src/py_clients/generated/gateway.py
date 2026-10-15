@@ -38,6 +38,12 @@ class AlertStatus(StrEnum):
     resolved = "resolved"
 
 
+class Severity(StrEnum):
+    critical = "critical"
+    warning = "warning"
+    info = "info"
+
+
 class Labels(RootModel[dict[str, str]]):
     """
     String map, used for labels and annotations.
@@ -220,6 +226,15 @@ class Alert(BaseModel):
     ]
 
 
+class StoredAlert(BaseModel):
+    fingerprint: Annotated[
+        str, Field(description="The fingerprint the gateway computed from the labels.")
+    ]
+    labels: Labels
+    starts_at: AwareDatetime
+    status: AlertStatus
+
+
 class InvestigationPage(BaseModel):
     items: list[InvestigationSummary]
     next_cursor: Annotated[
@@ -287,6 +302,25 @@ class AlertmanagerWebhook(BaseModel):
             min_length=1,
         ),
     ]
+
+
+class AlertContext(BaseModel):
+    """
+    An investigation's alert group as the gateway stored it.
+    """
+
+    investigation_id: UUID
+    group_id: UUID
+    tenant_id: UUID
+    group_key: Annotated[str, Field(description="Alertmanager's groupKey.")]
+    window_start: Annotated[
+        AwareDatetime, Field(description="When the group's 5-minute grouping window opened.")
+    ]
+    severity: Severity
+    alert_count: Annotated[
+        int, Field(description="Alerts the group holds; alerts lists at most 200 of them.", ge=0)
+    ]
+    alerts: Annotated[list[StoredAlert], Field(description="Oldest first, at most 200.")]
 
 
 class Step(BaseModel):

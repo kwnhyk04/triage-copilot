@@ -5,26 +5,48 @@ import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import httpx2
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, text
+from sqlalchemy import Engine, create_engine, text
 
 from agent.api import add_internal_api
 from agent.consumer import Consumer, sqs_client
 from agent.job import Job
-from agent.model import Report, ScriptedModel
+from agent.llm import Binding, Limiter, Router, calls_today
+from agent.model import Model, ScriptedModel
+from agent.outbox import Relay, sqs_sender
 from agent.partitions import maintain_partitions
+from agent.providers import make_provider
+from agent.runbooks import FastEmbedder, RunbookSearch
 from agent.settings import Settings
+from agent.tools import Tools
+from py_clients.clients import AlertContextClient
 from py_config import ConfigError, load_settings
 from py_telemetry import configure_logging, instrument
 
 log = logging.getLogger(__name__)
 
-# Until build step 6 adds the model providers and tools, each investigation ends with this report.
-PLACEHOLDER = Report(
-    summary="Not investigated: the AI pipeline arrives in build step 6.", hypotheses=[]
-)
+# Every request to the sim; a tool's own timeout bounds its retries on top.
+SIM_TIMEOUT = 10.0
+
+
+def make_router(settings: Settings, engine: Engine) -> Router:
+    """The primary, fallback and small roles, each under its own free-tier limits."""
+
+    def count_today(model: str) -> int:
+        with engine.connect() as conn:
+            return calls_today(conn, model)
+
+    primary, fallback, small = (settings.role(n) for n in ("primary", "fallback", "small"))
+    return Router(
+        Binding(primary, make_provider(primary)),
+        Binding(fallback, make_provider(fallback)),
+        Binding(small, make_provider(small)),
+        fallback_on_rate_limit=settings.llm_fallback_on_rate_limit,
+        limiter=Limiter(count_today),
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,19 +55,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_engine(
         settings.agent_database_url,
         pool_pre_ping=True,
-        # Every job in flight holds one session for its whole run.
-        pool_size=settings.agent_max_in_flight + 2,
+        # Every job in flight holds one session for its whole run, and the relay needs one more.
+        pool_size=settings.agent_max_in_flight + 3,
         connect_args={"connect_timeout": 5, "options": "-c statement_timeout=5000"},
     )
     sqs = sqs_client(settings)
+    relay = Relay(engine, sqs_sender(sqs, settings.agent_events_queue))
+    # With AI_ENABLED=false every investigation parks before its first model turn, so this
+    # placeholder is never asked for one.
+    model: Model = make_router(settings, engine) if settings.ai_enabled else ScriptedModel([])
+    sim = httpx2.AsyncClient(base_url=settings.sim_url, timeout=SIM_TIMEOUT)
+    token = settings.agent_service_token.get_secret_value()
+    alerts = AlertContextClient(settings.gateway_internal_url, token)
+    cache = settings.fastembed_cache_path
+    runbooks = RunbookSearch(engine, FastEmbedder(cache)) if cache else None
+    summarize = model.summarize if isinstance(model, Router) else None
     job = Job(
         engine,
-        ScriptedModel([PLACEHOLDER]),
-        {},
+        model,
+        Tools(sim, alerts, runbooks, summarize).all(),
         ai_enabled=settings.ai_enabled,
         daily_token_budget=settings.daily_ai_token_budget,
         tenant_cap=settings.agent_tenant_cap,
         dual_write=settings.steps_dual_write,
+        on_commit=relay.nudge,
     )
     consumer = Consumer(
         sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight
@@ -55,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         stopping = asyncio.Event()
         consuming = asyncio.create_task(consumer.run(stopping))
+        relaying = asyncio.create_task(relay.run(stopping))
         stop_partitions = threading.Event()
         threading.Thread(
             target=maintain_partitions,
@@ -68,6 +102,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stopping.set()
         stop_partitions.set()
         await consuming
+        await relaying
+        await sim.aclose()
+        alerts.close()
         engine.dispose()
 
     app = FastAPI(title="agent", lifespan=lifespan)

@@ -29,6 +29,13 @@
       "when": 1792038171059,
       "tag": "0003_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792049813134,
+      "tag": "0004_agent_events",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
 from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
 from py_clients.generated.messages.step_recorded_schema import StepRecorded
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
@@ -57,6 +58,38 @@ def test_action_kinds_outside_the_allowlist_are_rejected(name: str) -> None:
     example = json.loads(schema_file.read_bytes())["examples"][0]
     with pytest.raises(ValidationError):
         model_for(schema_file).model_validate({**example, "kind": "delete_namespace"})
+
+
+REPORT = json.loads((CONTRACTS / "messages/report-recorded.v1.schema.json").read_bytes())
+REPORT_EXAMPLE: dict[str, Any] = REPORT["examples"][0]
+
+
+def with_report(**report: Any) -> dict[str, Any]:
+    return {**REPORT_EXAMPLE, "report": {**REPORT_EXAMPLE["report"], **report}}
+
+
+# The same cases run against ajv in packages/ts-clients/src/contracts.test.ts.
+@pytest.mark.parametrize(
+    "change",
+    [{"evidence_ids": ["step-4"]}, {"confidence": 1.5}, {"root_cause_class": "cosmic_rays"}],
+)
+def test_report_recorded_rejects_bad_hypotheses(change: dict[str, Any]) -> None:
+    first, *rest = REPORT_EXAMPLE["report"]["hypotheses"]
+    message = with_report(hypotheses=[{**first, **change}, *rest])
+    with pytest.raises(ValidationError):
+        ReportRecordedV1.model_validate(message)
+
+
+@pytest.mark.parametrize("change", [{"kind": "delete_namespace"}, {"evidence_ids": []}])
+def test_report_recorded_rejects_unlisted_or_ungrounded_actions(change: dict[str, Any]) -> None:
+    action = REPORT_EXAMPLE["report"]["proposed_actions"][0]
+    with pytest.raises(ValidationError):
+        ReportRecordedV1.model_validate(with_report(proposed_actions=[{**action, **change}]))
+
+
+def test_action_proposed_is_marked_unused() -> None:
+    union = json.loads((CONTRACTS / "messages/action-proposed.schema.json").read_bytes())
+    assert [branch.get("deprecated") for branch in union["oneOf"]] == [True]
 
 
 def test_alertmanager_example_matches_the_webhook_schema() -> None:

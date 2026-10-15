@@ -170,6 +170,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/investigations/{id}/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The alert group behind an investigation, for the agent's get_alert_context tool.
+         * @description Read only. Returns the group's 200 oldest alerts as the gateway stored them (labels, start and status; annotations are not stored) and how many it holds in all.
+         */
+        get: operations["getAlertContext"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -233,6 +255,36 @@ export interface components {
         };
         /** @enum {string} */
         AlertStatus: "firing" | "resolved";
+        /** @description An investigation's alert group as the gateway stored it. */
+        AlertContext: {
+            /** Format: uuid */
+            investigation_id: string;
+            /** Format: uuid */
+            group_id: string;
+            /** Format: uuid */
+            tenant_id: string;
+            /** @description Alertmanager's groupKey. */
+            group_key: string;
+            /**
+             * Format: date-time
+             * @description When the group's 5-minute grouping window opened.
+             */
+            window_start: string;
+            /** @enum {string} */
+            severity: "critical" | "warning" | "info";
+            /** @description Alerts the group holds; alerts lists at most 200 of them. */
+            alert_count: number;
+            /** @description Oldest first, at most 200. */
+            alerts: components["schemas"]["StoredAlert"][];
+        };
+        StoredAlert: {
+            /** @description The fingerprint the gateway computed from the labels. */
+            fingerprint: string;
+            labels: components["schemas"]["Labels"];
+            /** Format: date-time */
+            starts_at: string;
+            status: components["schemas"]["AlertStatus"];
+        };
         /** @description String map, used for labels and annotations. */
         Labels: {
             [key: string]: string;
@@ -419,6 +471,17 @@ export interface components {
         Unauthorized: {
             headers: {
                 "WWW-Authenticate": components["headers"]["WWW-Authenticate"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The agent service token is missing or invalid. */
+        AgentUnauthorized: {
+            headers: {
+                /** @description The Bearer challenge. */
+                "WWW-Authenticate": string;
                 [name: string]: unknown;
             };
             content: {
@@ -791,6 +854,39 @@ export interface operations {
             };
             /** @description The execution already has its result. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAlertContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["InvestigationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The alert group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertContext"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["AgentUnauthorized"];
+            /** @description No alert group has this investigation. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

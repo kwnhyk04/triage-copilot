@@ -1,0 +1,219 @@
+{
+  "id": "db-pool-exhaustion",
+  "title": "A long-running lock on orders-db holds every connection in the orders pool",
+  "seed": 2207,
+  "alert": {
+    "labels": {
+      "alertname": "OrdersHighErrorRate",
+      "service": "orders",
+      "severity": "critical"
+    },
+    "annotations": {
+      "summary": "orders 5xx ratio above 5% for 2 minutes",
+      "description": "http_error_ratio{service=\"orders\"} > 0.05 for 2m"
+    }
+  },
+  "services": {
+    "frontend": { "depends_on": ["checkout", "catalog"] },
+    "checkout": { "depends_on": ["orders"] },
+    "orders": { "depends_on": ["orders-db"] },
+    "orders-db": {},
+    "catalog": {}
+  },
+  "deploys": [
+    {
+      "service": "orders",
+      "version": "v3.4.0",
+      "previous_version": "v3.3.2",
+      "at": "-3h",
+      "author": "dev.kim",
+      "change": "Add the order export endpoint"
+    }
+  ],
+  "background_deploys_days": 7,
+  "metrics": [
+    {
+      "name": "http_requests_per_second",
+      "labels": { "service": "orders" },
+      "base": 95,
+      "noise": 5
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "orders" },
+      "base": 0.003,
+      "noise": 0.001,
+      "changes": [{ "at": "-5m", "value": 0.11, "ramp": "2m" }]
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "orders" },
+      "base": 0.22,
+      "noise": 0.02,
+      "changes": [{ "at": "-7m", "value": 5.0, "ramp": "3m" }]
+    },
+    {
+      "name": "cpu_usage_ratio",
+      "labels": { "service": "orders" },
+      "base": 0.35,
+      "noise": 0.03
+    },
+    {
+      "name": "memory_usage_ratio",
+      "labels": { "service": "orders" },
+      "base": 0.48,
+      "noise": 0.02
+    },
+    {
+      "name": "db_pool_in_use",
+      "labels": { "service": "orders" },
+      "base": 14,
+      "noise": 0.4,
+      "changes": [{ "at": "-8m", "value": 49.6, "ramp": "4m" }]
+    },
+    {
+      "name": "db_pool_max",
+      "labels": { "service": "orders" },
+      "base": 50
+    },
+    {
+      "name": "db_connections",
+      "labels": { "service": "orders-db" },
+      "base": 60,
+      "noise": 3,
+      "changes": [{ "at": "-8m", "value": 98, "ramp": "4m" }]
+    },
+    {
+      "name": "db_lock_wait_seconds",
+      "labels": { "service": "orders-db" },
+      "base": 0.003,
+      "noise": 0.002,
+      "changes": [{ "at": "-9m", "value": 2.4, "ramp": "2m" }]
+    },
+    {
+      "name": "db_slow_queries_per_second",
+      "labels": { "service": "orders-db" },
+      "base": 0.1,
+      "noise": 0.05,
+      "changes": [{ "at": "-9m", "value": 9, "ramp": "2m" }]
+    },
+    {
+      "name": "cpu_usage_ratio",
+      "labels": { "service": "orders-db" },
+      "base": 0.31,
+      "noise": 0.03
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "checkout" },
+      "base": 0.002,
+      "noise": 0.0005,
+      "changes": [{ "at": "-5m", "value": 0.04, "ramp": "2m" }]
+    },
+    {
+      "name": "http_requests_per_second",
+      "labels": { "service": "checkout" },
+      "base": 60,
+      "noise": 3
+    },
+    {
+      "name": "http_error_ratio",
+      "labels": { "service": "frontend" },
+      "base": 0.002,
+      "noise": 0.0005,
+      "changes": [{ "at": "-5m", "value": 0.02, "ramp": "2m" }]
+    },
+    {
+      "name": "cache_hit_ratio",
+      "labels": { "service": "catalog" },
+      "base": 0.94,
+      "noise": 0.01,
+      "changes": [{ "at": "-40m", "value": 0.71, "ramp": "2m", "until": "-25m" }]
+    },
+    {
+      "name": "http_latency_p99_seconds",
+      "labels": { "service": "catalog" },
+      "base": 0.08,
+      "noise": 0.01,
+      "changes": [{ "at": "-40m", "value": 0.21, "ramp": "2m", "until": "-25m" }]
+    }
+  ],
+  "logs": [
+    {
+      "labels": { "service": "orders", "level": "info" },
+      "per_minute": 30,
+      "lines": [
+        "POST /orders 201 {ms}ms request_id={rid}",
+        "GET /orders/{n} 200 {ms}ms request_id={rid}"
+      ]
+    },
+    {
+      "labels": { "service": "orders", "level": "info" },
+      "per_minute": 2,
+      "from": "-3h",
+      "to": "-179m",
+      "lines": ["Rolling update: pod orders-{rid} started version=v3.4.0"]
+    },
+    {
+      "labels": { "service": "orders", "level": "warn" },
+      "per_minute": 6,
+      "from": "-8m",
+      "lines": ["connection pool orders-db at 50/50 connections, {n} requests waiting"]
+    },
+    {
+      "labels": { "service": "orders", "level": "error" },
+      "per_minute": 30,
+      "from": "-6m",
+      "lines": [
+        "timeout acquiring connection from pool after 5000ms (pool=orders-db, active=50, idle=0) request_id={rid}",
+        "POST /orders 500 {ms}ms error=PoolTimeoutException request_id={rid}",
+        "GET /orders/{n} 500 {ms}ms error=PoolTimeoutException request_id={rid}"
+      ]
+    },
+    {
+      "labels": { "service": "orders-db", "level": "info" },
+      "per_minute": 4,
+      "lines": ["checkpoint complete: wrote {n} buffers"]
+    },
+    {
+      "labels": { "service": "orders-db", "level": "info" },
+      "per_minute": 2,
+      "from": "-9m",
+      "lines": [
+        "long-running transaction pid 48213 open: UPDATE inventory SET reserved = 0 WHERE warehouse_id = 7 (job inventory-reconcile)"
+      ]
+    },
+    {
+      "labels": { "service": "orders-db", "level": "warn" },
+      "per_minute": 12,
+      "from": "-9m",
+      "lines": [
+        "lock wait timeout exceeded: process {n} waited {ms}ms for RowExclusiveLock on relation inventory held by pid 48213",
+        "process {n} still waiting for RowExclusiveLock on relation inventory after 1000 ms; blocked by pid 48213"
+      ]
+    },
+    {
+      "labels": { "service": "checkout", "level": "error" },
+      "per_minute": 8,
+      "from": "-5m",
+      "lines": ["orders returned 500 for POST /orders request_id={rid}"]
+    },
+    {
+      "labels": { "service": "catalog", "level": "warn" },
+      "per_minute": 4,
+      "from": "-40m",
+      "to": "-25m",
+      "lines": ["cache miss rate high after cache node catalog-cache-2 restarted"]
+    }
+  ],
+  "expected": {
+    "root_cause_class": "database",
+    "service": "orders-db",
+    "allowed_actions": [],
+    "red_herrings": [
+      "orders v3.4.0 shipped 3 hours before the alert, and orders kept a normal error ratio for nearly 3 hours after it",
+      "catalog's cache hit ratio dipped 40 to 25 minutes before the alert and recovered before the pool filled",
+      "Restarting or scaling orders looks tempting because its pool is full, but the pool refills while pid 48213 holds the lock on inventory; no allowlisted action fixes it, a human ends that transaction"
+    ]
+  }
+}

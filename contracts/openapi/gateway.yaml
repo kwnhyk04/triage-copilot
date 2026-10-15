@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.3.0
+  version: 0.4.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
@@ -9,7 +9,8 @@ info:
     every other route the X-API-Key header. /graphql takes the same X-API-Key. Requests are rate
     limited per credential, or per client address without one. The /internal routes are served
     only on a separate listener bound to 127.0.0.1 (the internal Docker network in production),
-    which the public listener does not expose; only the executor calls them, with its own token.
+    which the public listener does not expose; only the executor and the agent call them, each
+    with its own token.
 security:
   - apiKey: []
 paths:
@@ -288,6 +289,37 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /internal/investigations/{id}/alerts:
+    servers:
+      - url: http://127.0.0.1:4201
+        description: The internal listener; the public listener answers 404 here.
+    parameters:
+      - $ref: '#/components/parameters/InvestigationId'
+    get:
+      operationId: getAlertContext
+      summary: The alert group behind an investigation, for the agent's get_alert_context tool.
+      description: >-
+        Read only. Returns the group's 200 oldest alerts as the gateway stored them (labels, start
+        and status; annotations are not stored) and how many it holds in all.
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: The alert group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertContext'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AgentUnauthorized'
+        '404':
+          description: No alert group has this investigation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     apiKey:
@@ -317,7 +349,13 @@ components:
       scheme: bearer
       description: >-
         EXECUTOR_SERVICE_TOKEN, held only by the gateway and the executor and distinct from the
-        agent's service token. Valid on the internal listener's /internal routes only.
+        agent's service token. Valid on the internal listener's /internal/actions routes only.
+    agentToken:
+      type: http
+      scheme: bearer
+      description: >-
+        AGENT_SERVICE_TOKEN, held only by the gateway and the agent; the gateway also sends it to
+        the agent's internal API. Valid on GET /internal/investigations/{id}/alerts only.
   parameters:
     InvestigationId:
       name: id
@@ -384,6 +422,18 @@ components:
       headers:
         WWW-Authenticate:
           $ref: '#/components/headers/WWW-Authenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AgentUnauthorized:
+      description: The agent service token is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          description: The Bearer challenge.
+          required: true
+          schema:
+            type: string
       content:
         application/problem+json:
           schema:
@@ -565,6 +615,61 @@ components:
     AlertStatus:
       type: string
       enum: [firing, resolved]
+    AlertContext:
+      type: object
+      description: An investigation's alert group as the gateway stored it.
+      required:
+        - investigation_id
+        - group_id
+        - tenant_id
+        - group_key
+        - window_start
+        - severity
+        - alert_count
+        - alerts
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        group_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        group_key:
+          type: string
+          description: Alertmanager's groupKey.
+        window_start:
+          type: string
+          format: date-time
+          description: When the group's 5-minute grouping window opened.
+        severity:
+          type: string
+          enum: [critical, warning, info]
+        alert_count:
+          type: integer
+          minimum: 0
+          description: Alerts the group holds; alerts lists at most 200 of them.
+        alerts:
+          type: array
+          description: Oldest first, at most 200.
+          items:
+            $ref: '#/components/schemas/StoredAlert'
+    StoredAlert:
+      type: object
+      required: [fingerprint, labels, starts_at, status]
+      properties:
+        fingerprint:
+          type: string
+          description: The fingerprint the gateway computed from the labels.
+        labels:
+          $ref: '#/components/schemas/Labels'
+        starts_at:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/AlertStatus'
     Labels:
       type: object
       description: String map, used for labels and annotations.
