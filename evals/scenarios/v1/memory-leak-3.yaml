@@ -1,0 +1,354 @@
+id: memory-leak-3
+title: recommendations leaks model tensors
+seed: 75042
+alert:
+  labels:
+    alertname: RecommendationsHighErrorRate
+    service: recommendations
+    severity: critical
+  annotations:
+    summary: recommendations 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="recommendations"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: recommendations
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - recommendations
+    - catalog
+  recommendations:
+    depends_on:
+    - feature-store
+    - coredns
+  feature-store: {}
+  catalog: {}
+  cart: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: cart
+  version: v2.7.0
+  previous_version: v2.6.4
+  at: -119m
+  author: li.wei
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 93
+  noise: 4.65
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.302
+  noise: 0.02416
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5448
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4888
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: recommendations
+  base: 278
+  noise: 13.9
+- name: http_error_ratio
+  labels:
+    service: recommendations
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.12
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: recommendations
+  base: 0.3136
+  noise: 0.02509
+- name: cpu_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.2906
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: recommendations
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.4749
+  noise: 0.02
+  changes:
+  - at: -5h
+    value: 0.97
+    ramp: 290m
+  - at: -9m
+    value: 0.55
+  - at: -510s
+    value: 0.97
+    ramp: 90s
+  - at: -6m
+    value: 0.55
+  - at: -330s
+    value: 0.97
+    ramp: 90s
+  - at: -3m
+    value: 0.55
+  - at: -150s
+    value: 0.97
+    ramp: 90s
+- name: container_restarts_total
+  labels:
+    service: recommendations
+  base: 2
+  changes:
+  - at: -9m
+    value: 3
+  - at: -6m
+    value: 4
+  - at: -3m
+    value: 5
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 43
+  noise: 2.15
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.3321
+  noise: 0.02657
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5305
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5441
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 153
+  noise: 7.65
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.112
+  noise: 0.00896
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.2625
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.4893
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: node_cpu_usage_ratio
+  labels:
+    service: recommendations
+    node: node-9
+  base: 0.4226
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: recommendations
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: recommendations
+    peer: feature-store
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1656
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-9
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: recommendations
+    level: info
+  per_minute: 14
+  lines:
+  - GET /recommendations/{n} 200 {ms}ms request_id={rid}
+  - GET /recommendations/trending 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 11
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 10
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: recommendations
+    level: warn
+  per_minute: 4
+  from: -40m
+  to: -9m
+  lines:
+  - model cache holds {n} tensors after GC; resident memory 2.8GB of 3GB
+  asserts:
+  - metric: memory_usage_ratio
+    labels:
+      service: recommendations
+    op: '>='
+    value: 0.85
+- labels:
+    service: recommendations
+    level: error
+  per_minute: 1
+  from: -9m
+  to: -8m
+  lines:
+  - container recommendations-{rid} OOMKilled (exit code 137), memory limit 3Gi; restarting
+- labels:
+    service: recommendations
+    level: error
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - container recommendations-{rid} OOMKilled (exit code 137), memory limit 3Gi; restarting
+- labels:
+    service: recommendations
+    level: error
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - container recommendations-{rid} OOMKilled (exit code 137), memory limit 3Gi; restarting
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -119m
+  to: -118m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v2.7.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 29
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-9
+down: logs
+labels:
+  root_cause_class: resource_exhaustion
+  service: recommendations
+  alternatives: []
+  onset: -5h
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: memory_usage_ratio{service="recommendations"}
+    pattern: memory_usage_ratio\{service="recommendations"\}
+  - tool: query_metrics
+    args:
+      query: container_restarts_total{service="recommendations"}
+    pattern: container_restarts_total\{service="recommendations"\}
+  acceptable_actions:
+  - kind: restart_service
+    target: recommendations
+  - kind: scale_service
+    target: recommendations
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: cart
+  red_herrings:
+  - cart v2.7.0 shipped 119 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'analytics beacon rejected' errors all window long, before and after

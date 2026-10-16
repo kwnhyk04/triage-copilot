@@ -7,12 +7,14 @@ export
 unexport APPROVER_API_KEY
 # Only the agent gets the model provider keys; tests use fake models and never see them.
 unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY
+# Only the eval harness gets the sim's admin address: its state names each scenario's answer.
+unexport SIM_ADMIN_URL
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	dlq-replay embed-model runbooks smoke
+	scenarios-check dlq-replay embed-model runbooks smoke
 
 install:
 	pnpm install
@@ -100,8 +102,26 @@ migrate: infra-up
 seed:
 	uv run python scripts/seed.py $(SEED_ARGS)
 
+# The eval (evals/harness/eval.py) against the running stack: make dev with AI_ENABLED=true and
+# LLM_FALLBACK_ON_RATE_LIMIT=false. SPLIT=dev|test, SUBSET=ci|full, RUNS (1 for the ci subset,
+# else 3); ESTIMATE=1 only estimates the quota days, SET_FLOORS=1 writes the scope's floors.
+# Exit 1: a floor or gate broke; 2: the day's quota ran out, run it again tomorrow to go on.
+SPLIT ?= dev
+SUBSET ?= full
+RUNS ?= $(if $(filter ci,$(SUBSET)),1,3)
+eval: export SIM_ADMIN_URL := $(SIM_ADMIN_URL)
 eval:
-	@echo eval: the full eval arrives in step 6b; make smoke runs one scenario
+	uv run python evals/harness/eval.py --split $(SPLIT) --subset $(SUBSET) --runs $(RUNS) \
+		$(if $(ESTIMATE),--estimate) $(if $(SET_FLOORS),--set-floors) \
+		$(if $(ALLOW_LOOSER),--allow-looser)
+
+# Every scenario set passes the validator, and a released set never changes: a file of a
+# v<N> set that exists at SCENARIOS_BASE (default HEAD; CI passes the target branch) must be
+# unchanged. A fix ships as a new set.
+SCENARIOS_BASE ?= HEAD
+scenarios-check:
+	uv run python -m sim.validate $(wildcard evals/scenarios/v*/)
+	git diff --exit-code --stat --diff-filter=MD $(SCENARIOS_BASE) -- "evals/scenarios/v*/*"
 
 # The embedding model for search_runbooks, into FASTEMBED_CACHE_PATH; the only command that
 # downloads it (about 0.5 GB). Everything else loads it offline.
@@ -112,8 +132,9 @@ embed-model:
 runbooks:
 	uv run python -m agent.runbooks ingest
 
-# One scenario against the running stack (make dev with AI_ENABLED=true); SCENARIO=bad-deploy.
-SCENARIO ?= bad-deploy
+# One scenario against the running stack (make dev with AI_ENABLED=true); SCENARIO=bad-deploy-1.
+SCENARIO ?= bad-deploy-1
+smoke: export SIM_ADMIN_URL := $(SIM_ADMIN_URL)
 smoke:
 	uv run python evals/harness/run.py $(SCENARIO)
 

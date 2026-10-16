@@ -18,6 +18,8 @@ __pycache__/
 .env.*
 !.env.example
 
-# Eval output
+# Eval output: the dated reports are kept, the per-run cache (runs/) is not.
 evals/reports/*
 !evals/reports/.gitkeep
+!evals/reports/*.json
+!evals/reports/*.md

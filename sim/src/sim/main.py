@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import contextlib
 import json
 import logging
 import math
@@ -9,24 +11,23 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from py_config import ConfigError, EnvSettings, load_settings
 from py_telemetry import LogLevel, configure_logging, instrument
 from sim.logql import parse_log_query
 from sim.promql import Matcher, QueryError, parse_selector
-from sim.scenario import load_scenarios
+from sim.scenario import Tool, load_scenarios
 from sim.world import NS, Deadline, LineKey, World, paginate, rfc3339
 
 log = logging.getLogger(__name__)
 
-Tool = Literal["metrics", "logs", "deploys", "dependencies"]
 # Route prefixes of each tool, so a tool marked down answers before parameter validation.
 TOOL_ROUTES: dict[Tool, tuple[str, ...]] = {
     "metrics": ("/api/v1/query", "/api/v1/label/"),
@@ -46,10 +47,20 @@ STEP = re.compile(r"(\d+)(ms|s|m|h|d)")
 class Settings(EnvSettings):
     sim_host: str = "127.0.0.1"
     sim_port: int = 4230
-    sim_scenarios_dir: Path = Path("evals/scenarios")
+    # The admin routes (activation, state, the down switch) listen on their own port, which only
+    # the eval harness is given: no request to the data port can reach them, whatever its path.
+    sim_admin_host: str = "127.0.0.1"
+    sim_admin_port: int = 4231
+    sim_scenarios_dir: Path = Path("evals/scenarios/v1")
     sim_request_time_limit_seconds: Annotated[float, Field(gt=0)] = 2.0
     log_level: LogLevel = "info"
     otel_exporter_otlp_endpoint: str | None = None
+
+    @model_validator(mode="after")
+    def _apart(self) -> Self:
+        if self.sim_admin_port == self.sim_port:
+            raise ValueError("SIM_ADMIN_PORT must differ from SIM_PORT")
+        return self
 
 
 class Unavailable(Exception):
@@ -74,6 +85,13 @@ class State:
     # ponytail: one active scenario per process; key worlds by tenant if evals run in parallel.
     world: World | None = None
     down: Tool | None = None
+
+
+class Apps(NamedTuple):
+    """The data routes the agent's tools call, and the admin routes only the harness calls."""
+
+    data: FastAPI
+    admin: FastAPI
 
 
 def failure(status: int, kind: str, message: str) -> JSONResponse:
@@ -160,26 +178,8 @@ def deploy_cursor(cursor: str) -> tuple[int, str]:
             raise QueryError("invalid cursor")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or load_settings(Settings)
-    configure_logging("sim", settings.log_level)
-    scenarios = load_scenarios(settings.sim_scenarios_dir)
-    if not scenarios:
-        log.warning("no scenarios found", extra={"directory": str(settings.sim_scenarios_dir)})
-    state = State()
-    app = FastAPI(title="sim", docs_url=None, redoc_url=None, openapi_url=None)
-
-    @app.middleware("http")
-    async def down_switch(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        """Answers 503 for a tool marked down before FastAPI validates the parameters."""
-        down = state.down
-        if down and request.url.path.startswith(TOOL_ROUTES[down]):
-            return failure(503, "unavailable", f"{down} backend is down (simulated)")
-        return await call_next(request)
-
-    instrument(app, "sim", settings.otel_exporter_otlp_endpoint)
+def handle_errors(app: FastAPI) -> None:
+    """Every error in Prometheus's envelope, as 400 for bad input and 503 for missing data."""
 
     @app.exception_handler(QueryError)
     def bad_query(_request: Request, exc: Exception) -> JSONResponse:
@@ -201,6 +201,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def unavailable(_request: Request, exc: Exception) -> JSONResponse:
         return failure(503, "unavailable", str(exc))
 
+
+def create_apps(settings: Settings | None = None) -> Apps:
+    """The data and admin apps over one shared state: what the admin app activates, data serves."""
+    settings = settings or load_settings(Settings)
+    configure_logging("sim", settings.log_level)
+    scenarios = load_scenarios(settings.sim_scenarios_dir)
+    if not scenarios:
+        log.warning("no scenarios found", extra={"directory": str(settings.sim_scenarios_dir)})
+    state = State()
+    app = FastAPI(title="sim", docs_url=None, redoc_url=None, openapi_url=None)
+    admin = FastAPI(title="sim admin", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def down_switch(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Answers 503 for a tool marked down before FastAPI validates the parameters."""
+        down = state.down
+        if down and request.url.path.startswith(TOOL_ROUTES[down]):
+            return failure(503, "unavailable", f"{down} backend is down (simulated)")
+        return await call_next(request)
+
+    instrument(app, "sim", settings.otel_exporter_otlp_endpoint)
+    handle_errors(app)
+    handle_errors(admin)
+
     def world() -> World:
         if state.world is None:
             raise Unavailable("no scenario is active")
@@ -217,6 +243,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from None
 
     @app.get("/healthz")
+    @admin.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
@@ -338,51 +365,67 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         depends_on = sorted(services[service].depends_on)
         return {"service": service, "depends_on": depends_on, "dependents": dependents}
 
-    # Admin routes take no credentials: the sim holds only fake data and listens on 127.0.0.1
-    # (the internal Docker network in production).
-    @app.get("/admin/scenarios")
+    # The admin app takes no credential: it listens on its own port, on 127.0.0.1 (the internal
+    # Docker network in production), and the agent is never given its address.
+    @admin.get("/admin/scenarios")
     def scenario_ids() -> list[str]:
         return sorted(scenarios)
 
-    @app.post("/admin/scenarios/{scenario_id}/activate", response_model=None)
+    @admin.post("/admin/scenarios/{scenario_id}/activate", response_model=None)
     def activate(scenario_id: str, body: Activation | None = None) -> dict[str, Any] | JSONResponse:
-        """Makes the scenario the one every data route serves, and clears the down switch."""
-        scenario = scenarios.get(scenario_id)
-        if scenario is None:
+        """Makes the scenario the one every data route serves, with its own tool marked down."""
+        loaded = scenarios.get(scenario_id)
+        if loaded is None:
             known = sorted(scenarios)
             return JSONResponse(
                 {"error": f"unknown scenario {scenario_id}", "scenarios": known}, status_code=404
             )
+        scenario = loaded.scenario
         body = body or Activation()
         seed = scenario.seed if body.seed is None else body.seed
         anchor = int((body.anchor or datetime.now(UTC)).timestamp())
         active = World(scenario, seed, anchor)
-        state.world, state.down = active, None
+        state.world, state.down = active, scenario.down
         log.info("scenario activated", extra={"scenario": scenario.id, "seed": seed})
-        return {
-            "scenario": scenario.id,
-            "seed": seed,
-            "anchor": rfc3339(anchor),
-            "alertmanager": active.alertmanager(),
-        }
+        return admin_state() | {"alertmanager": active.alertmanager()}
 
-    @app.get("/admin/state")
+    @admin.get("/admin/state")
     def admin_state() -> dict[str, Any]:
         active = state.world
         return {
             "scenario": None if active is None else active.scenario.id,
+            "sha256": None if active is None else scenarios[active.scenario.id].sha256,
             "seed": None if active is None else active.seed,
             "anchor": None if active is None else rfc3339(active.anchor),
             "down": state.down,
         }
 
-    @app.put("/admin/down")
+    @admin.put("/admin/down")
     def set_down(body: Down) -> dict[str, Any]:
         """Marks one tool's backend down, so its routes answer 503; null clears it."""
         state.down = body.tool
         return admin_state()
 
-    return app
+    return Apps(app, admin)
+
+
+def serve(settings: Settings) -> None:
+    """Serves both apps, each on its own port, until SIGINT or SIGTERM stops both."""
+    apps = create_apps(settings)
+    servers = [
+        uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_config=None))
+        for app, host, port in (
+            (apps.data, settings.sim_host, settings.sim_port),
+            (apps.admin, settings.sim_admin_host, settings.sim_admin_port),
+        )
+    ]
+
+    async def both() -> None:
+        # Each server raises the signal it caught again once it has stopped, so both stop.
+        await asyncio.gather(*(server.serve() for server in servers))
+
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(both())
 
 
 def run() -> None:
@@ -392,11 +435,12 @@ def run() -> None:
     except ConfigError as error:
         sys.exit(f"sim: {error}")
     configure_logging("sim", settings.log_level)
-    uvicorn.run(
-        "sim.main:create_app",
-        factory=True,
-        host=settings.sim_host,
-        port=settings.sim_port,
-        reload="--reload" in sys.argv,
-        log_config=None,
+    if "--reload" not in sys.argv:
+        serve(settings)
+        return
+    # A dev dependency, as --reload is: restarts on changes to the code or the scenarios.
+    import watchfiles
+
+    watchfiles.run_process(
+        Path(__file__).parent, settings.sim_scenarios_dir, target=serve, args=(settings,)
     )

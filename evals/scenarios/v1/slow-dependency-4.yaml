@@ -1,0 +1,348 @@
+id: slow-dependency-4
+title: tax-service slows checkout
+seed: 30709
+alert:
+  labels:
+    alertname: CheckoutHighLatency
+    service: checkout
+    severity: warning
+  annotations:
+    summary: checkout p99 latency above 2.5 s for 3 minutes
+    description: http_latency_p99_seconds{service="checkout"} > 2.5 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: checkout
+    op: '>'
+    threshold: 2.5
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - tax-service
+    - payments
+    - cart
+    - coredns
+  tax-service: {}
+  payments: {}
+  cart: {}
+  notifications: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: notifications
+  version: v6.15.0
+  previous_version: v6.14.1
+  at: -118m
+  author: ana.lopez
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 285
+  noise: 14.25
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2595
+  noise: 0.02076
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.2717
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4142
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 206
+  noise: 10.3
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.3
+  noise: 0.024
+  changes:
+  - at: -5m
+    value: 7.9
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4958
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4732
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 148
+  noise: 7.4
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.2869
+  noise: 0.02295
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.3806
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5454
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 299
+  noise: 14.95
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.185
+  noise: 0.0148
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.4912
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5854
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 184
+  noise: 9.2
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.09447
+  noise: 0.007558
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4218
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4455
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 2
+- name: upstream_latency_p99_seconds
+  labels:
+    service: checkout
+    peer: tax-service
+  base: 0.2
+  noise: 0.02
+  changes:
+  - at: -6m
+    value: 7.4
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: checkout
+    node: node-3
+  base: 0.3504
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: checkout
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: checkout
+    peer: tax-service
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1765
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-2
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 13
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 12
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 9
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 10
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: warn
+  per_minute: 30
+  from: -6m
+  lines:
+  - tax-service responded in 7412ms (budget 2000ms) for POST /v1/quote request_id={rid}
+  - tax-service responded in 6930ms (budget 2000ms) for POST /v1/quote request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 2
+  from: -118m
+  to: -117m
+  lines:
+  - 'Rolling update: pod notifications-{rid} started version=v6.15.0'
+- labels:
+    service: cart
+    level: error
+  per_minute: 29
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-2
+down: metrics
+labels:
+  root_cause_class: dependency_failure
+  service: tax-service
+  alternatives: []
+  onset: -6m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="checkout", level="warn"}'
+    pattern: tax-service responded in
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: scale_service
+    target: checkout
+  - kind: rollback_deploy
+    target: checkout
+  - kind: rollback_deploy
+    target: notifications
+  red_herrings:
+  - notifications v6.15.0 shipped 118 minutes before the alert, and none of its metrics moved after it
+  - cart logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after

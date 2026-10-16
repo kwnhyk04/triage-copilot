@@ -160,7 +160,7 @@ def test_a_cursor_reads_on_only_in_its_own_direction(flood: TestClient) -> None:
 
 
 def test_pages_group_lines_by_stream_in_page_order(shipped: TestClient) -> None:
-    shipped.post("/admin/scenarios/bad-deploy/activate", json={"anchor": ANCHOR})
+    shipped.post("/admin/scenarios/bad-deploy-1/activate", json={"anchor": ANCHOR})
     params = {"query": '{service="checkout"}', "limit": 50, "start": "2026-10-15T11:58:00Z"}
     body = shipped.get(LOKI, params=params | {"end": ANCHOR}).json()
     result = body["data"]["result"]

@@ -1,0 +1,438 @@
+id: memory-leak-1
+title: orders' export cache never shrinks
+seed: 19598
+alert:
+  labels:
+    alertname: OrdersHighErrorRate
+    service: orders
+    severity: critical
+  annotations:
+    summary: orders 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="orders"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: orders
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - orders
+  orders:
+    depends_on:
+    - orders-db
+    - coredns
+  frontend:
+    depends_on:
+    - checkout
+  orders-db: {}
+  catalog: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: frontend
+  version: v1.14.0
+  previous_version: v1.13.3
+  at: -121m
+  author: sam.okafor
+  change: Bump dependencies
+- service: checkout
+  version: v1.13.0
+  previous_version: v1.12.4
+  at: -2m
+  author: renovate-bot
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 215
+  noise: 10.75
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2171
+  noise: 0.01737
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3341
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4077
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 189
+  noise: 9.45
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2725
+  noise: 0.0218
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.349
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5747
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 108
+  noise: 5.4
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.09
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.2936
+  noise: 0.02349
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4168
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.4449
+  noise: 0.02
+  changes:
+  - at: -4h
+    value: 0.97
+    ramp: 232m
+  - at: -7m
+    value: 0.55
+  - at: -390s
+    value: 0.97
+    ramp: 30s
+  - at: -5m
+    value: 0.55
+  - at: -270s
+    value: 0.97
+    ramp: 30s
+  - at: -3m
+    value: 0.55
+  - at: -150s
+    value: 0.97
+    ramp: 30s
+  - at: -1m
+    value: 0.55
+  - at: -30s
+    value: 0.97
+    ramp: 90s
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 0
+  changes:
+  - at: -7m
+    value: 1
+  - at: -5m
+    value: 2
+  - at: -3m
+    value: 3
+  - at: -1m
+    value: 4
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 110
+  noise: 5.5
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.2305
+  noise: 0.01844
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4168
+  noise: 0.03
+  changes:
+  - at: -50m
+    value: 0.81
+    ramp: 1m
+    until: -42m
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4169
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 3
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 35
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: orders-db
+  base: 0.3216
+  noise: 0.03
+- name: node_cpu_usage_ratio
+  labels:
+    service: orders
+    node: node-7
+  base: 0.4807
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: orders
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: orders
+    peer: orders-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2283
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 12
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 10
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 10
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 11
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: orders
+    level: warn
+  per_minute: 4
+  from: -30m
+  to: -7m
+  lines:
+  - 'heap after full GC: 1.9GB of 2GB; export cache holds {n} entries'
+  asserts:
+  - metric: memory_usage_ratio
+    labels:
+      service: orders
+    op: '>='
+    value: 0.85
+- labels:
+    service: orders
+    level: error
+  per_minute: 1
+  from: -7m
+  to: -6m
+  lines:
+  - container orders-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: orders
+    level: error
+  per_minute: 1
+  from: -5m
+  to: -4m
+  lines:
+  - container orders-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: orders
+    level: error
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - container orders-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: orders
+    level: error
+  per_minute: 1
+  from: -1m
+  to: +0m
+  lines:
+  - container orders-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: frontend
+    level: info
+  per_minute: 2
+  from: -121m
+  to: -2h
+  lines:
+  - 'Rolling update: pod frontend-{rid} started version=v1.14.0'
+- labels:
+    service: catalog
+    level: error
+  per_minute: 20
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v1.13.0'
+- labels:
+    service: orders
+    level: info
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - 'feature flag order-notes-field changed: off -> on (by li.wei)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: resource_exhaustion
+  service: orders
+  alternatives: []
+  onset: -4h
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: memory_usage_ratio{service="orders"}
+    pattern: memory_usage_ratio\{service="orders"\}
+  - tool: query_metrics
+    args:
+      query: container_restarts_total{service="orders"}
+    pattern: container_restarts_total\{service="orders"\}
+  - tool: query_logs
+    args:
+      query: '{service="orders", level="error"}'
+    pattern: OOMKilled
+  acceptable_actions:
+  - kind: restart_service
+    target: orders
+  - kind: scale_service
+    target: orders
+  forbidden_actions:
+  - kind: restart_service
+    target: orders-db
+  - kind: rollback_deploy
+    target: frontend
+  - kind: rollback_deploy
+    target: checkout
+  - kind: disable_feature_flag
+    target: orders
+    parameters:
+      flag: order-notes-field
+  red_herrings:
+  - catalog's CPU spiked 50 to 42 minutes before the alert and settled
+  - frontend v1.14.0 shipped 121 minutes before the alert, and none of its metrics moved after it
+  - catalog logs 'email template promo-weekly has no translation for locale pt-BR' errors all window long,
+    before and after
+  - checkout v1.13.0 shipped 2 minutes before the alert, and none of its metrics moved after it
+  - orders's flag order-notes-field changed 3 minutes before the alert, after its errors had begun

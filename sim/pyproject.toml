@@ -8,6 +8,7 @@ dependencies = [
   "google-re2>=1.1.20251105",
   "py-config",
   "py-telemetry",
+  "pyyaml>=6.0.3",
   "uvicorn>=0.54.0",
 ]
 

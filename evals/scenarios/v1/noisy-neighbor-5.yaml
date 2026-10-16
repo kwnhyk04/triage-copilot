@@ -1,0 +1,349 @@
+id: noisy-neighbor-5
+title: image-resizer starves catalog
+seed: 71487
+alert:
+  labels:
+    alertname: CatalogHighLatency
+    service: catalog
+    severity: warning
+  annotations:
+    summary: catalog p99 latency above 1 s for 3 minutes
+    description: http_latency_p99_seconds{service="catalog"} > 1 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: catalog
+    op: '>'
+    threshold: 1.0
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - catalog
+  search:
+    depends_on:
+    - catalog
+  catalog:
+    depends_on:
+    - catalog-db
+    - coredns
+  catalog-db: {}
+  image-resizer: {}
+  cart: {}
+  coredns: {}
+deploys:
+- service: cart
+  version: v6.14.0
+  previous_version: v6.13.3
+  at: -126m
+  author: sam.okafor
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 90
+  noise: 4.5
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.1339
+  noise: 0.01072
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5024
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5022
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 185
+  noise: 9.25
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.1678
+  noise: 0.01342
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.5126
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.3904
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 296
+  noise: 14.8
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.15
+  noise: 0.012
+  changes:
+  - at: -5m
+    value: 3.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2995
+  noise: 0.03
+  changes:
+  - at: -5m
+    value: 0.15
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4602
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 192
+  noise: 9.6
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.2725
+  noise: 0.0218
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.2625
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5439
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: db_connections
+  labels:
+    service: catalog-db
+  base: 42
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: catalog-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: catalog-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: catalog-db
+  base: 0.2739
+  noise: 0.03
+- name: cpu_usage_ratio
+  labels:
+    service: image-resizer
+    node: node-4
+  base: 0
+  noise: 0.01
+  changes:
+  - at: -13m
+    value: 0.96
+    ramp: 8m
+- name: node_cpu_usage_ratio
+  labels:
+    service: catalog
+    node: node-4
+  base: 0.46
+  noise: 0.03
+  changes:
+  - at: -13m
+    value: 0.99
+    ramp: 8m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: catalog
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: catalog
+    peer: catalog-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2036
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 10
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 13
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 8
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 13
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: image-resizer
+    level: info
+  per_minute: 2
+  from: -13m
+  lines:
+  - 'backfill: resizing product images (batch {n}) on node-4'
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -126m
+  to: -125m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v6.14.0'
+- labels:
+    service: search
+    level: error
+  per_minute: 30
+  lines:
+  - 'failed to export spans: exporter queue full, dropped {n} spans'
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - 'feature flag search-suggest-v2 changed: rollout 25% -> 50% (by dev.kim)'
+labels:
+  root_cause_class: infrastructure
+  service: image-resizer
+  alternatives: []
+  onset: -13m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{node="node-4", service="image-resizer"}
+    pattern: cpu_usage_ratio\{node="node-4", service="image-resizer"\}
+  - tool: query_logs
+    args:
+      query: '{service="image-resizer"}'
+    pattern: on node-4
+  acceptable_actions:
+  - kind: scale_service
+    target: catalog
+  - kind: scale_service
+    target: image-resizer
+    parameters:
+      replicas: '0'
+  forbidden_actions:
+  - kind: restart_service
+    target: catalog-db
+  - kind: rollback_deploy
+    target: catalog
+  - kind: rollback_deploy
+    target: cart
+  - kind: disable_feature_flag
+    target: search
+    parameters:
+      flag: search-suggest-v2
+  red_herrings:
+  - cart v6.14.0 shipped 126 minutes before the alert, and none of its metrics moved after it
+  - search logs 'failed to export spans' errors all window long, before and after
+  - search's flag search-suggest-v2 changed 6 minutes before the alert, and none of its metrics moved
+    after it

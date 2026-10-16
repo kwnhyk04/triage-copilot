@@ -48,7 +48,17 @@ class HypothesisDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     root_cause_class: RootCause
-    service: Annotated[str, Field(min_length=1, max_length=200)]
+    service: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=200,
+            description=(
+                "The component where the cause lives, often not the alerting service: the "
+                "database, the DNS server, the workload on a shared node, the failing dependency."
+            ),
+        ),
+    ]
     confidence: Annotated[float, Field(ge=0, le=1)]
     summary: Annotated[str, Field(min_length=1, max_length=500)]
     evidence_ids: Annotated[list[str], Field(max_length=20)]

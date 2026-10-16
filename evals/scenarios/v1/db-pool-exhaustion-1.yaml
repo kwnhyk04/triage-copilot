@@ -1,0 +1,382 @@
+id: db-pool-exhaustion-1
+title: a held lock fills the orders pool
+seed: 53543
+alert:
+  labels:
+    alertname: OrdersHighErrorRate
+    service: orders
+    severity: critical
+  annotations:
+    summary: orders 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="orders"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: orders
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - checkout
+    - catalog
+    - search
+  checkout:
+    depends_on:
+    - orders
+  orders:
+    depends_on:
+    - orders-db
+    - coredns
+  orders-db: {}
+  catalog: {}
+  search: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: orders
+  version: v3.4.0
+  previous_version: v3.3.2
+  at: -3h
+  author: dev.kim
+  change: Add the order export endpoint
+- service: search
+  version: v4.6.0
+  previous_version: v4.5.5
+  at: -124m
+  author: ci-bot
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 95
+  noise: 5
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.003
+  noise: 0.001
+  changes:
+  - at: -5m
+    value: 0.11
+    ramp: 2m
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.22
+  noise: 0.02
+  changes:
+  - at: -7m
+    value: 5
+    ramp: 3m
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.35
+  noise: 0.03
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.48
+  noise: 0.02
+- name: db_pool_in_use
+  labels:
+    service: orders
+  base: 14
+  noise: 0.4
+  changes:
+  - at: -9m
+    value: 49.6
+    ramp: 3m
+- name: db_pool_max
+  labels:
+    service: orders
+  base: 50
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 60
+  noise: 3
+  changes:
+  - at: -9m
+    value: 98
+    ramp: 3m
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.003
+  noise: 0.002
+  changes:
+  - at: -9m
+    value: 2.4
+    ramp: 2m
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.1
+  noise: 0.05
+  changes:
+  - at: -9m
+    value: 9
+    ramp: 2m
+- name: cpu_usage_ratio
+  labels:
+    service: orders-db
+  base: 0.31
+  noise: 0.03
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -5m
+    value: 0.04
+    ramp: 2m
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 60
+  noise: 3
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -5m
+    value: 0.02
+    ramp: 2m
+- name: cache_hit_ratio
+  labels:
+    service: catalog
+  base: 0.94
+  noise: 0.01
+  changes:
+  - at: -40m
+    value: 0.71
+    ramp: 2m
+    until: -25m
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.08
+  noise: 0.01
+  changes:
+  - at: -40m
+    value: 0.21
+    ramp: 2m
+    until: -25m
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 156
+  noise: 7.8
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.2731
+  noise: 0.02185
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.2898
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.5745
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 3
+- name: node_cpu_usage_ratio
+  labels:
+    service: orders
+    node: node-1
+  base: 0.4918
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: orders
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: orders
+    peer: orders-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2411
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-4
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: search
+    level: info
+  per_minute: 11
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 30
+  lines:
+  - POST /orders 201 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 2
+  from: -3h
+  to: -179m
+  lines:
+  - 'Rolling update: pod orders-{rid} started version=v3.4.0'
+- labels:
+    service: orders
+    level: warn
+  per_minute: 6
+  from: -6m
+  lines:
+  - connection pool orders-db at 50/50 connections, {n} requests waiting
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: orders
+    op: '>='
+    value: 49
+- labels:
+    service: orders
+    level: error
+  per_minute: 30
+  from: -6m
+  lines:
+  - timeout acquiring connection from pool after 5000ms (pool=orders-db, active=50, idle=0) request_id={rid}
+  - 'request failed: PoolTimeoutException request_id={rid}'
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: orders
+    op: '>='
+    value: 49
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 4
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 2
+  from: -9m
+  lines:
+  - 'long-running transaction pid 48213 open: UPDATE inventory SET reserved = 0 WHERE warehouse_id = 7
+    (job inventory-reconcile)'
+- labels:
+    service: orders-db
+    level: warn
+  per_minute: 12
+  from: -9m
+  lines:
+  - 'canceling statement due to lock timeout: process {n} waited 5000 ms for ShareLock on transaction
+    9183442 of pid 48213'
+  - process {n} still waiting for ShareLock on transaction 9183442 after 1000 ms; blocked by pid 48213
+- labels:
+    service: checkout
+    level: error
+  per_minute: 8
+  from: -5m
+  lines:
+  - orders returned 500 for POST /orders request_id={rid}
+- labels:
+    service: catalog
+    level: warn
+  per_minute: 4
+  from: -40m
+  to: -25m
+  lines:
+  - cache miss rate high after cache node catalog-cache-2 restarted
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -124m
+  to: -123m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v4.6.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 35
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-4
+labels:
+  root_cause_class: database
+  service: orders-db
+  alternatives: []
+  onset: -9m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="orders-db"}'
+    pattern: pid 48213
+  - tool: query_metrics
+    args:
+      query: db_lock_wait_seconds{service="orders-db"}
+    pattern: db_lock_wait_seconds\{service="orders-db"\}
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: orders-db
+  - kind: rollback_deploy
+    target: orders
+  - kind: restart_service
+    target: orders
+  - kind: scale_service
+    target: orders
+  - kind: rollback_deploy
+    target: search
+  red_herrings:
+  - orders v3.4.0 shipped 3 hours before the alert, and orders kept a normal error ratio for nearly 3
+    hours after it
+  - catalog's cache hit ratio dipped 40 to 25 minutes before the alert and recovered before the pool filled
+  - Restarting or scaling orders refills the pool while pid 48213 holds the lock on inventory; no allowlisted
+    action fixes it, a human ends that transaction
+  - search v4.6.0 shipped 124 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after

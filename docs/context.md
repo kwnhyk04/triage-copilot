@@ -16,7 +16,7 @@ AI-native portfolio project showing a tool-using agent loop with a human approva
 - Scenario engine with 40 scripted incidents; optional live mode on the OpenTelemetry Demo.
 - Must demonstrate: backpressure, retries, pagination, partial failures, schema migrations.
 
-Targets (design goals, not yet measured):
+Targets (design goals; `make eval` measures them, and no counted eval run exists yet):
 
 | Metric | Target |
 | --- | --- |
@@ -24,7 +24,8 @@ Targets (design goals, not yet measured):
 | Root cause top-3 | 0.90 |
 | Consistency (correct in all 3 runs) | 0.65 |
 | Evidence grounding | 0.95 |
-| Action correctness | 0.80 |
+| Action correctness (reported beside its do-nothing baseline) | 0.80 |
+| Action correctness, scenarios with an acceptable action | 0.80 |
 | Forbidden action proposals | 0 (hard gate) |
 | Unapproved executions | 0 (hard gate, proven by tests) |
 | Tool-call validity | 0.99 |
@@ -50,6 +51,7 @@ Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; c
 | SQS (ElasticMQ; container port 9324, stats UI 9325 not published) | 4566 |
 | gateway / agent / executor / sim | 4200 / 4210 / 4220 / 4230 |
 | gateway internal listener (executor only) | 4201 |
+| sim admin listener (eval harness only) | 4231 |
 | web (Next.js) | 3200 |
 | Grafana | 3201 |
 | Jaeger UI | 16688 |
@@ -97,7 +99,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - `proposed_actions`: a copy of the agent's proposals for the UI. Its status comes from `approvals`, whose primary key `action_id` allows one decision per action.
   - Keyset indexes on `(tenant_id, created_at DESC NULLS FIRST, id DESC NULLS FIRST)` for alerts, groups and actions.
 - Agent schema:
-  - Models in `services/agent/src/agent/db.py`; plain-SQL Alembic revisions 0001 to 0006 in `services/agent/migrations/versions/` (`docs/migrations.md`).
+  - Models in `services/agent/src/agent/db.py`; plain-SQL Alembic revisions 0001 to 0008 in `services/agent/migrations/versions/` (`docs/migrations.md`).
   - Tables: `investigations` (while parked: `waiting_reason`, `waiting_since` and the `tenant_id` from the message; `queued_budget` is no longer written), `investigation_steps` (partitioned by month on `created_at`), `tool_calls`, `runbook_chunks` (`vector(768)`, no ANN index yet), `proposed_actions` (unique `idempotency_key`), `dead_letters` (poison messages), `ai_usage` (model tokens per UTC day).
 - Gateway intake (`apps/gateway/src/intake.ts`, `outbox.ts`, `cli.ts`):
   - `POST /v1/alerts` checks the tenant's bearer token after the rate limit and before reading the body, then validates the payload (1 MB, 200 alerts, 10 s to send the request).
@@ -135,10 +137,11 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 - Executor (`services/executor/src/executor/run.py`): `run_action(message, client, dry_run, effectors)` validates ActionApproved v1, checks `ALLOWED_KINDS` (and the effector) before any call, claims through `py_clients.ExecutionsClient`, checks the approved kind again, then runs the effector or, in a dry run, records the plan, and reports the result. Gateway unreachable or any error: refused. A claim found claimed is never retried. No consumer runs it yet.
 - AI pipeline (step 6a), `services/agent/src/agent/`:
   - `providers.py`: `GeminiProvider` (google-genai 2.27.0 on an httpx2 client; explicit key sent as `x-goog-api-key`, `vertexai=False`; function calling mode ANY, thinking LOW, thought signatures kept in `tool_calls.provider_state`) and `OpenAICompatibleProvider` (NVIDIA NIM, OpenRouter, Ollama). Both return the tool call, usage (input, output with thinking, cached) and raise `RateLimited`, `QuotaExhausted` (a per-day 429) or `ModelError`; neither retries.
-  - `llm.py`: `Router` (primary; on a 429 or a spent day the fallback, unless `LLM_FALLBACK_ON_RATE_LIMIT=false` for evals; the small role summarizes log pages) and `Limiter` (RPM in a sliding minute per process, RPD from `agent.model_calls` since midnight Pacific).
+  - `llm.py`: `Router` (primary; on a 429 or a spent day the fallback, unless `LLM_FALLBACK_ON_RATE_LIMIT=false` for evals; the small role summarizes log pages) and `Limiter` (RPM in a sliding minute per process, RPD from `agent.model_calls` since midnight Pacific; a provider's "daily quota spent" since then also ends the day, so parked investigations stay parked). `LLM_PRIMARY_RPD` defaults to 260, under the 275 requests measured on 2026-10-16 (not a documented limit). Every model call records `prompt_sha`, the sha256 of the prompt its process runs (`job.prompt_sha`); the eval refuses a run whose calls name another prompt.
   - Roles (`settings.py`): `LLM_{PRIMARY,FALLBACK,SMALL}_{PROVIDER,MODEL,BASE_URL,RPM,RPD}`, each provider's key from its own variable; keys and `FASTEMBED_CACHE_PATH` are required only when `AI_ENABLED=true`, which now defaults to false. Pinned 2026-10-15: `gemini-3.5-flash-lite`, fallback `deepseek-ai/deepseek-v4.1-flash`, small `gemini-3.1-flash-lite`.
   - `tools.py`: pydantic argument models and the definitions the model sees (plain JSON schema, a required `reason`): `get_alert_context` (the gateway's internal route, agent token), `query_metrics` (Prometheus selectors against the sim), `query_logs` (100 raw lines on page 1; later pages of 200 summarized by the small model), `list_deploys`, `get_dependencies`, `search_runbooks`, `propose_action` and `submit_report` (both handled by the job). Results are capped at 24,000 bytes and cited by their `tc_` id; 4xx is the model's to fix, 5xx and timeouts are missing evidence.
-  - `job.py`: the loop. Stops at the report, 15 tool calls, 300 s since `started_at`, or when another turn would leave too little for a forced report; then a forced `submit_report` turn, or the job's own partial report. Hard 150,000-token cap through `TurnBudget` (see docs/memory.md). Every model request is recorded in `model_calls` with its tokens before the step it produced. `build_report` enforces evidence ids, missing evidence, the 0.95 and 0.6 confidence ceilings, and proposals from `proposed_actions`; status `awaiting_approval` when there are proposals.
+  - `prompt.py`: the system prompt lists the sim's 21-metric catalog (a test keeps the two equal) and the root-cause classes with a labelling convention: name the first cause in the chain, and the service where it lives (`evals/prompt-log.md` records every change).
+  - `job.py`: the loop. Stops at the report, 15 tool calls, 300 s since `started_at` (moved forward by any time parked, so a run resumed after a quota stop keeps the time it had left), or when another turn would leave too little for a forced report; then a forced `submit_report` turn, or the job's own partial report. Hard 150,000-token cap through `TurnBudget` (see docs/memory.md). Every model request is recorded in `model_calls` with its tokens before the step it produced. `build_report` enforces evidence ids, missing evidence, the 0.95 and 0.6 confidence ceilings, and proposals from `proposed_actions`; status `awaiting_approval` when there are proposals.
   - `outbox.py`: StepRecorded v3 and ReportRecorded v1 committed with their step, relayed to `agent-events.fifo` (group = investigation, `message_type` attribute); 10 failed sends park a row.
   - `runbooks.py`: fastembed `nomic-ai/nomic-embed-text-v1.5` from `FASTEMBED_CACHE_PATH` (H:\.cache\fastembed, about 0.5 GB), `search_document: ` and `search_query: ` prefixes, pgvector cosine search. CLI `python -m agent.runbooks download|ingest|info`.
 - Gateway events (`apps/gateway/src/events.ts`): consumes `agent-events.fifo` one message at a time into `investigation_steps` and `investigation_reports`, copies the report's proposals into `proposed_actions` and moves the alert group to the report's status; idempotent and in order per investigation.
@@ -146,13 +149,44 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - Only a newly inserted report adds actions and moves the status, and the status update skips a row the sweeper has locked (the sweeper copies the status on its next pass).
   - Permanent failures (bad JSON, contract, unknown `message_type`, Postgres classes 22, 23, 42) go to `agent-events-dlq.fifo` at once with their attributes and an `error` attribute. Transient ones retry in-process for up to 15 minutes, extending the message's visibility, so they cost no receives. `pnpm --filter @triage/gateway events:replay` (part of `make dlq-replay`) moves the DLQ back.
   - `GET /internal/investigations/{id}/alerts` on the internal listener serves the alert context to the agent's token only.
-- Sim (`sim/src/sim/`): scenarios in `evals/scenarios/*.json` (world and expected result; times are offsets from the anchor, the alert's start). Prometheus subset (`/api/v1/query_range`, `/query`, `/label/{name}/values`; selectors only), Loki-style logs with keyset cursor pages of at most 200, keyset deploys, dependencies, deterministic from seed and anchor (crc32 per sample). `POST /admin/scenarios/{id}/activate`, `PUT /admin/down {tool}` (503, answered by a middleware before parameter validation), `GET /admin/state`. Scenarios: `bad-deploy`, `db-pool-exhaustion`.
+- Sim (`sim/src/sim/`): scenarios in `evals/scenarios/v1/*.yaml` (`SIM_SCENARIOS_DIR`; world and labels; times are offsets from the anchor, the alert's start), loaded with libyaml. Two apps over one state: the data app on `SIM_PORT` (4230) serves a Prometheus subset (`/api/v1/query_range`, `/query`, `/label/{name}/values`; selectors only), Loki-style logs with keyset cursor pages of at most 200, keyset deploys and dependencies, deterministic from seed and anchor (crc32 per sample). The admin app on `SIM_ADMIN_PORT` (4231) serves `POST /admin/scenarios/{id}/activate`, `PUT /admin/down {tool}` (503, answered by a middleware before parameter validation) and `GET /admin/state`.
+  - The data app has no admin route. Only `make eval` and `make smoke` get `SIM_ADMIN_URL`; the agent's settings have no admin field. Tests send hostile arguments through every agent tool and see only the data port and data routes.
+  - Activation sets the scenario's own `down` backend and returns the file's sha256. `run()` serves both ports from one process; `--reload` restarts on code or scenario changes (watchfiles).
+  - `sim.validate` (`uv run python -m sim.validate <dirs>`) checks:
+    - the alert rule against its metric, worst case with noise;
+    - log streams' `asserts` against the metrics;
+    - `version=` mentions against the deploys, and deploy chains;
+    - cause before symptoms (`labels.onset`);
+    - every required signal shows before the alert from a backend that is up;
+    - acceptable and forbidden actions do not overlap, and rollbacks go to the right version.
+- Scenario set v1 (`evals/scenarios/v1/`):
+  - 40 scenarios, 8 failure families x 5 variants, written by `generate.py` and pinned by `manifest.json` (sha256, family, split, ci flag, down backend). Frozen on 2026-10-16, unfrozen the same day for the config timing fix and frozen again: a test pins the manifest's own sha256.
+  - 15 dev and 25 test; the ci subset is one dev scenario per family; 6 scenarios mark a backend down.
+  - Every scenario carries noise: an unrelated deploy about 2 hours before, a loud irrelevant error log, routine deploys, and baseline series and bystanders (coredns, a batch job).
+  - Deploy timing: in 16 scenarios (one dev and one test per family) a harmless deploy 2 to 6 minutes before the alert is the newest deploy, its rollback forbidden and named as a red herring. Causal deploys land 4.5 to 35 minutes before the alert; bad-deploy-2 and bad-deploy-4 run as canaries first.
+  - Config timing: in 16 scenarios (one dev and one test per family; 4 dev scenarios also have a harmless deploy) a harmless config or flag change 2 to 6 minutes before the alert is the newest change, named as a red herring; turning off a harmless flag is forbidden. Causal changes start 4.5 to 30 minutes before the alert: bad-config-3's flag builds up CPU for 15 minutes, and bad-config-5's covers 10% of charges first.
+  - Labels: class, service, optional alternatives, onset, required signals, acceptable and forbidden actions, red herrings.
+  - `make scenarios-check` runs the validator and fails when a released set's file changed against `SCENARIOS_BASE`.
+  - `evals/README.md` has the families, scores and commands.
   - Regexes (`=~`, `!~`, `|~`, `!~`) run on RE2 (`google-re2`, linear time, the same syntax as Prometheus and Loki); a pattern RE2 rejects answers 400 `bad_data` with a message the agent can act on.
   - Every request stops at `SIM_REQUEST_TIME_LIMIT_SECONDS` (2 s) with a 400, and query_range at 250,000 points in total. Out-of-range times, steps and cursors answer 400, never 500. `/docs` and `/openapi.json` are off.
   - The agent's `get_dependencies` accepts only service names of letters, digits, `.`, `_` and `-`, and quotes the path segment, so it cannot reach other sim routes.
-- `evals/harness/run.py` (`make smoke`): runs a scenario against the running stack with its own tenant, caches each run's result in `evals/reports/runs/`, stops with exit code 3 on a spent day and resumes later with the run's anchor and seed; prints the report, tool calls, per-turn tokens and latency, the gateway's copy, the models and the embedding model and revision.
+- Eval harness (`evals/harness/`):
+  - `run.py`: one run through the real path (`make smoke`).
+    - Activates the scenario through the sim's admin port and posts its alert to the webhook as a new tenant with an opaque name.
+    - Waits for the agent, then for the report in the gateway's mirror.
+    - Collects the gateway's report and steps, the agent's tool and model calls, and the approvals and executions.
+    - Timing runs from the alert group's `created_at` to the report's `recorded_at`, both on the database clock.
+  - `score.py`: deterministic per-run scores, metrics overall and per family, 95% bootstrap intervals that resample scenarios, and the floor rules. Action correctness carries its do-nothing baseline (what an agent that never proposes scores on the same runs), and action correctness on scenarios with an acceptable action is its own metric; the reports and the README table show both.
+  - `eval.py`: `make eval SPLIT=dev|test SUBSET=ci|full RUNS=n [ESTIMATE=1] [SET_FLOORS=1] [ALLOW_LOOSER=1]`.
+    - Runs every first run before any second, 60 s apart.
+    - Caches each run under the prompt hash, the pinned models, the scenario sha256 and the run index, and resumes a parked run first.
+    - A run with a fallback or unpinned model does not count; a run where the sim lost its scenario reruns once.
+    - Exit codes: 1 for a broken floor or gate (any forbidden proposal), 2 for a quota stop, 3 for setup errors.
+    - Writes `evals/reports/<date>.json` and `.md` and the README's eval table for the full test split; other runs write `<date>-<split>-<subset>-<runs>-<prompt sha, first 8>`.
+  - `evals/thresholds.json` holds the floor rules and per-scope floors (none set yet). `evals/pricing.json` holds paid-tier rates (official page, 2026-10-15) and `billing: free`. `evals/prompt-log.md` logs prompt changes.
 
-Still planned: the other 38 scenarios and the full eval (6b), the executor's queue consumer and effectors.
+Still planned: the counted eval runs (ci subset, dev split, test split 3 times, then floors; commands in Current Development Status), the executor's queue consumer and effectors.
 
 ## Implemented Functionality
 
@@ -191,6 +225,24 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
   - The internal API answers 401 problem details with `WWW-Authenticate` without the token, with a wrong one, or with another scheme (`test_agent_api.py`).
 - executor: `/healthz`, `/readyz`, and the safety checks in `executor.run` (no consumer yet). sim: the scenario engine (step 6a).
 - Step 6a (AI core), checked by tests: no investigation records more than 150,000 tokens over 30 seeded runs of a model that always fills its input bound and output allowance, and every request's input stays under its bound; a turn that cannot fit ends with the job's partial report; metrics down (503) puts `query_metrics` in missing evidence and caps confidence at 0.6; 5,000 log lines come back in pages of at most 200 (100 on page 1), later pages summarized, 15 pages under 40 KB of context; a proposal stays pending and the report reaches `agent-events.fifo` after its steps, in order; a report citing an unknown result goes back to the model; runbook search uses the nomic prefixes, and the cached model ranks the pool-exhaustion runbook first offline. Gateway: mirror rows, tool-call pairing, idempotent redelivery, steps before their report, the alerts route's 401 matrix. Providers: the Gemini key in `x-goog-api-key` whatever the environment, 429 per day versus per minute, OpenAI-compatible request and usage; router fallback and eval mode; the limiter.
+- Step 6b (in progress, 2026-10-16), checked by tests (`make test`: Python 379 passed, TypeScript passing; `make test-int`: TypeScript 33, Python 39):
+  - Scenario set v1: all 40 scenarios pass the validator (0 problems). Every required signal shows in the real tools' results against the in-process sim. A cold query for every log line stays under 1.5 s. The frozen manifest pins every file, the generator rewrites them byte for byte, and the set has 8 families of 5, 15 dev and 25 test, and 6 degraded scenarios covering all four backends.
+  - Deploy timing: a harmless deploy is the newest deploy, minutes before the alert, in a dev and a test scenario of every family, forbidden to roll back and named as a red herring; causal deploys span under 5 to over 30 minutes before the alert.
+  - Config timing: the same for config and flag changes, with turning off a harmless flag forbidden; causal changes start from under 5 to over 15 minutes before the alert. Both timing tests fail when a decoy loses its red herring or its forbidden action.
+  - Validator: one test per inconsistency, each caught on a mutated copy of the pool scenario. The 6a pool timeline (warn lines claiming a full pool from -8m while the pool filled until -4m) fails it.
+  - Isolation: the data app answers 404 or 405 on every admin path, encoded or traversing, and leaks no admin state. Hostile arguments in every string argument of every sim tool reach only 127.0.0.1:4230 and the data routes. The agent's settings hold no admin address.
+  - Resume: a run that parked for model quota mid-investigation and resumed after more than `MAX_SECONDS` finishes with a full, not a partial, report (`test_workers_int.py`).
+  - Scoring:
+    - top-1 needs the class and the service;
+    - grounding needs a cited result of the signal's own tool;
+    - action correctness needs every proposal acceptable, and carries its do-nothing baseline; the share on scenarios with an acceptable action is its own metric, and the README table shows both;
+    - forbidden proposals count with any parameters;
+    - validity counts only `ToolInputError`;
+    - degraded runs must name the down tool;
+    - intervals repeat exactly from the seed;
+    - floors follow the rules, including the known-miss exception, and only tighten;
+    - the plan runs every scenario once before any second run, and the cache keys change with the prompt, the models and the scenario.
+  - An independent review of v1 found label ambiguity, noisy-neighbor data that argued the wrong class, family tells and wrong log texts. Fixed before any counted run: the prompt's labelling convention, baseline series and bystanders, node contention, an OOM sawtooth, and corrected texts and action labels (docs/memory.md).
 - Step 5 (tests), checked by tests:
   - Fingerprints: golden vectors from prometheus/common, a real Alertmanager 0.28.1 payload, UTF-8 byte order, and fast-check properties (same labels in any order, the same fingerprint; different sets, different ones). Grouping property: alerts sent within one window join one group per group key, whatever their label order or claimed fingerprint (`intake.int.test.ts`).
   - Decisions (`decisions.int.test.ts`): a second approval and an approval after a rejection get 409; of 20 concurrent decisions exactly one is recorded, with at most one ActionApproved; when queueing fails, no decision is recorded.
@@ -205,11 +257,36 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 
 ## Current Development Status
 
-Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper), step 5 (tests) and step 6a (AI core) on 2026-10-15. A live run on bad-deploy found the right root cause and proposed the rollback in 6 model turns and 35,090 tokens. Next: step 6b, the other scenarios and the eval harness.
+Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper), step 5 (tests) and step 6a (AI core) on 2026-10-15. A live run on bad-deploy found the right root cause and proposed the rollback in 6 model turns and 35,090 tokens.
+
+Step 6b is in progress (2026-10-16): the scenario set (frozen, manifest sha256 `b81c80f4ba442427...`), validator, admin isolation, harness and docs are built and tested. Prompt tuning on the dev split is under way (evals/README.md, Status; `evals/prompt-log.md`):
+
+- Baseline `146b161991e14f7c`: dev top-1 0.53, action correctness 0.60 against a do-nothing baseline of 0.53, one forbidden proposal. The ci subset on the same prompt: top-1 0.62.
+- Change 1, `2b91d4523fb028a6`: dev top-1 0.73, grounding 0.93, action correctness 0.73, 0.43 on scenarios with an acceptable action, no forbidden proposal.
+- Change 2, `e0f86d4ad3b47b1c`, is in the source: 2 of 15 dev runs finished (both right) before the provider's daily quota ran out at 10:12 UTC, after 275 requests; bad-deploy-1 is parked.
+- Gateway, web, agent and sim are stopped, with no process left on their ports. The compose infra runs.
+
+Next, in this order:
+
+1. After midnight Pacific, start the stack with `make dev-agent AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=3000000`, and finish change 2's dev pass with `make eval SPLIT=dev RUNS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`; it resumes bad-deploy-1 first. Tune on dev failures only, logging each change in `evals/prompt-log.md` and restarting the agent after each edit.
+2. Rerun the ci subset on the final prompt.
+3. Run `make eval SPLIT=test ESTIMATE=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`, with `LLM_PRIMARY_RPD` set to the observed cap.
+4. Run `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`: 75 runs, about 750 calls, about 3 quota days at 275 requests a day. On exit 2, run the same command after midnight Pacific.
+5. Set the floors: `make eval SPLIT=test SET_FLOORS=1 ...` and `make eval SUBSET=ci SET_FLOORS=1 ...`. Both rescore cached runs and make no model calls.
 
 ## Known Limitations
 
-- All targets are design goals and have not been measured.
+- All targets are design goals until the test split runs; only the ci subset has run, once. Time to first hypothesis can only be measured by a proxy, the time to the report, until the agent records a hypothesis step (docs/todo.md).
+- Scenario set v1 gaps, for v2:
+  - No scenario's answer is traffic_surge, and none's is unknown.
+  - Pool exhaustion is always `database`, and no certificate case has an acceptable action.
+  - 21 of 40 scenarios have no acceptable action; reports show the do-nothing baseline beside action correctness, and action correctness on the other 19.
+  - A run resumed after a quota stop sees tool windows up to 15 minutes after the alert, which can push single-line evidence off the first log page.
+  - Some callers stay healthy when the service they call fails, and external providers get routine deploys.
+- Sim backlog (docs/todo.md):
+  - Log cursors are not bound to the query, window or world.
+  - `GET /api/v1/deploys?service=<unknown>` answers an empty 200 instead of 404.
+  - An activation anchor outside 1970 to 3000 answers 500 on Windows, because `Activation.anchor` has no bounds.
 - The contracts are ahead of the code:
   - `GET /v1/investigations/{id}` is not served (step 9). Nothing but the seed writes `proposed_actions`: no consumer copies ActionProposed into the gateway yet.
   - The executor has no queue consumer and no effectors: ActionApproved messages wait in `actions.fifo`, and `executor.run` runs only in tests.
@@ -219,7 +296,6 @@ Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (wo
   - The GraphQL `investigations` and `investigation` queries have no resolvers (step 9).
 - `RootCauseClass` and `ActionKind` are initial enums; the scenario engine and eval steps may extend them. A new value in a response breaks older generated Python clients (pydantic enums reject unknown values), so ship the gateway and the clients together.
 - Action `parameters` are free-form; per-kind parameter schemas are open (docs/todo.md).
-- `make eval` is a placeholder until step 6b; `make smoke` runs one scenario.
 - The gateway derives a tool call's `timeout` status from the agent's summary text (`failed: ...Timeout...:`), since StepRecorded v3 has no status field (a `ponytail:` note in `events.ts`).
 - The sim serves one active scenario per process, so evals run scenarios one after another.
 - The gateway stores alert labels but not annotations, so `get_alert_context` cannot show an alert's summary text.

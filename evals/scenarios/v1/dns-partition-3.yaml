@@ -1,0 +1,335 @@
+id: dns-partition-3
+title: coredns crashes on a loop
+seed: 96231
+alert:
+  labels:
+    alertname: AccountsHighErrorRate
+    service: accounts
+    severity: critical
+  annotations:
+    summary: accounts 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="accounts"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: accounts
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - accounts
+    - catalog
+  accounts:
+    depends_on:
+    - accounts-db
+    - coredns
+  catalog:
+    depends_on:
+    - coredns
+  accounts-db: {}
+  coredns: {}
+  cart: {}
+  nightly-backup: {}
+deploys:
+- service: cart
+  version: v7.12.0
+  previous_version: v7.11.6
+  at: -116m
+  author: li.wei
+  change: Add a metrics label to the request histogram
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 47
+  noise: 2.35
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.1836
+  noise: 0.01468
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4754
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5547
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 45
+  noise: 2.25
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.22
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.3359
+  noise: 0.02687
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.428
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4609
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 248
+  noise: 12.4
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.1334
+  noise: 0.01067
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5295
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4125
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 225
+  noise: 11.25
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.2864
+  noise: 0.02291
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3831
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5508
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 0
+- name: db_connections
+  labels:
+    service: accounts-db
+  base: 32
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: accounts-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: accounts-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: accounts-db
+  base: 0.2702
+  noise: 0.03
+- name: container_restarts_total
+  labels:
+    service: coredns
+  base: 0
+  changes:
+  - at: -7m
+    value: 1
+  - at: -5m
+    value: 2
+  - at: -3m
+    value: 3
+- name: node_cpu_usage_ratio
+  labels:
+    service: accounts
+    node: node-2
+  base: 0.4739
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: accounts
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: accounts
+    peer: accounts-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-2
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 8
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 11
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 8
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 10
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: coredns
+    level: error
+  per_minute: 1
+  from: -7m
+  lines:
+  - '[FATAL] plugin/loop: Loop (127.0.0.1:43920 -> :53) detected for zone "."'
+- labels:
+    service: accounts
+    level: error
+  per_minute: 30
+  from: -4m
+  lines:
+  - 'dial tcp: lookup accounts-db.internal on 10.96.0.10:53: read udp 10.4.0.21:41832->10.96.0.10:53:
+    i/o timeout'
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -116m
+  to: -115m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v7.12.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 24
+  lines:
+  - invalid coupon code {rid} submitted by {user}
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-2
+down: metrics
+labels:
+  root_cause_class: infrastructure
+  service: coredns
+  alternatives: []
+  onset: -7m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="coredns"}'
+    pattern: plugin/loop
+  - tool: query_logs
+    args:
+      query: '{service="accounts", level="error"}'
+    pattern: lookup accounts-db\.internal
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: accounts-db
+  - kind: rollback_deploy
+    target: accounts
+  - kind: rollback_deploy
+    target: cart
+  red_herrings:
+  - cart v7.12.0 shipped 116 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'invalid coupon code' errors all window long, before and after

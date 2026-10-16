@@ -1,0 +1,429 @@
+id: db-pool-exhaustion-3
+title: a bad plan on inventory-db
+seed: 21003
+alert:
+  labels:
+    alertname: InventoryHighLatency
+    service: inventory
+    severity: warning
+  annotations:
+    summary: inventory p99 latency above 2 s for 3 minutes
+    description: http_latency_p99_seconds{service="inventory"} > 2 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: inventory
+    op: '>'
+    threshold: 2.0
+    for: 3m
+services:
+  checkout:
+    depends_on:
+    - inventory
+  orders:
+    depends_on:
+    - inventory
+  inventory:
+    depends_on:
+    - inventory-db
+    - coredns
+  inventory-db: {}
+  notifications: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: inventory
+  version: v2.8.1
+  previous_version: v2.8.0
+  at: -40m
+  author: ana.lopez
+  change: Add a stock export metric
+- service: notifications
+  version: v6.13.0
+  previous_version: v6.12.1
+  at: -123m
+  author: renovate-bot
+  change: Bump dependencies
+- service: orders
+  version: v5.19.0
+  previous_version: v5.18.4
+  at: -3m
+  author: maria.g
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 127
+  noise: 6.35
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.1418
+  noise: 0.01135
+  changes:
+  - at: -270s
+    value: 4.9
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.395
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5367
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 267
+  noise: 13.35
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.2553
+  noise: 0.02042
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4197
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.5057
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: inventory
+  base: 248
+  noise: 12.4
+- name: http_error_ratio
+  labels:
+    service: inventory
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.03
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: inventory
+  base: 0.15
+  noise: 0.012
+  changes:
+  - at: -5m
+    value: 9.5
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: inventory
+  base: 0.4544
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: inventory
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: inventory
+  base: 0.3699
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: inventory
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 86
+  noise: 4.3
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.1409
+  noise: 0.01127
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4442
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4795
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 1
+- name: db_connections
+  labels:
+    service: inventory-db
+  base: 35
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: inventory-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: inventory-db
+  base: 0.1
+  noise: 0.05
+  changes:
+  - at: -10m
+    value: 35
+    ramp: 2m
+- name: cpu_usage_ratio
+  labels:
+    service: inventory-db
+  base: 0.3628
+  noise: 0.03
+  changes:
+  - at: -10m
+    value: 0.93
+    ramp: 2m
+- name: db_pool_in_use
+  labels:
+    service: inventory
+  base: 6
+  noise: 0.1
+  changes:
+  - at: -10m
+    value: 19.8
+    ramp: 4m
+- name: db_pool_max
+  labels:
+    service: inventory
+  base: 20
+- name: node_cpu_usage_ratio
+  labels:
+    service: inventory
+    node: node-3
+  base: 0.4565
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: inventory
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: inventory
+    peer: inventory-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1776
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-4
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 14
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 14
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: inventory
+    level: info
+  per_minute: 13
+  lines:
+  - GET /stock/{n} 200 {ms}ms request_id={rid}
+  - POST /reservations 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 12
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: inventory-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: inventory
+    level: info
+  per_minute: 2
+  from: -40m
+  to: -39m
+  lines:
+  - 'Rolling update: pod inventory-{rid} started version=v2.8.1'
+- labels:
+    service: inventory-db
+    level: info
+  per_minute: 1
+  from: -10m
+  to: -9m
+  lines:
+  - automatic analyze of table "inventory.public.stock_levels"
+- labels:
+    service: inventory-db
+    level: warn
+  per_minute: 20
+  from: -9m
+  lines:
+  - 'duration: 8423.117 ms  statement: SELECT * FROM stock_levels WHERE sku = $1 AND warehouse_id = $2'
+  - 'duration: 9105.402 ms  statement: SELECT * FROM stock_levels WHERE sku = $1 AND warehouse_id = $2'
+- labels:
+    service: inventory
+    level: warn
+  per_minute: 6
+  from: -6m
+  lines:
+  - connection pool inventory-db at 20/20 connections, {n} requests waiting
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: inventory
+    op: '>='
+    value: 19
+- labels:
+    service: inventory
+    level: error
+  per_minute: 30
+  from: -6m
+  lines:
+  - timeout acquiring connection from pool after 5000ms (pool=inventory-db, active=20, idle=0) request_id={rid}
+  - 'request failed: PoolTimeoutException request_id={rid}'
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: inventory
+    op: '>='
+    value: 19
+- labels:
+    service: notifications
+    level: info
+  per_minute: 2
+  from: -123m
+  to: -122m
+  lines:
+  - 'Rolling update: pod notifications-{rid} started version=v6.13.0'
+- labels:
+    service: orders
+    level: error
+  per_minute: 23
+  lines:
+  - 'thumbnail generation failed for sku={n}: unsupported color profile'
+- labels:
+    service: orders
+    level: info
+  per_minute: 2
+  from: -3m
+  to: -2m
+  lines:
+  - 'Rolling update: pod orders-{rid} started version=v5.19.0'
+- labels:
+    service: inventory
+    level: info
+  per_minute: 1
+  from: -4m
+  to: -3m
+  lines:
+  - 'config reloaded from config-service: inventory.low_stock_email.threshold=5 (was 3), changed by ops-bot'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-4
+labels:
+  root_cause_class: database
+  service: inventory-db
+  alternatives: []
+  onset: -10m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: db_slow_queries_per_second{service="inventory-db"}
+    pattern: db_slow_queries_per_second\{service="inventory-db"\}
+  - tool: query_logs
+    args:
+      query: '{service="inventory-db", level="warn"}'
+    pattern: FROM stock_levels WHERE sku
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: inventory-db
+  - kind: rollback_deploy
+    target: inventory
+  - kind: rollback_deploy
+    target: notifications
+  - kind: rollback_deploy
+    target: orders
+  red_herrings:
+  - inventory v2.8.1 shipped 40 minutes before the alert and only added a metric
+  - notifications v6.13.0 shipped 123 minutes before the alert, and none of its metrics moved after it
+  - orders logs 'thumbnail generation failed for sku=' errors all window long, before and after
+  - orders v5.19.0 shipped 3 minutes before the alert, and none of its metrics moved after it
+  - inventory's config key inventory.low_stock_email.threshold changed 4 minutes before the alert, after
+    its latency had already risen

@@ -12,9 +12,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from sim.main import Settings, create_app
-
-SHIPPED = Path(__file__).resolve().parents[2] / "evals" / "scenarios"
+SHIPPED = Path(__file__).resolve().parents[2] / "evals" / "scenarios" / "v1"
 ANCHOR = "2026-10-15T12:00:00Z"
 ANCHOR_S = 1_792_065_600
 LOKI = "/loki/api/v1/query_range"
@@ -25,7 +23,9 @@ DEEP_CURSOR = base64.urlsafe_b64encode(b"[" * 3000).decode()
 
 
 def activate(client: TestClient) -> TestClient:
-    response = client.post("/admin/scenarios/db-pool-exhaustion/activate", json={"anchor": ANCHOR})
+    response = client.post(
+        "/admin/scenarios/db-pool-exhaustion-1/activate", json={"anchor": ANCHOR}
+    )
     assert response.status_code == 200
     return client
 
@@ -86,11 +86,8 @@ def test_out_of_range_input_answers_400(
     assert (response.status_code, response.json()["errorType"]) == (400, "bad_data")
 
 
-def test_a_request_over_the_time_limit_answers_400() -> None:
-    settings = Settings(
-        sim_scenarios_dir=SHIPPED, log_level="warn", sim_request_time_limit_seconds=0.000001
-    )
-    client = activate(TestClient(create_app(settings)))
+def test_a_request_over_the_time_limit_answers_400(serve: Callable[..., TestClient]) -> None:
+    client = activate(serve(SHIPPED, sim_request_time_limit_seconds=0.000001))
     response = client.get(LOKI, params={"query": '{service=~".+"}'})
     assert response.status_code == 400
     assert "time limit" in response.json()["error"]
@@ -144,11 +141,12 @@ SCRIPT = """
 import hashlib, sys
 from pathlib import Path
 from fastapi.testclient import TestClient
-from sim.main import Settings, create_app
+from sim.main import Settings, create_apps
 
-client = TestClient(create_app(Settings(sim_scenarios_dir=Path(sys.argv[1]), log_level="warn")))
+apps = create_apps(Settings(sim_scenarios_dir=Path(sys.argv[1]), log_level="warn"))
 activation = {"seed": 3, "anchor": "2026-10-15T12:00:00Z"}
-client.post("/admin/scenarios/bad-deploy/activate", json=activation)
+TestClient(apps.admin).post("/admin/scenarios/bad-deploy-1/activate", json=activation)
+client = TestClient(apps.data)
 window = {"start": 1792062000, "end": 1792066200, "step": "30s"}
 digest = hashlib.sha256()
 for path, params in [

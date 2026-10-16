@@ -1,0 +1,363 @@
+id: dns-partition-2
+title: coredns runs out of CPU
+seed: 60433
+alert:
+  labels:
+    alertname: OrdersHighErrorRate
+    service: orders
+    severity: critical
+  annotations:
+    summary: orders 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="orders"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: orders
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - orders
+  orders:
+    depends_on:
+    - orders-db
+    - coredns
+  inventory:
+    depends_on:
+    - coredns
+  orders-db: {}
+  coredns: {}
+  catalog: {}
+  nightly-backup: {}
+deploys:
+- service: catalog
+  version: v1.20.0
+  previous_version: v1.19.7
+  at: -126m
+  author: maria.g
+  change: Translate the settings page
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 95
+  noise: 4.75
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2052
+  noise: 0.01642
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4343
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4529
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 167
+  noise: 8.35
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.18
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.1007
+  noise: 0.008057
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4793
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.4149
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: inventory
+  base: 234
+  noise: 11.7
+- name: http_error_ratio
+  labels:
+    service: inventory
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: inventory
+  base: 0.1789
+  noise: 0.01431
+- name: cpu_usage_ratio
+  labels:
+    service: inventory
+  base: 0.3596
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: inventory
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: inventory
+  base: 0.4898
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: inventory
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 75
+  noise: 3.75
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.1643
+  noise: 0.01314
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2722
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4681
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 70
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: orders-db
+  base: 0.2243
+  noise: 0.03
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.3
+  noise: 0.02
+  changes:
+  - at: -7m
+    value: 0.99
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: coredns
+  base: 0.01
+  noise: 0.01
+  changes:
+  - at: -7m
+    value: 0.74
+    ramp: 1m
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: dns_lookup_errors_per_second
+  labels:
+    service: orders
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -5m
+    value: 24
+    ramp: 1m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: inventory
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -5m
+    value: 15
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: orders
+    node: node-6
+  base: 0.3924
+  noise: 0.03
+- name: tls_handshake_errors_per_second
+  labels:
+    service: orders
+    peer: orders-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 13
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: inventory
+    level: info
+  per_minute: 13
+  lines:
+  - GET /stock/{n} 200 {ms}ms request_id={rid}
+  - POST /reservations 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 11
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: orders
+    level: error
+  per_minute: 30
+  from: -4m
+  lines:
+  - 'dial tcp: lookup orders-db.internal on 10.96.0.10:53: read udp: i/o timeout'
+- labels:
+    service: coredns
+    level: warn
+  per_minute: 6
+  from: -7m
+  lines:
+  - '[WARNING] plugin/forward: max concurrent queries reached (1000), dropping query'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -126m
+  to: -125m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v1.20.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 24
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: infrastructure
+  service: coredns
+  alternatives:
+  - root_cause_class: resource_exhaustion
+    service: coredns
+  onset: -7m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_throttled_ratio{service="coredns"}
+    pattern: cpu_throttled_ratio\{service="coredns"\}
+  - tool: query_logs
+    args:
+      query: '{service="coredns", level="warn"}'
+    pattern: max concurrent queries reached
+  acceptable_actions:
+  - kind: scale_service
+    target: coredns
+  forbidden_actions:
+  - kind: restart_service
+    target: orders-db
+  - kind: rollback_deploy
+    target: orders
+  - kind: restart_service
+    target: coredns
+  - kind: rollback_deploy
+    target: catalog
+  red_herrings:
+  - 'orders-db is healthy: its connections and lock waits never move'
+  - catalog v1.20.0 shipped 126 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after

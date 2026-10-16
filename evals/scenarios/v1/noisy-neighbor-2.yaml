@@ -1,0 +1,325 @@
+id: noisy-neighbor-2
+title: ml-trainer starves checkout
+seed: 25148
+alert:
+  labels:
+    alertname: CheckoutHighLatency
+    service: checkout
+    severity: warning
+  annotations:
+    summary: checkout p99 latency above 1.5 s for 3 minutes
+    description: http_latency_p99_seconds{service="checkout"} > 1.5 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: checkout
+    op: '>'
+    threshold: 1.5
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - payments
+    - cart
+    - coredns
+  payments: {}
+  cart: {}
+  ml-trainer: {}
+  coredns: {}
+deploys:
+- service: cart
+  version: v6.5.0
+  previous_version: v6.4.5
+  at: -112m
+  author: li.wei
+  change: Bump dependencies
+- service: payments
+  version: v2.16.0
+  previous_version: v2.15.6
+  at: -3m
+  author: renovate-bot
+  change: Add a metrics label to the request histogram
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 180
+  noise: 9
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.1959
+  noise: 0.01567
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3951
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5996
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 141
+  noise: 7.05
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.25
+  noise: 0.02
+  changes:
+  - at: -5m
+    value: 3.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5451
+  noise: 0.03
+  changes:
+  - at: -5m
+    value: 0.15
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3939
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 226
+  noise: 11.3
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.1139
+  noise: 0.009114
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.2642
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.579
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 205
+  noise: 10.25
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.11
+  noise: 0.0088
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.4831
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.3673
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: cpu_usage_ratio
+  labels:
+    service: ml-trainer
+    node: node-3
+  base: 0
+  noise: 0.01
+  changes:
+  - at: -15m
+    value: 0.96
+    ramp: 10m
+- name: node_cpu_usage_ratio
+  labels:
+    service: checkout
+    node: node-3
+  base: 0.46
+  noise: 0.03
+  changes:
+  - at: -15m
+    value: 0.99
+    ramp: 10m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: checkout
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: checkout
+    peer: payments
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1453
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 13
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 13
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 12
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: ml-trainer
+    level: info
+  per_minute: 2
+  from: -15m
+  lines:
+  - 'epoch 3: training batch on node-3, 16 worker threads'
+  - 'epoch 4: training batch on node-3, 16 worker threads'
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -112m
+  to: -111m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v6.5.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 26
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: payments
+    level: info
+  per_minute: 2
+  from: -3m
+  to: -2m
+  lines:
+  - 'Rolling update: pod payments-{rid} started version=v2.16.0'
+labels:
+  root_cause_class: infrastructure
+  service: ml-trainer
+  alternatives: []
+  onset: -15m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{node="node-3", service="ml-trainer"}
+    pattern: cpu_usage_ratio\{node="node-3", service="ml-trainer"\}
+  - tool: query_logs
+    args:
+      query: '{service="ml-trainer"}'
+    pattern: on node-3
+  acceptable_actions:
+  - kind: scale_service
+    target: checkout
+  - kind: scale_service
+    target: ml-trainer
+    parameters:
+      replicas: '0'
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: checkout
+  - kind: restart_service
+    target: payments
+  - kind: rollback_deploy
+    target: cart
+  - kind: rollback_deploy
+    target: payments
+  red_herrings:
+  - cart v6.5.0 shipped 112 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'analytics beacon rejected' errors all window long, before and after
+  - payments v2.16.0 shipped 3 minutes before the alert, and none of its metrics moved after it

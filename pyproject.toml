@@ -42,6 +42,7 @@ known-first-party = ["agent", "executor", "sim", "py_clients", "py_config", "py_
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101"]
+"**/test_*.py" = ["S101"]
 # datamodel-codegen lints before it formats, and schema descriptions stay on one line.
 "**/generated/**" = ["E501"]
 
@@ -64,7 +65,7 @@ venv = ".venv"
 # Default prepend import mode, so test file names must be unique across the repo. Importlib mode
 # would register the sim/ folder as a package named `sim` and shadow the real one.
 [tool.pytest.ini_options]
-testpaths = ["services", "sim", "packages"]
+testpaths = ["services", "sim", "packages", "evals"]
 markers = ["integration: needs `make infra-up` and the variables from .env"]
 
 [tool.datamodel-codegen]

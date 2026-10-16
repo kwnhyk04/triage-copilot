@@ -10,7 +10,7 @@ Investigates production alerts with read-only tools (metrics, logs, deploys, run
 | `apps/web` | Next.js UI and backend-for-frontend | 3200 |
 | `services/agent` | SQS consumer + internal FastAPI | 4210 |
 | `services/executor` | Runs approved, allowlisted actions only | 4220 |
-| `sim/` | Scenario engine for scripted incidents | 4230 |
+| `sim/` | Scenario engine for scripted incidents; admin port for the eval harness only | 4230, 4231 |
 | `contracts/` | OpenAPI, GraphQL and SQS message schemas | |
 | `packages/ts-*`, `packages/py-*` | Shared config, telemetry and generated clients | |
 | `infra/` | Docker Compose and service config | |
@@ -43,10 +43,11 @@ make dev
 | `make contracts-breaking` | oasdiff breaking-change check of both OpenAPI specs against `CONTRACTS_BASE` (default `HEAD`; needs Docker) |
 | `make migrate` | Drizzle (gateway) and Alembic (agent) migrations; see `docs/migrations.md` |
 | `make seed` | The same fake history every run in both schemas; `SEED_ARGS=--reset` replaces existing rows, `SEED_ARGS=--large` tops the agent up to 2,000,000 steps |
-| `make eval` | Placeholder until build step 6b |
+| `make eval` | The eval against the running stack (`make dev` with `AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`): `SPLIT=dev\|test`, `SUBSET=ci\|full`, `RUNS`; `ESTIMATE=1` prints the quota days, `SET_FLOORS=1` writes the floors. See `evals/README.md` |
+| `make scenarios-check` | Validates every scenario set and fails when a released set's file changed against `SCENARIOS_BASE` (default `HEAD`) |
 | `make embed-model` | Downloads the runbook embedding model (nomic-embed-text-v1.5, about 0.5 GB) into `FASTEMBED_CACHE_PATH`; the only command that downloads it |
 | `make runbooks` | Embeds `runbooks/*.md` into `agent.runbook_chunks` for `search_runbooks` |
-| `make smoke` | One scenario (`SCENARIO=bad-deploy`) against the running stack; needs `make dev` with `AI_ENABLED=true` and the provider keys in `.env`. Prints the report, each tool call, tokens and latency per model turn, and the gateway's copy; results go to `evals/reports/runs/` |
+| `make smoke` | One scenario (`SCENARIO=bad-deploy-1`) against the running stack; needs `make dev` with `AI_ENABLED=true` and the provider keys in `.env`. Prints the report, each tool call, tokens and latency per model turn, and the gateway's copy; results go to `evals/reports/runs/` |
 | `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `agent-events-dlq.fifo`, `investigations-dlq.fifo`, and the agent's `dead_letters` |
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
@@ -56,5 +57,12 @@ Production runs the same compose file plus an override that unpublishes the data
 ```sh
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
 ```
+
+## Known gaps
+
+Scenario set v1 (`evals/scenarios/v1/`, frozen on 2026-10-16) leaves these for v2:
+
+- No scenario's answer is traffic_surge, and none's is unknown (evidence that supports no class).
+- The rest of the list is in `evals/README.md`.
 
 See `docs/context.md` for the design and `docs/todo.md` for the build plan.

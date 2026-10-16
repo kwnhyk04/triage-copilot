@@ -1,0 +1,327 @@
+id: bad-config-2
+title: search's backend timeout becomes 20 ms
+seed: 90444
+alert:
+  labels:
+    alertname: SearchHighErrorRate
+    service: search
+    severity: critical
+  annotations:
+    summary: search 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="search"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: search
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  web:
+    depends_on:
+    - search
+  search:
+    depends_on:
+    - search-index
+    - catalog
+    - coredns
+  search-index: {}
+  catalog: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v4.16.0
+  previous_version: v4.15.0
+  at: -127m
+  author: renovate-bot
+  change: Add a metrics label to the request histogram
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: web
+  base: 49
+  noise: 2.45
+- name: http_error_ratio
+  labels:
+    service: web
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: web
+  base: 0.2159
+  noise: 0.01727
+- name: cpu_usage_ratio
+  labels:
+    service: web
+  base: 0.4079
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: web
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: web
+  base: 0.5499
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: web
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 95
+  noise: 4.75
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.41
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.1698
+  noise: 0.01358
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.2666
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.5636
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 141
+  noise: 7.05
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.2192
+  noise: 0.01754
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2687
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4431
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 114
+  noise: 5.7
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.1482
+  noise: 0.01186
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4772
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5011
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 1
+- name: cpu_usage_ratio
+  labels:
+    service: search-index
+  base: 0.36
+  noise: 0.03
+- name: http_latency_p99_seconds
+  labels:
+    service: search-index
+  base: 0.04
+  noise: 0.004
+- name: node_cpu_usage_ratio
+  labels:
+    service: search
+    node: node-2
+  base: 0.4612
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: search
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: search
+    peer: search-index
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2124
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-7
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: web
+    level: info
+  per_minute: 10
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /search?q=shoes 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 13
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 14
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 13
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -330s
+  to: -270s
+  lines:
+  - 'config reloaded from config-service: search.backend.timeout_ms=20 (was 2000), changed by ops-bot'
+- labels:
+    service: search
+    level: error
+  per_minute: 45
+  from: -4m
+  lines:
+  - search-index call timed out after 20ms (GET /_search) request_id={rid}
+  - GET /search 500 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -127m
+  to: -126m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v4.16.0'
+- labels:
+    service: web
+    level: error
+  per_minute: 24
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'config reloaded from config-service: search.highlight.max_fragments=5 (was 3), changed by ops-bot'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-7
+labels:
+  root_cause_class: config_change
+  service: search
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="search", level="info"} |= "config reloaded"'
+    pattern: timeout_ms=20
+  - tool: query_logs
+    args:
+      query: '{service="search", level="error"}'
+    pattern: timed out after 20ms
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: search-index
+  - kind: scale_service
+    target: search-index
+  - kind: rollback_deploy
+    target: accounts
+  red_herrings:
+  - 'search-index''s own latency and CPU stay normal: it answers, search gives up too soon'
+  - accounts v4.16.0 shipped 127 minutes before the alert, and none of its metrics moved after it
+  - web logs 'analytics beacon rejected' errors all window long, before and after
+  - search's config key search.highlight.max_fragments changed 2 minutes before the alert, after its errors
+    had begun

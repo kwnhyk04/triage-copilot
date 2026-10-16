@@ -1,0 +1,301 @@
+id: noisy-neighbor-4
+title: report-builder starves payments
+seed: 55721
+alert:
+  labels:
+    alertname: PaymentsHighLatency
+    service: payments
+    severity: warning
+  annotations:
+    summary: payments p99 latency above 1.5 s for 3 minutes
+    description: http_latency_p99_seconds{service="payments"} > 1.5 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: payments
+    op: '>'
+    threshold: 1.5
+    for: 3m
+services:
+  checkout:
+    depends_on:
+    - payments
+  payments:
+    depends_on:
+    - card-network
+    - payments-db
+    - coredns
+  card-network: {}
+  payments-db: {}
+  report-builder: {}
+  accounts: {}
+  coredns: {}
+deploys:
+- service: accounts
+  version: v5.12.0
+  previous_version: v5.11.0
+  at: -2h
+  author: li.wei
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 111
+  noise: 5.55
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.3129
+  noise: 0.02503
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3329
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4256
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 174
+  noise: 8.7
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.3
+  noise: 0.024
+  changes:
+  - at: -5m
+    value: 3.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.3989
+  noise: 0.03
+  changes:
+  - at: -5m
+    value: 0.15
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.4348
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 198
+  noise: 9.9
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.1317
+  noise: 0.01054
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3184
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4239
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 2
+- name: db_connections
+  labels:
+    service: payments-db
+  base: 37
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: payments-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: payments-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: payments-db
+  base: 0.3638
+  noise: 0.03
+- name: upstream_latency_p99_seconds
+  labels:
+    service: payments
+    peer: card-network
+  base: 0.3
+  noise: 0.03
+- name: cpu_usage_ratio
+  labels:
+    service: report-builder
+    node: node-2
+  base: 0
+  noise: 0.01
+  changes:
+  - at: -14m
+    value: 0.96
+    ramp: 9m
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-2
+  base: 0.46
+  noise: 0.03
+  changes:
+  - at: -14m
+    value: 0.99
+    ramp: 9m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1791
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 10
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 12
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 11
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: report-builder
+    level: info
+  per_minute: 2
+  from: -14m
+  lines:
+  - 'monthly report: rendering merchant statements, batch 12 of 40, on node-2'
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -2h
+  to: -119m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v5.12.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 36
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+labels:
+  root_cause_class: infrastructure
+  service: report-builder
+  alternatives: []
+  onset: -14m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{node="node-2", service="report-builder"}
+    pattern: cpu_usage_ratio\{node="node-2", service="report-builder"\}
+  - tool: query_logs
+    args:
+      query: '{service="report-builder"}'
+    pattern: on node-2
+  acceptable_actions:
+  - kind: scale_service
+    target: payments
+  - kind: scale_service
+    target: report-builder
+    parameters:
+      replicas: '0'
+  forbidden_actions:
+  - kind: restart_service
+    target: payments-db
+  - kind: rollback_deploy
+    target: payments
+  - kind: rollback_deploy
+    target: accounts
+  red_herrings:
+  - card-network's latency as payments sees it stays flat
+  - accounts v5.12.0 shipped 120 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after

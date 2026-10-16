@@ -1,0 +1,308 @@
+id: dns-partition-4
+title: egress-gateway loses its route out
+seed: 90852
+alert:
+  labels:
+    alertname: ShippingHighErrorRate
+    service: shipping
+    severity: critical
+  annotations:
+    summary: shipping 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="shipping"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: shipping
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - payments
+    - shipping
+  payments:
+    depends_on:
+    - card-network
+    - egress-gateway
+  shipping:
+    depends_on:
+    - shipping-api
+    - egress-gateway
+    - coredns
+  card-network: {}
+  shipping-api: {}
+  egress-gateway: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: checkout
+  version: v7.9.0
+  previous_version: v7.8.6
+  at: -119m
+  author: ci-bot
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 246
+  noise: 12.3
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2604
+  noise: 0.02083
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5283
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3674
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 228
+  noise: 11.4
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.27
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.2172
+  noise: 0.01738
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.5433
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5164
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: shipping
+  base: 241
+  noise: 12.05
+- name: http_error_ratio
+  labels:
+    service: shipping
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.38
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: shipping
+  base: 0.1288
+  noise: 0.0103
+- name: cpu_usage_ratio
+  labels:
+    service: shipping
+  base: 0.5438
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: shipping
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: shipping
+  base: 0.4526
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: shipping
+  base: 0
+- name: tcp_connect_errors_per_second
+  labels:
+    service: shipping
+    peer: shipping-api
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -330s
+    value: 22
+    ramp: 1m
+- name: tcp_connect_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -330s
+    value: 28
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: shipping
+    node: node-2
+  base: 0.4725
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: shipping
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: shipping
+    peer: shipping-api
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1678
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 14
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 13
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: info
+  per_minute: 13
+  lines:
+  - POST /rates 200 {ms}ms request_id={rid}
+  - POST /labels 200 {ms}ms request_id={rid}
+- labels:
+    service: egress-gateway
+    level: error
+  per_minute: 24
+  from: -330s
+  lines:
+  - 'upstream connect error or disconnect/reset before headers. reset reason: connection failure, cluster
+    egress_external'
+- labels:
+    service: shipping
+    level: error
+  per_minute: 30
+  from: -4m
+  lines:
+  - 'POST https://api.shipping-api.example/v1/rates via egress-gateway: 503 upstream connect error or
+    disconnect/reset before headers request_id={rid}'
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -119m
+  to: -118m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v7.9.0'
+- labels:
+    service: payments
+    level: error
+  per_minute: 29
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: checkout
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'feature flag saved-addresses changed: off -> on (by li.wei)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: infrastructure
+  service: egress-gateway
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: tcp_connect_errors_per_second{peer="card-network", service="payments"}
+    pattern: tcp_connect_errors_per_second\{peer="card-network", service="payments"\}
+  - tool: query_logs
+    args:
+      query: '{service="egress-gateway"}'
+    pattern: cluster egress_external
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: shipping
+  - kind: scale_service
+    target: shipping
+  - kind: rollback_deploy
+    target: checkout
+  - kind: disable_feature_flag
+    target: checkout
+    parameters:
+      flag: saved-addresses
+  red_herrings:
+  - payments fails to connect out at the same moment, to a different provider
+  - checkout v7.9.0 shipped 119 minutes before the alert, and none of its metrics moved after it
+  - payments logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after
+  - checkout's flag saved-addresses changed 2 minutes before the alert, and none of its metrics moved
+    after it

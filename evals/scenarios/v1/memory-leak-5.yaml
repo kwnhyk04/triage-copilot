@@ -1,0 +1,402 @@
+id: memory-leak-5
+title: api-gateway keeps buffered bodies
+seed: 49175
+alert:
+  labels:
+    alertname: ApiGatewayHighErrorRate
+    service: api-gateway
+    severity: critical
+  annotations:
+    summary: api-gateway 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="api-gateway"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: api-gateway
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  api-gateway:
+    depends_on:
+    - cart
+    - checkout
+    - catalog
+    - coredns
+  checkout:
+    depends_on:
+    - payments
+  cart: {}
+  catalog: {}
+  payments: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: payments
+  version: v1.20.0
+  previous_version: v1.19.1
+  at: -122m
+  author: ci-bot
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: api-gateway
+  base: 264
+  noise: 13.2
+- name: http_error_ratio
+  labels:
+    service: api-gateway
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.1
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: api-gateway
+  base: 0.3051
+  noise: 0.02441
+- name: cpu_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.2551
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: api-gateway
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.4333
+  noise: 0.02
+  changes:
+  - at: -210m
+    value: 0.97
+    ramp: 202m
+  - at: -7m
+    value: 0.55
+  - at: -390s
+    value: 0.97
+    ramp: 90s
+  - at: -4m
+    value: 0.55
+  - at: -210s
+    value: 0.97
+    ramp: 1m
+  - at: -90s
+    value: 0.55
+  - at: -1m
+    value: 0.97
+    ramp: 90s
+- name: container_restarts_total
+  labels:
+    service: api-gateway
+  base: 0
+  changes:
+  - at: -7m
+    value: 1
+  - at: -4m
+    value: 2
+  - at: -90s
+    value: 3
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 124
+  noise: 6.2
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.2692
+  noise: 0.02154
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3979
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5706
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 256
+  noise: 12.8
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.09705
+  noise: 0.007764
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.448
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5769
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 206
+  noise: 10.3
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.3218
+  noise: 0.02575
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4343
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.3764
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 57
+  noise: 2.85
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.1102
+  noise: 0.008817
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.4178
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5936
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 2
+- name: node_cpu_usage_ratio
+  labels:
+    service: api-gateway
+    node: node-4
+  base: 0.414
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: api-gateway
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: api-gateway
+    peer: cart
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1537
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: api-gateway
+    level: info
+  per_minute: 13
+  lines:
+  - GET /api/cart/{n} 200 {ms}ms request_id={rid}
+  - POST /api/checkout 200 {ms}ms request_id={rid}
+  - GET /api/products/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 14
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 11
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 13
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 9
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: api-gateway
+    level: warn
+  per_minute: 4
+  from: -30m
+  to: -7m
+  lines:
+  - retry buffer pool holds {n} request bodies; heap 980MB of 1GB
+  asserts:
+  - metric: memory_usage_ratio
+    labels:
+      service: api-gateway
+    op: '>='
+    value: 0.85
+- labels:
+    service: api-gateway
+    level: error
+  per_minute: 1
+  from: -7m
+  to: -6m
+  lines:
+  - container api-gateway-{rid} OOMKilled (exit code 137), memory limit 1Gi; restarting
+- labels:
+    service: api-gateway
+    level: error
+  per_minute: 1
+  from: -4m
+  to: -3m
+  lines:
+  - container api-gateway-{rid} OOMKilled (exit code 137), memory limit 1Gi; restarting
+- labels:
+    service: api-gateway
+    level: error
+  per_minute: 1
+  from: -90s
+  to: -30s
+  lines:
+  - container api-gateway-{rid} OOMKilled (exit code 137), memory limit 1Gi; restarting
+- labels:
+    service: payments
+    level: info
+  per_minute: 2
+  from: -122m
+  to: -121m
+  lines:
+  - 'Rolling update: pod payments-{rid} started version=v1.20.0'
+- labels:
+    service: catalog
+    level: error
+  per_minute: 34
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: resource_exhaustion
+  service: api-gateway
+  alternatives: []
+  onset: -210m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: memory_usage_ratio{service="api-gateway"}
+    pattern: memory_usage_ratio\{service="api-gateway"\}
+  - tool: query_metrics
+    args:
+      query: container_restarts_total{service="api-gateway"}
+    pattern: container_restarts_total\{service="api-gateway"\}
+  - tool: query_logs
+    args:
+      query: '{service="api-gateway", level="error"}'
+    pattern: OOMKilled
+  acceptable_actions:
+  - kind: restart_service
+    target: api-gateway
+  - kind: scale_service
+    target: api-gateway
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: cart
+  - kind: rollback_deploy
+    target: payments
+  red_herrings:
+  - payments v1.20.0 shipped 122 minutes before the alert, and none of its metrics moved after it
+  - catalog logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after

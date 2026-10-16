@@ -1,0 +1,365 @@
+id: bad-config-1
+title: new-tax-engine goes to 100%
+seed: 99286
+alert:
+  labels:
+    alertname: CheckoutHighErrorRate
+    service: checkout
+    severity: critical
+  annotations:
+    summary: checkout 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="checkout"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: checkout
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - payments
+    - cart
+    - pricing
+    - coredns
+  payments: {}
+  cart: {}
+  pricing: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: pricing
+  version: v5.19.0
+  previous_version: v5.18.6
+  at: -123m
+  author: dev.kim
+  change: Add a metrics label to the request histogram
+- service: payments
+  version: v7.16.0
+  previous_version: v7.15.6
+  at: -2m
+  author: ana.lopez
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 110
+  noise: 5.5
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.09982
+  noise: 0.007986
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3277
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5116
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 275
+  noise: 13.75
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.17
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.3172
+  noise: 0.02537
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5144
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5222
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 215
+  noise: 10.75
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.1889
+  noise: 0.01511
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.2756
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5198
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 187
+  noise: 9.35
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.1916
+  noise: 0.01532
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3341
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5134
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: pricing
+  base: 234
+  noise: 11.7
+- name: http_error_ratio
+  labels:
+    service: pricing
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: pricing
+  base: 0.1942
+  noise: 0.01553
+- name: cpu_usage_ratio
+  labels:
+    service: pricing
+  base: 0.374
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: pricing
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: pricing
+  base: 0.5231
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: pricing
+  base: 1
+- name: node_cpu_usage_ratio
+  labels:
+    service: checkout
+    node: node-6
+  base: 0.4743
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: checkout
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: checkout
+    peer: payments
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2004
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-6
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 8
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 10
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 13
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: pricing
+    level: info
+  per_minute: 10
+  lines:
+  - POST /quote 200 {ms}ms request_id={rid}
+  - GET /prices/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 1
+  from: -270s
+  to: -210s
+  lines:
+  - 'feature flag new-tax-engine changed: rollout 5% -> 100% (by maria.g)'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 40
+  from: -4m
+  lines:
+  - 'TaxEngineV2Exception: no nexus configuration for state=WA request_id={rid}'
+  - POST /checkout 500 {ms}ms request_id={rid}
+- labels:
+    service: pricing
+    level: info
+  per_minute: 2
+  from: -123m
+  to: -122m
+  lines:
+  - 'Rolling update: pod pricing-{rid} started version=v5.19.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 31
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: payments
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod payments-{rid} started version=v7.16.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-6
+labels:
+  root_cause_class: config_change
+  service: checkout
+  alternatives: []
+  onset: -270s
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="checkout", level="info"} |= "feature flag"'
+    pattern: new-tax-engine
+  - tool: query_logs
+    args:
+      query: '{service="checkout", level="error"}'
+    pattern: TaxEngineV2Exception
+  acceptable_actions:
+  - kind: disable_feature_flag
+    target: checkout
+    parameters:
+      flag: new-tax-engine
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: payments
+  - kind: rollback_deploy
+    target: pricing
+  red_herrings:
+  - pricing v5.19.0 shipped 123 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after
+  - payments v7.16.0 shipped 2 minutes before the alert, and none of its metrics moved after it

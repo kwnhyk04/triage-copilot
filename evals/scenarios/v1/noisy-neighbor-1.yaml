@@ -1,0 +1,286 @@
+id: noisy-neighbor-1
+title: nightly-reindex starves search
+seed: 62182
+alert:
+  labels:
+    alertname: SearchHighLatency
+    service: search
+    severity: warning
+  annotations:
+    summary: search p99 latency above 1 s for 3 minutes
+    description: http_latency_p99_seconds{service="search"} > 1 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: search
+    op: '>'
+    threshold: 1.0
+    for: 3m
+services:
+  web:
+    depends_on:
+    - search
+  search:
+    depends_on:
+    - search-index
+    - coredns
+  search-index: {}
+  nightly-reindex: {}
+  catalog: {}
+  coredns: {}
+deploys:
+- service: catalog
+  version: v6.7.0
+  previous_version: v6.6.6
+  at: -117m
+  author: ana.lopez
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: web
+  base: 152
+  noise: 7.6
+- name: http_error_ratio
+  labels:
+    service: web
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: web
+  base: 0.1559
+  noise: 0.01247
+- name: cpu_usage_ratio
+  labels:
+    service: web
+  base: 0.5117
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: web
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: web
+  base: 0.4619
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: web
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 293
+  noise: 14.65
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.18
+  noise: 0.0144
+  changes:
+  - at: -5m
+    value: 3.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.5444
+  noise: 0.03
+  changes:
+  - at: -5m
+    value: 0.15
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.465
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 192
+  noise: 9.6
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.341
+  noise: 0.02728
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4904
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.3995
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: cpu_usage_ratio
+  labels:
+    service: search-index
+  base: 0.4
+  noise: 0.03
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-reindex
+    node: node-7
+  base: 0
+  noise: 0.01
+  changes:
+  - at: -12m
+    value: 0.96
+    ramp: 7m
+- name: node_cpu_usage_ratio
+  labels:
+    service: search
+    node: node-7
+  base: 0.46
+  noise: 0.03
+  changes:
+  - at: -12m
+    value: 0.99
+    ramp: 7m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: search
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: search
+    peer: search-index
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1328
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+logs:
+- labels:
+    service: web
+    level: info
+  per_minute: 14
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /search?q=shoes 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 8
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 13
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: nightly-reindex
+    level: info
+  per_minute: 2
+  from: -12m
+  lines:
+  - 'reindex job: shard 17 of 48 indexed on node-7'
+  - 'reindex job: shard 18 of 48 indexed on node-7'
+  - 'reindex job: shard 19 of 48 indexed on node-7'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -117m
+  to: -116m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v6.7.0'
+- labels:
+    service: web
+    level: error
+  per_minute: 20
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - 'feature flag search-results-badges changed: off -> on (by dev.kim)'
+labels:
+  root_cause_class: infrastructure
+  service: nightly-reindex
+  alternatives: []
+  onset: -12m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{node="node-7", service="nightly-reindex"}
+    pattern: cpu_usage_ratio\{node="node-7", service="nightly-reindex"\}
+  - tool: query_logs
+    args:
+      query: '{service="nightly-reindex"}'
+    pattern: on node-7
+  acceptable_actions:
+  - kind: scale_service
+    target: search
+  - kind: scale_service
+    target: nightly-reindex
+    parameters:
+      replicas: '0'
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: search
+  - kind: restart_service
+    target: search-index
+  - kind: rollback_deploy
+    target: catalog
+  - kind: disable_feature_flag
+    target: search
+    parameters:
+      flag: search-results-badges
+  red_herrings:
+  - catalog v6.7.0 shipped 117 minutes before the alert, and none of its metrics moved after it
+  - web logs 'analytics beacon rejected' errors all window long, before and after
+  - search's flag search-results-badges changed 3 minutes before the alert, after its latency had already
+    risen

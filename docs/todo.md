@@ -26,16 +26,16 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [ ] Low findings from the 2026-10-15 review of the sim:
   - Log cursors are not bound to the query, window or world: reused with other parameters they return a silent partial page. Put a digest of scenario, seed, anchor, query and window in the cursor.
   - `GET /api/v1/deploys?service=<typo>` answers an empty page; answer 404 with the known services, as dependencies does.
-  - db-pool-exhaustion contradicts itself: warn lines claim a full pool from -8m while `db_pool_in_use` ramps from 14 to 50 until -4m. Fix before the 6b evals.
   - Fidelity gaps: `direction` is case-sensitive, there is no POST form for query_range, and `/api/v1/labels`, `/api/v1/series` and the Loki label routes answer 404 outside the Prometheus envelope.
   - Activation with an anchor outside 1970 to 3000 answers 500 on Windows (timestamp formatting); bound `Activation.anchor`.
-  - The admin routes take no credential; the agent cannot reach them now, but a token would keep other local callers out.
 - [ ] Store Alertmanager annotations (`summary`, `description`, `runbook_url`) in the gateway with an expand-only migration (a nullable `alerts.annotations jsonb`, written at intake), and return them from `GET /internal/investigations/{id}/alerts` (a new optional field in `StoredAlert`, gateway API minor version) and from `get_alert_context`. Real alerts carry key evidence there; today only labels are stored. Done when an alert posted with annotations shows its summary, description and runbook URL in the tool's result.
 - [ ] Before step 10: the gateway's internal listener (4201) binds only the internal Docker network in `docker-compose.prod.yml` and is never published; check that Tailscale Funnel exposes only the public port.
 - [ ] Before step 10: check which client address the gateway sees behind Tailscale Funnel. If it is the proxy's, set Fastify `trustProxy`, or every request without a credential shares one rate-limit count. Then limit failed credential checks per address: today each invented key gets its own rate-limit count, unknown routes included, so key guessing is never throttled (independent review, 2026-10-15). Also refuse the `.env.example` placeholder keys at startup.
 - [ ] Per-kind parameter schemas for ActionProposed and ActionApproved (for example `rollback_deploy` requires `to_version`): the executor rejects unknown or missing parameters.
-- [ ] 6b. The other 38 scenarios and the eval harness: golden dataset v1, eval report listing every target with pass or fail. Build on `evals/harness/run.py`, which already caches each run's result, resumes after a quota stop with the run's anchor and seed, gives each run its own tenant, and records the model ids and the embedding model and revision. Evals set `LLM_FALLBACK_ON_RATE_LIMIT=false`. The sim serves one scenario at a time, so runs go one after another.
+- [ ] Emit an early hypothesis step, so time to first hypothesis is measured directly instead of by its proxy (webhook intake to the report, an upper bound) and step 9's timeline can show it. Today hypotheses exist only in the final report. A new step kind needs StepRecorded v4 (expand, migrate, contract) or a `hypothesis` step with the existing kind; the job records it the first time the model names a likely cause, and the eval harness reads its `recorded_at`. Done when the eval report measures time to first hypothesis from that step and the timeline shows it.
+- [ ] Before step 10: the sim's admin port (`SIM_ADMIN_PORT`, 4231) is never published in `docker-compose.prod.yml`, and only the eval harness gets `SIM_ADMIN_URL`.
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
+  - Run `make scenarios-check SCENARIOS_BASE=<target branch>` (the validator and the frozen-set check) and `make eval SUBSET=ci`, the 8-scenario ci subset, which needs a model key and about 72 model calls.
   - At about 55 investigations a day on the free tier (gemini-3.5-flash-lite, about 500 requests a day, unverified), the full eval (25 scenarios x 3 runs, 75 investigations) cannot run nightly: schedule it weekly, or one run per night.
   - Mount the fastembed model cache (`FASTEMBED_CACHE_PATH`) into the agent container as a volume; do not bake the 0.5 GB model into the image. CI restores the cache before the tests, which load it offline.
 - [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved. Include an alert on executions stuck in claimed (the sweeper only logs them now) and a count of payload fingerprints that differ from the computed ones.
@@ -44,7 +44,23 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## In Progress
 
-None.
+- [ ] 6b. Scenario set v1, eval harness and the full eval (2026-10-16). Done when the full test split runs 3 times end to end (resuming across quota days if needed) and the report lists every target with pass or fail; the ci subset runs; unit and integration tests stay green.
+  - [x] Agent: a run resumed after a quota park keeps the wall-clock time it had left.
+  - [x] Sim: admin routes on their own port (4231); tests prove no agent tool reaches them.
+  - [x] Validator (`python -m sim.validate`, `make scenarios-check`, a test over every set) and the db-pool-exhaustion timeline fix.
+  - [x] Scenario set v1: 40 YAML scenarios from `evals/scenarios/v1/generate.py`, sha256 manifest, 15 dev and 25 test, 6 with a backend down; every required signal shows in the tools' results.
+  - [x] Harness: `make eval`, deterministic scores with 95% bootstrap intervals per family and overall, run cache and resume, floors, reports, README table.
+  - [x] Deploy timing in v1: a harmless deploy 2 to 6 minutes before the alert in 16 scenarios (2 per family, 8 dev and 8 test), the newest deploy in each, its rollback forbidden and named as a red herring; causal deploys 4.5 to 35 minutes before the alert, two of them canaries.
+  - [x] Action scoring: the do-nothing baseline beside action correctness, and action correctness on the scenarios with an acceptable action, in the reports and the README table.
+  - [x] Regenerate and validate v1, rerun the tests, freeze v1 with its manifest (a test pins its sha256).
+  - [x] Config timing in v1: a harmless config or flag change 2 to 6 minutes before the alert in 16 scenarios (2 per family, 8 dev and 8 test, 4 in the ci subset), the newest change in each, named as a red herring, turning off a harmless flag forbidden; causal changes 4.5 to 30 minutes before the alert. v1 unfrozen, regenerated, validated, tested and frozen again.
+  - [x] ci subset (`make eval SUBSET=ci`), 2026-10-16: all 8 runs counted; exit 1 on one forbidden proposal (noisy-neighbor-1 turned off a harmless flag). Report `evals/reports/2026-10-16-dev-ci-1-146b1619.md`.
+  - [x] Dev baseline and prompt change 1 (2026-10-16): dev top-1 0.53 to 0.73, forbidden proposals 1 to 0 (evals/prompt-log.md, evals/README.md).
+  - [ ] Finish change 2's dev pass (`e0f86d4ad3b47b1c`, 2 of 15 runs done) after the quota resets; tune further on dev failures only; rerun the ci subset on the final prompt.
+  - [ ] The test split 3 times; set the floors.
+- [x] A parked investigation that hit the provider's "daily quota spent" stays parked until midnight Pacific, and `make eval` exits 2 on it (2026-10-16): `Limiter.spent()` reads the provider's `quota_exhausted` answers; `test_workers_int.py` and `test_eval_score.py` cover both.
+- [x] `LLM_PRIMARY_RPD` defaults to 260, under the 275 requests measured on 2026-10-16 (2026-10-16). Still open: check the project's real limit in AI Studio.
+- [x] Every model call records the agent's prompt sha (agent 0008), and the eval refuses a run whose calls name another prompt (2026-10-16).
 
 ## Completed
 

@@ -1,0 +1,322 @@
+id: bad-config-4
+title: a route sends cart traffic to cart-legacy
+seed: 11897
+alert:
+  labels:
+    alertname: ApiGatewayHighErrorRate
+    service: api-gateway
+    severity: critical
+  annotations:
+    summary: api-gateway 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="api-gateway"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: api-gateway
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  api-gateway:
+    depends_on:
+    - cart
+    - cart-legacy
+    - checkout
+    - coredns
+  checkout:
+    depends_on:
+    - cart
+  cart: {}
+  cart-legacy: {}
+  catalog: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: catalog
+  version: v6.11.0
+  previous_version: v6.10.8
+  at: -123m
+  author: ana.lopez
+  change: Bump dependencies
+- service: cart
+  version: v7.10.0
+  previous_version: v7.9.7
+  at: -2m
+  author: li.wei
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: api-gateway
+  base: 170
+  noise: 8.5
+- name: http_error_ratio
+  labels:
+    service: api-gateway
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.07
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: api-gateway
+  base: 0.2874
+  noise: 0.02299
+- name: cpu_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.3034
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: api-gateway
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.4132
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: api-gateway
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 98
+  noise: 4.9
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.3411
+  noise: 0.02729
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3753
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.367
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 50
+  noise: 2.5
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.1966
+  noise: 0.01573
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4842
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4545
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 131
+  noise: 6.55
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.3043
+  noise: 0.02434
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5223
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.472
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: node_cpu_usage_ratio
+  labels:
+    service: api-gateway
+    node: node-7
+  base: 0.5479
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: api-gateway
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: api-gateway
+    peer: cart
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1833
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: api-gateway
+    level: info
+  per_minute: 8
+  lines:
+  - GET /api/cart/{n} 200 {ms}ms request_id={rid}
+  - POST /api/checkout 200 {ms}ms request_id={rid}
+  - GET /api/products/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 8
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 11
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: api-gateway
+    level: info
+  per_minute: 1
+  from: -330s
+  to: -270s
+  lines:
+  - 'routes reloaded by config-sync: /api/cart/* -> cart (80%), cart-legacy (20%)'
+- labels:
+    service: api-gateway
+    level: error
+  per_minute: 40
+  from: -4m
+  lines:
+  - 'upstream cart-legacy: no healthy upstream (GET /api/cart/{n}), 503 request_id={rid}'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -123m
+  to: -122m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v6.11.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 27
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v7.10.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: config_change
+  service: api-gateway
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="api-gateway", level="info"} |= "routes reloaded"'
+    pattern: cart-legacy
+  - tool: query_logs
+    args:
+      query: '{service="api-gateway", level="error"}'
+    pattern: upstream cart-legacy
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: cart
+  - kind: rollback_deploy
+    target: cart
+  - kind: rollback_deploy
+    target: catalog
+  red_herrings:
+  - 'cart itself is healthy: the 503s come from requests routed to cart-legacy'
+  - catalog v6.11.0 shipped 123 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after
+  - cart v7.10.0 shipped 2 minutes before the alert, and none of its metrics moved after it

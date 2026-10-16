@@ -53,6 +53,17 @@ CALLS_TODAY = text("""
 """)
 
 
+# The provider has said today's quota is spent: no request to it succeeds until midnight Pacific.
+EXHAUSTED_TODAY = text("""
+    SELECT EXISTS (
+        SELECT 1 FROM agent.model_calls
+        WHERE model = :model AND outcome = 'quota_exhausted'
+          AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Los_Angeles')
+                            AT TIME ZONE 'America/Los_Angeles'
+    )
+""")
+
+
 def calls_today(conn: Connection, model: str) -> int:
     with conn.begin():
         return conn.execute(CALLS_TODAY, {"model": model}).scalar_one()
@@ -80,7 +91,12 @@ class Limiter:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def spent(self, conn: Connection, role: Role) -> bool:
-        return role.rpd > 0 and calls_today(conn, role.model) >= role.rpd
+        """Today's requests are used up, by count or by the provider's word, until midnight
+        Pacific. Parked investigations then stay parked instead of trying again every sweep."""
+        if role.rpd > 0 and calls_today(conn, role.model) >= role.rpd:
+            return True
+        with conn.begin():
+            return bool(conn.execute(EXHAUSTED_TODAY, {"model": role.model}).scalar_one())
 
     async def acquire(self, role: Role) -> None:
         """Waits for a free request this minute; raises QuotaExhausted once today's are spent."""

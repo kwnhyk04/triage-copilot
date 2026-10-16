@@ -1,0 +1,383 @@
+id: db-pool-exhaustion-4
+title: a cleanup job locks accounts-db
+seed: 73320
+alert:
+  labels:
+    alertname: AccountsHighErrorRate
+    service: accounts
+    severity: critical
+  annotations:
+    summary: accounts 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="accounts"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: accounts
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - accounts
+  api-gateway:
+    depends_on:
+    - accounts
+    - orders
+  accounts:
+    depends_on:
+    - accounts-db
+    - coredns
+  accounts-db: {}
+  orders: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: orders
+  version: v4.20.0
+  previous_version: v4.19.1
+  at: -123m
+  author: ci-bot
+  change: Translate the settings page
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 245
+  noise: 12.25
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.06
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.08954
+  noise: 0.007163
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3223
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4194
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: api-gateway
+  base: 168
+  noise: 8.4
+- name: http_error_ratio
+  labels:
+    service: api-gateway
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: api-gateway
+  base: 0.1852
+  noise: 0.01481
+- name: cpu_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.5003
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: api-gateway
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: api-gateway
+  base: 0.5102
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: api-gateway
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 95
+  noise: 4.75
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.14
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.2051
+  noise: 0.01641
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3839
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3589
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 124
+  noise: 6.2
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.2464
+  noise: 0.01971
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4073
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.5677
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 1
+- name: db_connections
+  labels:
+    service: accounts-db
+  base: 45
+  noise: 3
+  changes:
+  - at: -9m
+    value: 70
+    ramp: 3m
+- name: db_lock_wait_seconds
+  labels:
+    service: accounts-db
+  base: 0.003
+  noise: 0.002
+  changes:
+  - at: -9m
+    value: 2.8
+    ramp: 90s
+- name: db_slow_queries_per_second
+  labels:
+    service: accounts-db
+  base: 0.1
+  noise: 0.05
+  changes:
+  - at: -9m
+    value: 11
+    ramp: 90s
+- name: cpu_usage_ratio
+  labels:
+    service: accounts-db
+  base: 0.2177
+  noise: 0.03
+- name: db_pool_in_use
+  labels:
+    service: accounts
+  base: 7
+  noise: 0.125
+  changes:
+  - at: -9m
+    value: 24.8
+    ramp: 3m
+- name: db_pool_max
+  labels:
+    service: accounts
+  base: 25
+- name: node_cpu_usage_ratio
+  labels:
+    service: accounts
+    node: node-5
+  base: 0.4461
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: accounts
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: accounts
+    peer: accounts-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1618
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-4
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 8
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: api-gateway
+    level: info
+  per_minute: 13
+  lines:
+  - GET /api/cart/{n} 200 {ms}ms request_id={rid}
+  - POST /api/checkout 200 {ms}ms request_id={rid}
+  - GET /api/products/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 10
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 9
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: accounts-db
+    level: info
+  per_minute: 1
+  from: -9m
+  lines:
+  - 'pid 2290 (job session-cleanup): DELETE FROM sessions WHERE expires_at < now() running'
+- labels:
+    service: accounts
+    level: warn
+  per_minute: 6
+  from: -6m
+  lines:
+  - connection pool accounts-db at 25/25 connections, {n} requests waiting
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: accounts
+    op: '>='
+    value: 24
+- labels:
+    service: accounts
+    level: error
+  per_minute: 30
+  from: -6m
+  lines:
+  - timeout acquiring connection from pool after 5000ms (pool=accounts-db, active=25, idle=0) request_id={rid}
+  - 'request failed: PoolTimeoutException request_id={rid}'
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: accounts
+    op: '>='
+    value: 24
+- labels:
+    service: orders
+    level: info
+  per_minute: 2
+  from: -123m
+  to: -122m
+  lines:
+  - 'Rolling update: pod orders-{rid} started version=v4.20.0'
+- labels:
+    service: api-gateway
+    level: error
+  per_minute: 36
+  lines:
+  - 'failed to export spans: exporter queue full, dropped {n} spans'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-4
+down: logs
+labels:
+  root_cause_class: database
+  service: accounts-db
+  alternatives: []
+  onset: -9m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: db_lock_wait_seconds{service="accounts-db"}
+    pattern: db_lock_wait_seconds\{service="accounts-db"\}
+  - tool: query_metrics
+    args:
+      query: db_slow_queries_per_second{service="accounts-db"}
+    pattern: db_slow_queries_per_second\{service="accounts-db"\}
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: accounts-db
+  - kind: scale_service
+    target: accounts
+  - kind: rollback_deploy
+    target: orders
+  red_herrings:
+  - orders v4.20.0 shipped 123 minutes before the alert, and none of its metrics moved after it
+  - api-gateway logs 'failed to export spans' errors all window long, before and after

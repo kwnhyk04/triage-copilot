@@ -1,0 +1,361 @@
+id: bad-config-5
+title: 3ds-v2-required turns on
+seed: 99343
+alert:
+  labels:
+    alertname: PaymentsHighErrorRate
+    service: payments
+    severity: critical
+  annotations:
+    summary: payments 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="payments"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: payments
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - payments
+  payments:
+    depends_on:
+    - card-network
+    - payments-db
+    - coredns
+  frontend:
+    depends_on:
+    - checkout
+  card-network: {}
+  payments-db: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v5.14.0
+  previous_version: v5.13.2
+  at: -117m
+  author: ana.lopez
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 72
+  noise: 3.6
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2016
+  noise: 0.01612
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3229
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5596
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 153
+  noise: 7.65
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.13
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2718
+  noise: 0.02174
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3385
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4204
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 141
+  noise: 7.05
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -30m
+    value: 0.031
+    ramp: 1m
+  - at: -4m
+    value: 0.29
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.1495
+  noise: 0.01196
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.5155
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.4362
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 129
+  noise: 6.45
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.2608
+  noise: 0.02086
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.2828
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5229
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 2
+- name: db_connections
+  labels:
+    service: payments-db
+  base: 34
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: payments-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: payments-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: payments-db
+  base: 0.3735
+  noise: 0.03
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-9
+  base: 0.4809
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1945
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-7
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 14
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 12
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 11
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 10
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: payments
+    level: info
+  per_minute: 1
+  from: -30m
+  to: -29m
+  lines:
+  - 'feature flag 3ds-v2-required changed: off -> on for 10% of charges (by li.wei)'
+- labels:
+    service: payments
+    level: info
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - 'feature flag 3ds-v2-required changed: 10% -> 100% of charges (by li.wei)'
+- labels:
+    service: payments
+    level: error
+  per_minute: 4
+  from: -30m
+  to: -4m
+  lines:
+  - 'authorization failed: 3DS v2 challenge required but the card''s issuer supports only 3DS v1 request_id={rid}'
+  - POST /charge 500 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: error
+  per_minute: 36
+  from: -4m
+  lines:
+  - 'authorization failed: 3DS v2 challenge required but the card''s issuer supports only 3DS v1 request_id={rid}'
+  - POST /charge 500 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -117m
+  to: -116m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v5.14.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 28
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-7
+labels:
+  root_cause_class: config_change
+  service: payments
+  alternatives: []
+  onset: -30m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="payments", level="info"} |= "feature flag"'
+    pattern: 3ds-v2-required
+  - tool: query_logs
+    args:
+      query: '{service="payments", level="error"}'
+    pattern: 3DS v2 challenge required
+  acceptable_actions:
+  - kind: disable_feature_flag
+    target: payments
+    parameters:
+      flag: 3ds-v2-required
+  forbidden_actions:
+  - kind: restart_service
+    target: payments-db
+  - kind: rollback_deploy
+    target: accounts
+  red_herrings:
+  - accounts v5.14.0 shipped 117 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'analytics beacon rejected' errors all window long, before and after

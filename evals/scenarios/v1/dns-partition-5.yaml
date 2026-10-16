@@ -1,0 +1,352 @@
+id: dns-partition-5
+title: nat-gateway runs out of ports
+seed: 83026
+alert:
+  labels:
+    alertname: AccountsHighErrorRate
+    service: accounts
+    severity: critical
+  annotations:
+    summary: accounts 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="accounts"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: accounts
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - accounts
+    - checkout
+  accounts:
+    depends_on:
+    - geo-api
+    - nat-gateway
+    - coredns
+  checkout:
+    depends_on:
+    - tax-service
+    - nat-gateway
+  geo-api: {}
+  tax-service: {}
+  nat-gateway: {}
+  catalog: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: catalog
+  version: v2.9.0
+  previous_version: v2.8.2
+  at: -128m
+  author: ci-bot
+  change: Add a metrics label to the request histogram
+- service: frontend
+  version: v1.5.0
+  previous_version: v1.4.8
+  at: -4m
+  author: sam.okafor
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 42
+  noise: 2.1
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.1729
+  noise: 0.01383
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4892
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4182
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 154
+  noise: 7.7
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.21
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.3443
+  noise: 0.02755
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3716
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3888
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 191
+  noise: 9.55
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.11
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.1292
+  noise: 0.01034
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.543
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5033
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 145
+  noise: 7.25
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.1409
+  noise: 0.01127
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.3452
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.3869
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 2
+- name: tcp_connect_errors_per_second
+  labels:
+    service: accounts
+    peer: geo-api
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -6m
+    value: 19
+    ramp: 1m
+- name: tcp_connect_errors_per_second
+  labels:
+    service: checkout
+    peer: tax-service
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -6m
+    value: 26
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: accounts
+    node: node-6
+  base: 0.3801
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: accounts
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: accounts
+    peer: geo-api
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1686
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 8
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 12
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 13
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: nat-gateway
+    level: error
+  per_minute: 12
+  from: -6m
+  lines:
+  - 'SNAT port allocation failed for 10.0.3.15: all 64512 source ports in use'
+- labels:
+    service: accounts
+    level: error
+  per_minute: 30
+  from: -4m
+  lines:
+  - 'Post "https://geo-api.example.com/v1/validate": dial tcp 34.120.4.15:443: i/o timeout'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -128m
+  to: -127m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v2.9.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 31
+  lines:
+  - 'failed to export spans: exporter queue full, dropped {n} spans'
+- labels:
+    service: frontend
+    level: info
+  per_minute: 2
+  from: -4m
+  to: -3m
+  lines:
+  - 'Rolling update: pod frontend-{rid} started version=v1.5.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: infrastructure
+  service: nat-gateway
+  alternatives: []
+  onset: -6m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: tcp_connect_errors_per_second{peer="tax-service", service="checkout"}
+    pattern: tcp_connect_errors_per_second\{peer="tax-service", service="checkout"\}
+  - tool: query_logs
+    args:
+      query: '{service="nat-gateway"}'
+    pattern: SNAT port allocation failed
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: accounts
+  - kind: restart_service
+    target: accounts
+  - kind: rollback_deploy
+    target: catalog
+  - kind: rollback_deploy
+    target: frontend
+  red_herrings:
+  - 'checkout''s calls to tax-service fail to connect too: the shared NAT gateway, not geo-api'
+  - catalog v2.9.0 shipped 128 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'failed to export spans' errors all window long, before and after
+  - frontend v1.5.0 shipped 4 minutes before the alert, and none of its metrics moved after it

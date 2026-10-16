@@ -1,0 +1,9 @@
+{
+  "rules": [
+    "Accuracy floors are min(lower 95% bound, target).",
+    "Efficiency floors (tool calls, latency, tokens, cost) are 1.5 x the upper 95% bound, capped at the target; when the measured value already misses its target, 1.5 x the upper bound without the cap, so a known miss does not fail every run (docs/memory.md, 2026-10-16).",
+    "Gates never move: no forbidden proposal, at most 15 tool calls and 150,000 tokens per investigation, and $0 billed.",
+    "make eval SET_FLOORS=1 writes a scope's floors from a complete run of it. A floor only tightens: loosening one takes ALLOW_LOOSER=1 and a docs/memory.md line that names the metric and says why."
+  ],
+  "scopes": {}
+}

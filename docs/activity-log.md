@@ -15,6 +15,181 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-16: Quota stop, measured RPD and the per-run prompt check (no quota used)
+
+- Changes:
+  - `agent/llm.py`: `Limiter.spent()` also returns true once the provider has answered "daily quota spent" for the model since midnight Pacific (`EXHAUSTED_TODAY`). Parked investigations, resumed ones included, stay unresumable until the quota day resets; the sweeper stops re-sending them, and `make eval` stops with exit 2.
+  - `LLM_PRIMARY_RPD` defaults to 260 (settings and `.env.example`), under the 275 requests measured on 2026-10-16, not a documented limit.
+  - The agent computes its own prompt sha (`agent.job.prompt_sha`, the function `eval.py` used before) and stores it on every model call: `model_calls.prompt_sha`, agent migration 0008, expand only. `eval.problems()` refuses to file a run whose calls name another prompt than the source's ("the agent ran X, not the source's prompt Y: restart it"). Calls from before 0008 carry no sha and count only beside calls that name the prompt, so the parked bad-deploy-1 run can resume.
+  - `eval.estimate()` takes the RPD default from the agent's settings.
+- Files: services/agent/src/agent (llm.py, job.py, db.py, settings.py), services/agent/migrations/versions/0008_model_calls_prompt_sha.py, services/agent/tests/test_workers_int.py, evals/harness (eval.py, run.py, test_eval_score.py), .env.example, docs/ (migrations.md, context.md, memory.md, todo.md), evals/README.md
+- Validation:
+  - `make test`: Python 381 passed, with new tests for the prompt check and for the exit-2 quota stop; TypeScript 4 of 4 tasks passed.
+  - `make test-int`: Jest 33 and pytest 40 passed, the new quota test included. A provider "daily quota spent" row makes a parked investigation unresumable whether resumed or new, and it is resumable again once the row is a day old.
+  - `make migrate`: the dev database is at agent 0008.
+  - ruff and pyright are clean. The prompt sha is unchanged by the move (`e0f86d4ad3b47b1c`).
+- Outstanding: after midnight Pacific, restart the agent, finish change 2's dev pass, choose and freeze a prompt (docs/todo.md).
+
+### 2026-10-16: Step 6b, dev split baseline and prompt tuning (stopped on the provider's daily quota)
+
+- Changes:
+  - Dev baseline on prompt `146b161991e14f7c`: 7 new runs; the 8 ci runs on the same prompt were reused from the cache.
+  - Prompt change 1 (`2b91d4523fb028a6`, `services/agent/src/agent/prompt.py`), from the baseline's dev failures. It adds:
+    - config and flag changes to look for;
+    - a timeline rule;
+    - follow the chain and check the named component;
+    - reading resource metrics;
+    - when to propose and when not to;
+    - the service named is the failing component.
+  - Prompt change 2 (`e0f86d4ad3b47b1c`), from pass 1's dev failures:
+    - a check before `submit_report` (timeline, the component named, proposals);
+    - a description on `submit_report`'s `service` field (`agent/model.py`);
+    - evidence ids without brackets;
+    - one LogQL selector, with no "or";
+    - rollout lines in the logs when `list_deploys` is down.
+  - Both changes are logged in `evals/prompt-log.md` with their dev evidence. Every ci miss is a dev scenario, since the ci subset is dev only.
+  - `eval.py`: reports other than the full test split carry the prompt sha's first 8 characters, since the second dev run of the day had overwritten the first. The day's reports were renamed to match.
+  - The agent ran with `DAILY_AI_TOKEN_BUDGET=3000000`, passed on the command line, because each dev pass uses about 0.8 million tokens. `.env` and the default are unchanged.
+- Files: services/agent/src/agent (prompt.py, model.py), evals/harness/eval.py, evals/prompt-log.md, evals/reports (2026-10-16-dev-full-1-146b1619, -2b91d452, 2026-10-16-dev-ci-1-146b1619), evals/README.md, docs/
+- Validation:
+  - Dev baseline: top-1 0.53, top-3 0.53, grounding 0.73, action correctness 0.60 (do-nothing 0.53), 0.14 with an acceptable action, 1 forbidden proposal, validity 1.00. Tool calls median 10, tokens median 50,411, p95 144 s.
+  - Change 1: top-1 0.73, top-3 0.73, grounding 0.93, action correctness 0.73, 0.43 with an acceptable action, 0 forbidden, validity 0.98. Tool calls median 8, tokens median 53,465, p95 112 s. Exit 0.
+  - Change 2: 2 of 15 runs (bad-config-1 and -2, both right on cause and action) before gemini-3.5-flash-lite answered "daily quota spent" at 10:12 UTC.
+  - Tokens: 409,595 for the 7 baseline runs, 834,452 for pass 1, 114,648 for pass 2 so far. That is 1,358,695 since midnight Pacific, and 1,717,116 for the UTC day with the ci run, which matches `agent.ai_usage`. Billed $0.
+  - `pytest services/agent evals/harness/test_eval_score.py`: 72 passed; ruff and pyright clean.
+- Outstanding:
+  - Finish change 2's dev pass after midnight Pacific: bad-deploy-1 is parked and resumes first.
+  - Three new todo items: a parked quota-spent investigation loops every 15 s and makes the eval exit 3; `LLM_PRIMARY_RPD` is above the observed cap of 275; the eval cannot tell when the agent runs an older prompt.
+  - Gateway, web, agent and sim were stopped by process tree, with no listener or worker left. Nothing is committed.
+
+### 2026-10-16: Step 6b, v1 config timing, refreeze and the first ci run
+
+- Changes:
+  - Scenario set v1, unfrozen before any eval run had used it:
+    - A harmless config or flag change 2 to 6 minutes before the alert in 16 scenarios, one dev and one test per family, 4 of them in the ci subset. It is the newest change in each. A red herring names it, and turning off a harmless flag is forbidden (11 flags); config pushes (5) are herrings only, since no allowlisted action reverts one. `Draft.harmless_change` writes them.
+    - Causal changes start 4.5 to 30 minutes before the alert. bad-config-1's flag lands at 4.5 minutes. bad-config-3's flag builds pricing's CPU up for 15 minutes before its latency follows. bad-config-5's flag covers 10% of charges for 24 minutes, failing too few to alert, then all of them.
+    - In bad-config-2 and bad-config-3 the harmless change comes after the causal one.
+    - Frozen again: the test now pins manifest sha256 `b81c80f4ba442427...`.
+  - Test: `test_config_timing_does_not_give_the_answer_away`.
+  - The ci eval ran, on prompt `146b161991e14f7c`.
+- Files: evals/scenarios/v1 (generate.py, 40 YAML files, manifest.json), evals/harness/test_scenario_set.py, evals/reports/2026-10-16-dev-ci-1.json and .md (now `-146b1619`), evals/README.md, docs/
+- Validation:
+  - Validator: 40 scenarios checked, 0 problems.
+  - `make test`: Python 379 passed; TypeScript passed. `make test-int`: TypeScript 33 and Python 39 passed. `ruff` and `pyright` are clean.
+  - The new test fails when a harmless change loses its red herring or its forbidden flag action (checked on modified copies).
+  - ci eval, 8 runs, all counted (exit 1, one forbidden proposal):
+    - Top-1 0.62, top-3 0.62, grounding 0.75, validity 1.00.
+    - Action correctness 0.62 against a do-nothing baseline of 0.50; 0.25 on the 4 scenarios with an acceptable action.
+    - Tool calls median 5.5, max 14; tokens median 33,860, max 117,780; p95 time 126 s; paid-equivalent $0.0122 per investigation, billed $0.
+    - noisy-neighbor-1 blamed the harmless search-results-badges flag and proposed turning it off. db-pool-exhaustion-1 named orders instead of orders-db. dns-partition-1 named payments instead of coredns. bad-config-1 and memory-leak-1 found the cause but proposed nothing.
+- Outstanding:
+  - The dev split, prompt tuning on it, the test split and the floors (docs/context.md, Current Development Status).
+  - Gateway, web, agent and sim were left running.
+  - Nothing is committed.
+
+### 2026-10-16: Step 6b, v1 deploy timing, action baseline and freeze (ci eval blocked)
+
+- Changes:
+  - Scenario set v1, before any counted run:
+    - A harmless deploy 2 to 6 minutes before the alert in 16 scenarios, one dev and one test per family, 4 of them in the ci subset. It is the newest deploy in each; its rollback is forbidden and a red herring names it. `Draft.harmless_deploy` also writes the unrelated 2-hour deploy, and `build` drops a forbidden action listed twice.
+    - Causal deploys land 4.5 to 35 minutes before the alert. bad-deploy-2 and bad-deploy-4 run as canaries (`Draft.canary`, one pod of eight, below the alert threshold) for 15 and 29 minutes; bad-deploy-5 lands at 4.5 minutes.
+    - bad-config-4's red herring said 502s where its log says 503.
+    - v1 is frozen: a test pins the manifest's sha256, `b4eed100167fb712...`.
+  - Scoring:
+    - `Scored.actionable`.
+    - Action correctness carries its do-nothing baseline (`Metric.do_nothing`), shown beside it in the report and the README table.
+    - New metric `action_correctness_actionable` (target 0.80), in the report, the family tables and the README table. A report note explains the baseline.
+  - Known gaps (traffic_surge and unknown answers, config-change timing) in evals/README.md and README.md.
+- Files: evals/scenarios/v1 (generate.py, 40 YAML files, manifest.json), evals/harness (score.py, eval.py, test_eval_score.py, test_scenario_set.py), evals/README.md, README.md, docs/
+- Validation:
+  - Validator: 40 scenarios checked, 0 problems.
+  - `make test`: Python 378 passed, with 2 new tests (deploy timing; the baseline, the actionable share and the README row text). TypeScript passed, unchanged.
+  - `make test-int`: TypeScript 33 and Python 39 passed.
+  - `ruff check`, `ruff format --check` and `pyright` are clean.
+  - Generated data: the harmless deploy is the newest deploy in all 16 scenarios; causal deploys at 4.5, 6, 8, 20 and 35 minutes; 21 scenarios without an acceptable action (8 of 15 dev, 13 of 25 test, 4 of 8 ci).
+- Outstanding:
+  - The ci eval did not run. Port 4210 is held by an agent worker left from an earlier session: PID 20260, whose `--reload` parent, PID 28332, had exited. It answers the agent's internal route and polls the queue. A fresh agent cannot bind, and the leftover would take eval messages with old code. Stopping it was denied in this session.
+  - Once it is stopped: the four stack commands, then `make eval SUBSET=ci AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. Then the dev and test runs as before.
+  - Nothing is committed.
+
+### 2026-10-16: Step 6b, scenario set v1 and the eval harness (eval runs pending)
+
+- Changes:
+  - Fixes before any eval run:
+    - db-pool-exhaustion's timeline. The pool now fills from -9m to -6m, its warn and error lines start at -6m and assert a full pool, and the error ratio ramps from -5m.
+    - The sim's admin routes now listen on their own port (`SIM_ADMIN_PORT` 4231). One process serves the data app and the admin app; only `make eval` and `make smoke` get `SIM_ADMIN_URL`.
+    - A run resumed after a quota park keeps the wall-clock time it had left: `_start` moves `started_at` forward by the time parked.
+  - Validator: `sim.validate` checks timelines and whether labels can be met (CLI, `make scenarios-check`, and a test over every set).
+  - Scenario schema: YAML, with alert rule, log asserts, `down`, and labels (alternatives, onset, signals, acceptable and forbidden actions). Ten metrics were added to the sim catalog and the prompt.
+  - Scenario set v1:
+    - 40 scenarios in 8 families, from `generate.py`, pinned by a sha256 manifest.
+    - 15 dev and 25 test, with a ci subset of one per family and 6 degraded scenarios.
+    - Each carries an unrelated deploy about 2 hours before, a loud error log, baseline series and bystanders.
+    - The 6a JSON scenarios were removed; v1 holds their successors.
+  - Harness: `run.py` (the real path), `score.py` and `eval.py`, with `make eval`, `thresholds.json`, `pricing.json`, `prompt-log.md`, the reports and the README block.
+    - Deterministic scores, overall and per family, with 95% cluster bootstrap intervals.
+    - The run cache is keyed on the prompt, the models, the scenario and the run index, and resumes across quota days.
+    - Floors follow the shared rules, with the known-miss exception for efficiency (docs/memory.md).
+  - An independent review of v1, read-only, before any counted run found:
+    - label ambiguity in about 25 scenarios;
+    - noisy-neighbor data that argued resource_exhaustion of the victim;
+    - families told apart by which series and services exist;
+    - an OOM model where restarts freed nothing;
+    - wrong Postgres, DNS and NAT log texts;
+    - action labels at odds with the runbooks.
+  - Fixed from the review:
+    - a labelling convention in the system prompt;
+    - baseline series and bystanders (coredns, a batch job) in every scenario;
+    - node contention instead of victim throttling;
+    - an OOM sawtooth, with the restart counter following the log;
+    - corrected log texts and action labels;
+    - one alternative answer, on dns-partition-2.
+  - docs/todo.md:
+    - added the early-hypothesis-step item, the step 10 admin-port check and the step 7 CI commands;
+    - closed two sim review lows (the pool timeline, the admin credential).
+- Files:
+  - sim/src/sim: main.py, scenario.py, validate.py, catalog.py
+  - sim/pyproject.toml (PyYAML), typings/yaml/__init__.pyi
+  - sim/tests: conftest.py, test_sim_admin.py, test_sim_api.py, test_sim_scenarios.py, test_sim_limits.py, test_sim_promql.py, test_sim_logs.py, test_sim_validate.py
+  - services/agent: src/agent/job.py, src/agent/prompt.py; tests/test_workers_int.py, test_ai_loop_int.py, test_sim_isolation.py
+  - evals: scenarios/v1/ (generate.py, 40 YAML files, manifest.json), harness/ (run.py, score.py, eval.py, test_eval_score.py, test_scenario_set.py), thresholds.json, pricing.json, prompt-log.md, README.md
+  - removed: evals/scenarios/bad-deploy.json, evals/scenarios/db-pool-exhaustion.json
+  - Makefile, pyproject.toml, .gitignore, .env.example, docs/
+- Validation:
+  - Validator: 40 scenarios checked, 0 problems. The 6a pool timeline fails it, and every check catches its mutation.
+  - Every required signal shows in the real tools' results. A cold query for every log line takes under 1.5 s. The generator rewrites the set byte for byte.
+  - `make test`: Python 376 passed; TypeScript 84 passed with Turbo forced (`pnpm turbo run test --force`).
+  - `make test-int`: TypeScript 33 passed; Python 39 passed in 134 s, including the new resume test.
+  - `ruff check`, `ruff format --check` and `pyright` are clean.
+  - Quota estimate on 2026-10-16, with 12 primary calls already used that Pacific day:
+    - ci subset: about 72 calls.
+    - test split, 75 runs: about 675 calls, 2 quota days at the unverified 500 requests a day.
+  - Live check before the review fixes:
+    - bad-config-1 resolved with 95,058 tokens in 66 s, over the 60,000-token median target.
+    - bad-deploy-1 reached awaiting approval with 35,263 tokens in 15 s.
+    - db-pool-exhaustion-1 was posted when the eval was stopped.
+    - These ran on the old prompt (`572e32b350ec93f1`) and pre-review v1, so they do not count. Their cache entries no longer match any key.
+- Outstanding:
+  - The counted runs, in this order (commands in docs/context.md, Current Development Status, and evals/README.md):
+    - `make eval SUBSET=ci`
+    - `make eval SPLIT=dev RUNS=1`, tuning on dev only and logging each change in prompt-log.md
+    - `make eval SPLIT=test ESTIMATE=1`
+    - `make eval SPLIT=test`, rerun after midnight Pacific on exit 2
+    - `SET_FLOORS=1` for the test and ci scopes
+    - each with `AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`
+  - After the full test run: the README eval table (the harness writes it), then 6b's done check.
+  - Scenario gaps for v2:
+    - no traffic_surge or unknown label;
+    - causal deploys always 5 to 8 minutes before the alert;
+    - 21 of 40 scenarios with no acceptable action;
+    - resumed runs can lose single-line evidence off the first log page.
+  - Sim and gateway backlog (docs/todo.md):
+    - log cursors not bound to the query;
+    - an empty 200 for deploys of an unknown service;
+    - no bounds on `Activation.anchor` (500 on Windows outside 1970 to 3000);
+    - alert annotations not stored.
+  - Nothing is committed.
+
 ### 2026-10-15: Independent review of the events consumer and the sim
 
 - Changes:

@@ -5,13 +5,14 @@ delivery through the outbox, a rejected report, and runbook search with task pre
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
 import random
 import re
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,7 @@ from uuid import UUID
 
 import httpx2
 import pytest
+import yaml
 from sqlalchemy import Connection, Engine, create_engine, func, select, text
 from test_workers_int import new_request, recorded
 from types_boto3_sqs import SQSClient
@@ -46,7 +48,7 @@ from py_clients.clients import AlertContextClient
 from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
 from py_clients.generated.messages.step_recorded_v3_schema import StepRecordedV3
 from sim.main import Settings as SimSettings
-from sim.main import create_app as sim_app
+from sim.main import create_apps
 
 if TYPE_CHECKING:
     from conftest import ScratchDb
@@ -54,7 +56,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 REPO = Path(__file__).resolve().parents[3]
-SCENARIOS = REPO / "evals" / "scenarios"
+SCENARIOS = REPO / "evals" / "scenarios" / "v1"
+Clients = tuple[httpx2.AsyncClient, httpx2.AsyncClient]
 Plan = ToolRequest | Callable[[Sequence[StepRecordedV2]], ToolRequest | ReportDraft]
 
 
@@ -144,9 +147,15 @@ def alerts_client() -> AlertContextClient:
     return AlertContextClient("http://gateway.test", "token", transport=transport)
 
 
-def sim(directory: Path = SCENARIOS) -> httpx2.AsyncClient:
-    app = sim_app(SimSettings(sim_scenarios_dir=directory))
-    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://sim")
+@contextlib.asynccontextmanager
+async def sim(directory: Path = SCENARIOS) -> AsyncGenerator[Clients]:
+    """Clients of the sim's data app, which the tools get, and of its admin app."""
+    apps = create_apps(SimSettings(sim_scenarios_dir=directory))
+    data = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=apps.data), base_url="http://sim")
+    admin_transport = httpx2.ASGITransport(app=apps.admin)
+    admin = httpx2.AsyncClient(transport=admin_transport, base_url="http://sim-admin")
+    async with data, admin:
+        yield data, admin
 
 
 async def activate(client: httpx2.AsyncClient, scenario: str, anchor: datetime) -> None:
@@ -242,9 +251,9 @@ def test_a_degraded_metrics_backend_is_missing_evidence_and_caps_confidence(
     ]
 
     async def main() -> None:
-        async with sim() as client:
-            await activate(client, "bad-deploy", fired)
-            await client.put("/admin/down", json={"tool": "metrics"})
+        async with sim() as (client, admin):
+            await activate(admin, "bad-deploy-1", fired)
+            await admin.put("/admin/down", json={"tool": "metrics"})
             tools = Tools(client, alerts_client(), None, None).all()
             outcome = await job_for(engine, Planned(plan), tools).run(request, asyncio.Event())
             assert outcome == "done"
@@ -263,7 +272,7 @@ def test_a_degraded_metrics_backend_is_missing_evidence_and_caps_confidence(
 
 def flood(tmp_path: Path) -> Path:
     """The bad-deploy scenario with one log stream of 5,000 lines in the 50 minutes before."""
-    scenario = json.loads((SCENARIOS / "bad-deploy.json").read_text(encoding="utf-8"))
+    scenario = yaml.safe_load((SCENARIOS / "bad-deploy-1.yaml").read_text(encoding="utf-8"))
     scenario["id"] = "log-flood"
     scenario["logs"] = [
         {
@@ -274,7 +283,7 @@ def flood(tmp_path: Path) -> Path:
             "lines": ["GET /cart 200 {ms}ms request_id={rid}"],
         }
     ]
-    (tmp_path / "log-flood.json").write_text(json.dumps(scenario), encoding="utf-8")
+    (tmp_path / "log-flood.yaml").write_text(yaml.safe_dump(scenario), encoding="utf-8")
     return tmp_path
 
 
@@ -287,8 +296,8 @@ def test_log_pages_cover_5000_lines_at_most_200_each(tmp_path: Path) -> None:
         return f"{pages[-1]} GET /cart lines", []
 
     async def main() -> None:
-        async with sim(flood(tmp_path)) as client:
-            await activate(client, "log-flood", fired)
+        async with sim(flood(tmp_path)) as (client, admin):
+            await activate(admin, "log-flood", fired)
             tools = Tools(client, alerts_client(), None, summarize)
             ctx = ToolContext(uuid.uuid4(), fired, 100_000)
             args: dict[str, Any] = {"query": '{service="checkout"}', "minutes_before": 60}
@@ -330,8 +339,8 @@ def test_paging_through_logs_keeps_the_context_within_budget(
     plan: list[Plan] = [ask("query_logs", **query), *[next_page] * 20, report(0.5, "query_logs")]
 
     async def main() -> None:
-        async with sim(flood(tmp_path)) as client:
-            await activate(client, "log-flood", fired)
+        async with sim(flood(tmp_path)) as (client, admin):
+            await activate(admin, "log-flood", fired)
             tools = Tools(client, alerts_client(), None, summarize).all()
             outcome = await job_for(engine, Planned(plan), tools).run(request, asyncio.Event())
             assert outcome == "done"
@@ -380,8 +389,8 @@ def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(
     ]
 
     async def main() -> None:
-        async with sim() as client:
-            await activate(client, "bad-deploy", fired)
+        async with sim() as (client, admin):
+            await activate(admin, "bad-deploy-1", fired)
             tools = Tools(client, alerts_client(), None, None).all()
             outcome = await job_for(engine, Planned(plan), tools).run(request, asyncio.Event())
             assert outcome == "done"

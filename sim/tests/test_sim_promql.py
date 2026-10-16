@@ -12,7 +12,7 @@ ERRORS = 'http_error_ratio{service="checkout"}'
 
 @pytest.fixture
 def client(shipped: TestClient) -> TestClient:
-    shipped.post("/admin/scenarios/bad-deploy/activate", json={"anchor": "2026-10-15T12:00:00Z"})
+    shipped.post("/admin/scenarios/bad-deploy-1/activate", json={"anchor": "2026-10-15T12:00:00Z"})
     return shipped
 
 
@@ -161,4 +161,13 @@ def test_label_values_list_the_active_scenarios_labels(client: TestClient) -> No
     assert "http_error_ratio" in names
     assert names == sorted(set(names))
     services = client.get("/api/v1/label/service/values").json()["data"]
-    assert services == ["catalog", "checkout", "frontend", "orders-db", "payments"]
+    assert services == [
+        "catalog",
+        "checkout",
+        "coredns",
+        "frontend",
+        "nightly-backup",
+        "notifications",
+        "orders-db",
+        "payments",
+    ]

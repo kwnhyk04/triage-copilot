@@ -1,0 +1,377 @@
+id: memory-leak-2
+title: search's result cache never evicts
+seed: 95924
+alert:
+  labels:
+    alertname: SearchHighLatency
+    service: search
+    severity: warning
+  annotations:
+    summary: search p99 latency above 1 s for 3 minutes
+    description: http_latency_p99_seconds{service="search"} > 1 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: search
+    op: '>'
+    threshold: 1.0
+    for: 3m
+services:
+  web:
+    depends_on:
+    - search
+  search:
+    depends_on:
+    - search-index
+    - coredns
+  search-index: {}
+  catalog: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v4.14.0
+  previous_version: v4.13.4
+  at: -114m
+  author: dev.kim
+  change: Translate the settings page
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: web
+  base: 197
+  noise: 9.85
+- name: http_error_ratio
+  labels:
+    service: web
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: web
+  base: 0.1647
+  noise: 0.01317
+- name: cpu_usage_ratio
+  labels:
+    service: web
+  base: 0.4198
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: web
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: web
+  base: 0.3709
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: web
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 256
+  noise: 12.8
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.2
+  noise: 0.016
+  changes:
+  - at: -5m
+    value: 3.3
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.2827
+  noise: 0.03
+  changes:
+  - at: -20m
+    value: 0.86
+    ramp: 10m
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.4342
+  noise: 0.02
+  changes:
+  - at: -3h
+    value: 0.97
+    ramp: 173m
+  - at: -6m
+    value: 0.55
+  - at: -330s
+    value: 0.97
+    ramp: 30s
+  - at: -4m
+    value: 0.55
+  - at: -210s
+    value: 0.97
+    ramp: 30s
+  - at: -2m
+    value: 0.55
+  - at: -90s
+    value: 0.97
+    ramp: 90s
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 0
+  changes:
+  - at: -6m
+    value: 1
+  - at: -4m
+    value: 2
+  - at: -2m
+    value: 3
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 220
+  noise: 11
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.3447
+  noise: 0.02758
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.3299
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5796
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 105
+  noise: 5.25
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.09254
+  noise: 0.007403
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4619
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3641
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 3
+- name: cpu_usage_ratio
+  labels:
+    service: search-index
+  base: 0.35
+  noise: 0.03
+- name: node_cpu_usage_ratio
+  labels:
+    service: search
+    node: node-5
+  base: 0.4523
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: search
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: search
+    peer: search-index
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.154
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: web
+    level: info
+  per_minute: 13
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /search?q=shoes 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 14
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 9
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 10
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: warn
+  per_minute: 4
+  from: -20m
+  to: -6m
+  lines:
+  - 'GC overhead: 94% of the last 60s in garbage collection, heap 3.8GB of 4GB'
+  asserts:
+  - metric: memory_usage_ratio
+    labels:
+      service: search
+    op: '>='
+    value: 0.85
+- labels:
+    service: search
+    level: error
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - container search-{rid} OOMKilled (exit code 137), memory limit 4Gi; restarting
+- labels:
+    service: search
+    level: error
+  per_minute: 1
+  from: -4m
+  to: -3m
+  lines:
+  - container search-{rid} OOMKilled (exit code 137), memory limit 4Gi; restarting
+- labels:
+    service: search
+    level: error
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - container search-{rid} OOMKilled (exit code 137), memory limit 4Gi; restarting
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -114m
+  to: -113m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v4.14.0'
+- labels:
+    service: catalog
+    level: error
+  per_minute: 36
+  lines:
+  - 'session store: key over 250 bytes, not cached ({user})'
+- labels:
+    service: web
+    level: info
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - 'feature flag web-dark-mode changed: rollout 10% -> 50% (by li.wei)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: resource_exhaustion
+  service: search
+  alternatives: []
+  onset: -3h
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: memory_usage_ratio{service="search"}
+    pattern: memory_usage_ratio\{service="search"\}
+  - tool: query_logs
+    args:
+      query: '{service="search", level="warn"}'
+    pattern: GC overhead
+  acceptable_actions:
+  - kind: restart_service
+    target: search
+  - kind: scale_service
+    target: search
+  forbidden_actions:
+  - kind: restart_service
+    target: search-index
+  - kind: rollback_deploy
+    target: accounts
+  - kind: disable_feature_flag
+    target: web
+    parameters:
+      flag: web-dark-mode
+  red_herrings:
+  - accounts v4.14.0 shipped 114 minutes before the alert, and none of its metrics moved after it
+  - catalog logs 'session store' errors all window long, before and after
+  - web's flag web-dark-mode changed 3 minutes before the alert, and none of its metrics moved after it

@@ -1,0 +1,372 @@
+id: expired-cert-1
+title: payments' certificate expires
+seed: 87804
+alert:
+  labels:
+    alertname: CheckoutHighErrorRate
+    service: checkout
+    severity: critical
+  annotations:
+    summary: checkout 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="checkout"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: checkout
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - payments
+    - cart
+    - coredns
+  payments:
+    depends_on:
+    - card-network
+  card-network: {}
+  cart: {}
+  catalog: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: catalog
+  version: v5.15.0
+  previous_version: v5.14.5
+  at: -121m
+  author: ci-bot
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 42
+  noise: 2.1
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.12
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.1127
+  noise: 0.009012
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5214
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5754
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 258
+  noise: 12.9
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.34
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2722
+  noise: 0.02178
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3854
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4296
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 168
+  noise: 8.4
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.3168
+  noise: 0.02535
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.2982
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.3613
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 247
+  noise: 12.35
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.3247
+  noise: 0.02598
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3093
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.54
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 44
+  noise: 2.2
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.1953
+  noise: 0.01562
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.398
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.458
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 3
+- name: tls_cert_days_remaining
+  labels:
+    service: payments
+  base: 0.2472
+  changes:
+  - at: -6h
+    value: 0
+    ramp: 356m
+- name: tls_handshake_errors_per_second
+  labels:
+    service: checkout
+    peer: payments
+  base: 0
+  changes:
+  - at: -4m
+    value: 45
+    ramp: 30s
+- name: node_cpu_usage_ratio
+  labels:
+    service: checkout
+    node: node-9
+  base: 0.4286
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: checkout
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1262
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-5
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 12
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 10
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 11
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 12
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 10
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: error
+  per_minute: 45
+  from: -4m
+  lines:
+  - 'POST https://payments.internal/charge: tls: failed to verify certificate: x509: certificate has expired
+    or is not yet valid request_id={rid}'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -121m
+  to: -2h
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v5.15.0'
+- labels:
+    service: cart
+    level: error
+  per_minute: 24
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'feature flag checkout-upsell-banner changed: off -> on (by ana.lopez)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-5
+labels:
+  root_cause_class: certificate_expiry
+  service: payments
+  alternatives: []
+  onset: -4m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="checkout", level="error"}'
+    pattern: certificate has expired
+  - tool: query_metrics
+    args:
+      query: tls_cert_days_remaining{service="payments"}
+    pattern: tls_cert_days_remaining\{service="payments"\}
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: payments
+  - kind: restart_service
+    target: checkout
+  - kind: rollback_deploy
+    target: checkout
+  - kind: rollback_deploy
+    target: catalog
+  - kind: disable_feature_flag
+    target: checkout
+    parameters:
+      flag: checkout-upsell-banner
+  red_herrings:
+  - catalog v5.15.0 shipped 121 minutes before the alert, and none of its metrics moved after it
+  - cart logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after
+  - checkout's flag checkout-upsell-banner changed 2 minutes before the alert, after its errors had begun

@@ -1,0 +1,421 @@
+id: bad-deploy-2
+title: search v5.2.0 rejects queries with '&'
+seed: 10135
+alert:
+  labels:
+    alertname: SearchHighErrorRate
+    service: search
+    severity: critical
+  annotations:
+    summary: search 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="search"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: search
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  web:
+    depends_on:
+    - search
+    - catalog
+  search:
+    depends_on:
+    - search-index
+    - catalog
+    - coredns
+  search-index: {}
+  catalog: {}
+  accounts: {}
+  notifications: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: search
+  version: v5.2.0
+  previous_version: v5.1.4
+  at: -20m
+  author: dev.kim
+  change: Switch query parsing to the new tokenizer (#2231)
+- service: notifications
+  version: v2.16.0
+  previous_version: v2.15.7
+  at: -118m
+  author: sam.okafor
+  change: Translate the settings page
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: web
+  base: 175
+  noise: 8.75
+- name: http_error_ratio
+  labels:
+    service: web
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.06
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: web
+  base: 0.3144
+  noise: 0.02515
+- name: cpu_usage_ratio
+  labels:
+    service: web
+  base: 0.531
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: web
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: web
+  base: 0.5955
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: web
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 255
+  noise: 12.75
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -20m
+    value: 0.024
+    ramp: 1m
+  - at: -4m
+    value: 0.18
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.1116
+  noise: 0.008925
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.3028
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.4906
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 164
+  noise: 8.2
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.139
+  noise: 0.01112
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2945
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4893
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 54
+  noise: 2.7
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.1736
+  noise: 0.01389
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3084
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5614
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 163
+  noise: 8.15
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.0999
+  noise: 0.007992
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.5159
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4367
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 1
+- name: http_latency_p99_seconds
+  labels:
+    service: search-index
+  base: 0.05
+  noise: 0.005
+- name: cpu_usage_ratio
+  labels:
+    service: search-index
+  base: 0.38
+  noise: 0.03
+- name: node_cpu_usage_ratio
+  labels:
+    service: search
+    node: node-8
+  base: 0.4172
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: search
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: search
+    peer: search-index
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2411
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-2
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: web
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /search?q=shoes 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 10
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 9
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 8
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 8
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -20m
+  to: -19m
+  lines:
+  - 'Rolling update: canary pod search-{rid} started version=v5.2.0, replacing v5.1.4, 1 of 8 pods'
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -5m
+  to: -4m
+  lines:
+  - canary analysis passed, promoting version=v5.2.0 to all pods
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -5m
+  to: -3m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v5.2.0, replacing v5.1.4'
+- labels:
+    service: search
+    level: error
+  per_minute: 5
+  from: -20m
+  to: -4m
+  lines:
+  - 'QueryParseException: unexpected token ''&'' at position {n} version=v5.2.0 request_id={rid}'
+  - GET /search 500 {ms}ms version=v5.2.0 request_id={rid}
+- labels:
+    service: search
+    level: error
+  per_minute: 40
+  from: -4m
+  lines:
+  - 'QueryParseException: unexpected token ''&'' at position {n} version=v5.2.0 request_id={rid}'
+  - GET /search 500 {ms}ms version=v5.2.0 request_id={rid}
+- labels:
+    service: web
+    level: error
+  per_minute: 12
+  from: -4m
+  lines:
+  - search returned 500 for GET /search request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 2
+  from: -118m
+  to: -117m
+  lines:
+  - 'Rolling update: pod notifications-{rid} started version=v2.16.0'
+- labels:
+    service: accounts
+    level: error
+  per_minute: 29
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: search
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'feature flag search-result-thumbnails changed: rollout 50% -> 100% (by dev.kim)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-2
+down: deploys
+labels:
+  root_cause_class: bad_deploy
+  service: search
+  alternatives: []
+  onset: -20m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="search", level="error"}'
+    pattern: QueryParseException
+  - tool: query_logs
+    args:
+      query: '{service="search"} |= "Rolling update"'
+    pattern: started version=v5\.2\.0, replacing v5\.1\.4
+  acceptable_actions:
+  - kind: rollback_deploy
+    target: search
+    parameters:
+      to_version: v5.1.4
+  forbidden_actions:
+  - kind: restart_service
+    target: search-index
+  - kind: rollback_deploy
+    target: notifications
+  - kind: disable_feature_flag
+    target: search
+    parameters:
+      flag: search-result-thumbnails
+  red_herrings:
+  - notifications v2.16.0 shipped 118 minutes before the alert, and none of its metrics moved after it
+  - accounts logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after
+  - search's flag search-result-thumbnails changed 2 minutes before the alert, after its errors had begun

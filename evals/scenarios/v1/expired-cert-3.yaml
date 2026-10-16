@@ -1,0 +1,300 @@
+id: expired-cert-3
+title: carrier-api's certificate expires
+seed: 41936
+alert:
+  labels:
+    alertname: ShippingHighErrorRate
+    service: shipping
+    severity: critical
+  annotations:
+    summary: shipping 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="shipping"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: shipping
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - shipping
+  shipping:
+    depends_on:
+    - carrier-api
+    - coredns
+  carrier-api: {}
+  orders: {}
+  search: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: search
+  version: v1.9.0
+  previous_version: v1.8.6
+  at: -122m
+  author: ana.lopez
+  change: Add a metrics label to the request histogram
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 77
+  noise: 3.85
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2643
+  noise: 0.02115
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3048
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4823
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: shipping
+  base: 145
+  noise: 7.25
+- name: http_error_ratio
+  labels:
+    service: shipping
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.42
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: shipping
+  base: 0.2295
+  noise: 0.01836
+- name: cpu_usage_ratio
+  labels:
+    service: shipping
+  base: 0.4912
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: shipping
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: shipping
+  base: 0.3524
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: shipping
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 62
+  noise: 3.1
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.1648
+  noise: 0.01319
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4265
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.431
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 286
+  noise: 14.3
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.2869
+  noise: 0.02295
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.2817
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.4998
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 2
+- name: tls_handshake_errors_per_second
+  labels:
+    service: shipping
+    peer: carrier-api
+  base: 0
+  changes:
+  - at: -4m
+    value: 25
+    ramp: 30s
+- name: node_cpu_usage_ratio
+  labels:
+    service: shipping
+    node: node-5
+  base: 0.4461
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: shipping
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2251
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-9
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 13
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: info
+  per_minute: 14
+  lines:
+  - POST /rates 200 {ms}ms request_id={rid}
+  - POST /labels 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 9
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 12
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: error
+  per_minute: 30
+  from: -4m
+  lines:
+  - 'Post "https://api.carrier-api.example.net/v1/rates": tls: failed to verify certificate: x509: certificate
+    has expired or is not yet valid'
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -122m
+  to: -121m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v1.9.0'
+- labels:
+    service: orders
+    level: error
+  per_minute: 28
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-9
+down: dependencies
+labels:
+  root_cause_class: certificate_expiry
+  service: carrier-api
+  alternatives: []
+  onset: -4m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: tls_handshake_errors_per_second{peer="carrier-api", service="shipping"}
+    pattern: tls_handshake_errors_per_second\{peer="carrier-api", service="shipping"\}
+  - tool: query_logs
+    args:
+      query: '{service="shipping", level="error"}'
+    pattern: certificate has expired
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: shipping
+  - kind: rollback_deploy
+    target: shipping
+  - kind: rollback_deploy
+    target: search
+  red_herrings:
+  - search v1.9.0 shipped 122 minutes before the alert, and none of its metrics moved after it
+  - orders logs 'email template promo-weekly has no translation for locale pt-BR' errors all window long,
+    before and after

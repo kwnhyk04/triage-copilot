@@ -1,0 +1,407 @@
+id: db-pool-exhaustion-2
+title: VACUUM FULL locks ledger_entries
+seed: 40829
+alert:
+  labels:
+    alertname: PaymentsHighErrorRate
+    service: payments
+    severity: critical
+  annotations:
+    summary: payments 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="payments"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: payments
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - payments
+  payments:
+    depends_on:
+    - payments-db
+    - card-network
+    - coredns
+  frontend:
+    depends_on:
+    - checkout
+  payments-db: {}
+  card-network: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v3.20.0
+  previous_version: v3.19.3
+  at: -125m
+  author: dev.kim
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 70
+  noise: 3.5
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.3092
+  noise: 0.02474
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3959
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3939
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 276
+  noise: 13.8
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.08
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.175
+  noise: 0.014
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5078
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5623
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 105
+  noise: 5.25
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.16
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.3474
+  noise: 0.02779
+  changes:
+  - at: -7m
+    value: 5
+    ramp: 2m
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.3506
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5296
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 255
+  noise: 12.75
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.3367
+  noise: 0.02694
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.2877
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4601
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 1
+- name: db_connections
+  labels:
+    service: payments-db
+  base: 40
+  noise: 3
+  changes:
+  - at: -8m
+    value: 78
+    ramp: 150s
+- name: db_lock_wait_seconds
+  labels:
+    service: payments-db
+  base: 0.003
+  noise: 0.002
+  changes:
+  - at: -8m
+    value: 3
+    ramp: 1m
+- name: db_slow_queries_per_second
+  labels:
+    service: payments-db
+  base: 0.1
+  noise: 0.05
+  changes:
+  - at: -8m
+    value: 14
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: payments-db
+  base: 0.3942
+  noise: 0.03
+- name: db_pool_in_use
+  labels:
+    service: payments
+  base: 9
+  noise: 0.15
+  changes:
+  - at: -8m
+    value: 29.8
+    ramp: 150s
+- name: db_pool_max
+  labels:
+    service: payments
+  base: 30
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-8
+  base: 0.5272
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: payments-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1301
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-7
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 11
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 9
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 10
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 1
+  from: -8m
+  to: -7m
+  lines:
+  - 'pid 7741 (user dba_ops, application psql): VACUUM FULL public.ledger_entries started'
+- labels:
+    service: payments-db
+    level: warn
+  per_minute: 12
+  from: -8m
+  lines:
+  - process {n} still waiting for AccessShareLock on relation ledger_entries after 1000 ms; blocked by
+    pid 7741
+- labels:
+    service: payments
+    level: warn
+  per_minute: 6
+  from: -330s
+  lines:
+  - connection pool payments-db at 30/30 connections, {n} requests waiting
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: payments
+    op: '>='
+    value: 29
+- labels:
+    service: payments
+    level: error
+  per_minute: 30
+  from: -330s
+  lines:
+  - timeout acquiring connection from pool after 5000ms (pool=payments-db, active=30, idle=0) request_id={rid}
+  - 'request failed: PoolTimeoutException request_id={rid}'
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: payments
+    op: '>='
+    value: 29
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -125m
+  to: -124m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v3.20.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 29
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: checkout
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'config reloaded from config-service: checkout.cart.max_items=100 (was 50), changed by ops-bot'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-7
+labels:
+  root_cause_class: database
+  service: payments-db
+  alternatives: []
+  onset: -8m
+  required_signals:
+  - tool: query_logs
+    args:
+      query: '{service="payments-db"}'
+    pattern: pid 7741
+  - tool: query_metrics
+    args:
+      query: db_lock_wait_seconds{service="payments-db"}
+    pattern: db_lock_wait_seconds\{service="payments-db"\}
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: payments-db
+  - kind: scale_service
+    target: payments
+  - kind: rollback_deploy
+    target: accounts
+  red_herrings:
+  - card-network, the provider payments calls, shows nothing unusual
+  - accounts v3.20.0 shipped 125 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after
+  - checkout's config key checkout.cart.max_items changed 2 minutes before the alert, after its errors
+    had begun

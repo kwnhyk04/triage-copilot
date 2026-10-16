@@ -210,6 +210,8 @@ class ModelCall(Base):
     max_output_tokens: Mapped[int | None]
     latency_ms: Mapped[int]
     error: Mapped[str | None]
+    # sha256 of the prompt the agent process ran (agent.job.prompt_sha); null before 0008.
+    prompt_sha: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

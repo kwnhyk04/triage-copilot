@@ -20,21 +20,24 @@ output is limited to the tokens its input leaves (agent.model.TurnBudget).
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import random
 import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
-from sqlalchemy import Connection, Date, Engine, cast, func, insert, select, text, update
+from sqlalchemy import Connection, Date, Engine, case, cast, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ProposedAction, ToolCall
+from agent.llm import SUMMARY_SYSTEM
 from agent.model import (
     MESSAGE_OVERHEAD,
     BudgetRefused,
@@ -77,6 +80,18 @@ Outcome = Literal["done", "stopped", "busy", "parked"]
 """done: the final report is committed. stopped: shutdown began. busy: another agent runs it.
 parked: it waits for a tenant slot or model budget, so its message can go."""
 WaitReason = Literal["tenant_cap", "budget"]
+
+
+def prompt_sha() -> str:
+    """Of everything the model is told: the system, forced-report and log-summary prompts, the
+    brief and the tool definitions. Every model call records the one its process runs."""
+    tools = json.dumps([asdict(t) for t in TOOL_SPECS], sort_keys=True)
+    template = brief("{group_key}", datetime(2000, 1, 1, tzinfo=UTC))
+    parts = [SYSTEM, FORCED, SUMMARY_SYSTEM, template, tools]
+    return hashlib.sha256("\x1e".join(parts).encode()).hexdigest()
+
+
+PROMPT_SHA = prompt_sha()
 Status = Literal["resolved", "awaiting_approval"]
 
 MODEL_RETRIES = 3
@@ -833,19 +848,26 @@ def _park(conn: Connection, inv: UUID, reason: WaitReason, tenant: UUID | None) 
 
 def _start(conn: Connection, inv: UUID) -> datetime:
     """It holds a tenant slot and has model budget, so it no longer waits. Returns when it first
-    started, which its wall-clock limit counts from."""
+    started, moved forward by the time it spent parked since, which its wall-clock limit counts
+    from: a run parked overnight for model quota resumes with the time it had left."""
+    i = Investigation
     with conn.begin():
         started = conn.execute(
-            update(Investigation)
-            .where(Investigation.id == inv)
+            update(i)
+            .where(i.id == inv)
             .values(
                 status="running",
                 waiting_reason=None,
                 waiting_since=None,
-                started_at=func.coalesce(Investigation.started_at, func.now()),
+                # SET reads the row as it was, so waiting_since is the park this run ends.
+                started_at=case(
+                    (i.started_at.is_(None), func.now()),
+                    (i.waiting_since.is_not(None), i.started_at + (func.now() - i.waiting_since)),
+                    else_=i.started_at,
+                ),
                 updated_at=func.now(),
             )
-            .returning(Investigation.started_at)
+            .returning(i.started_at)
         ).scalar_one()
     if started is None:
         raise RuntimeError("coalesce with now() left started_at null")
@@ -879,6 +901,7 @@ def _store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
                     "max_output_tokens": c.max_output_tokens,
                     "latency_ms": c.latency_ms,
                     "error": c.error,
+                    "prompt_sha": PROMPT_SHA,
                 }
                 for c in calls
             ],

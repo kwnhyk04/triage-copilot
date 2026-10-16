@@ -1,0 +1,356 @@
+id: slow-dependency-5
+title: geo-api answers 503
+seed: 41123
+alert:
+  labels:
+    alertname: AccountsHighErrorRate
+    service: accounts
+    severity: critical
+  annotations:
+    summary: accounts 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="accounts"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: accounts
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - accounts
+    - checkout
+  checkout:
+    depends_on:
+    - accounts
+  accounts:
+    depends_on:
+    - geo-api
+    - accounts-db
+    - coredns
+  geo-api: {}
+  accounts-db: {}
+  search: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: search
+  version: v3.15.0
+  previous_version: v3.14.2
+  at: -122m
+  author: ana.lopez
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 132
+  noise: 6.6
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.331
+  noise: 0.02648
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.2664
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4769
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 165
+  noise: 8.25
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.06
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.1733
+  noise: 0.01386
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4481
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5897
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 247
+  noise: 12.35
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.19
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.2747
+  noise: 0.02198
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4117
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5978
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 156
+  noise: 7.8
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.08732
+  noise: 0.006985
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.53
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.4467
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 2
+- name: db_connections
+  labels:
+    service: accounts-db
+  base: 59
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: accounts-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: accounts-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: accounts-db
+  base: 0.3423
+  noise: 0.03
+- name: upstream_error_ratio
+  labels:
+    service: accounts
+    peer: geo-api
+  base: 0.001
+  noise: 0.0005
+  changes:
+  - at: -330s
+    value: 0.62
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: accounts
+    node: node-7
+  base: 0.391
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: accounts
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: accounts
+    peer: geo-api
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2249
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-5
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 9
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 8
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 11
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: accounts
+    level: error
+  per_minute: 36
+  from: -4m
+  lines:
+  - 'address validation failed: geo-api returned 503 Service Unavailable (POST /v1/validate) request_id={rid}'
+  - POST /addresses 500 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -122m
+  to: -121m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v3.15.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 23
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: frontend
+    level: info
+  per_minute: 1
+  from: -5m
+  to: -4m
+  lines:
+  - 'feature flag new-header-nav changed: rollout 50% -> 100% (by ana.lopez)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-5
+labels:
+  root_cause_class: dependency_failure
+  service: geo-api
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: upstream_error_ratio{peer="geo-api", service="accounts"}
+    pattern: upstream_error_ratio\{peer="geo-api", service="accounts"\}
+  - tool: query_logs
+    args:
+      query: '{service="accounts", level="error"}'
+    pattern: geo-api returned 503
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: accounts-db
+  - kind: rollback_deploy
+    target: accounts
+  - kind: rollback_deploy
+    target: search
+  - kind: disable_feature_flag
+    target: frontend
+    parameters:
+      flag: new-header-nav
+  red_herrings:
+  - search v3.15.0 shipped 122 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'analytics beacon rejected' errors all window long, before and after
+  - frontend's flag new-header-nav changed 5 minutes before the alert, and none of its metrics moved after
+    it

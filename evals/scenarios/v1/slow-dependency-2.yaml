@@ -1,0 +1,353 @@
+id: slow-dependency-2
+title: shipping-api slows shipping
+seed: 5984
+alert:
+  labels:
+    alertname: ShippingHighLatency
+    service: shipping
+    severity: warning
+  annotations:
+    summary: shipping p99 latency above 3 s for 3 minutes
+    description: http_latency_p99_seconds{service="shipping"} > 3 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: shipping
+    op: '>'
+    threshold: 3.0
+    for: 3m
+services:
+  checkout:
+    depends_on:
+    - shipping
+  orders:
+    depends_on:
+    - shipping
+  shipping:
+    depends_on:
+    - shipping-api
+    - coredns
+  shipping-api: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v1.6.0
+  previous_version: v1.5.1
+  at: -119m
+  author: ci-bot
+  change: Bump dependencies
+- service: checkout
+  version: v6.9.0
+  previous_version: v6.8.4
+  at: -2m
+  author: maria.g
+  change: Translate the settings page
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 121
+  noise: 6.05
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2367
+  noise: 0.01894
+  changes:
+  - at: -270s
+    value: 9.4
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4519
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4331
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 57
+  noise: 2.85
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -45m
+    value: 0.03
+    ramp: 1m
+    until: -38m
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.116
+  noise: 0.00928
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4421
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.5727
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: shipping
+  base: 223
+  noise: 11.15
+- name: http_error_ratio
+  labels:
+    service: shipping
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: shipping
+  base: 0.5
+  noise: 0.04
+  changes:
+  - at: -5m
+    value: 9.1
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: shipping
+  base: 0.3508
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: shipping
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: shipping
+  base: 0.4298
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: shipping
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 151
+  noise: 7.55
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.08791
+  noise: 0.007033
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3095
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.4732
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 2
+- name: upstream_latency_p99_seconds
+  labels:
+    service: shipping
+    peer: shipping-api
+  base: 0.45
+  noise: 0.04
+  changes:
+  - at: -330s
+    value: 8.6
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: shipping
+    node: node-4
+  base: 0.3775
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: shipping
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: shipping
+    peer: shipping-api
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1316
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 10
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 13
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: info
+  per_minute: 14
+  lines:
+  - POST /rates 200 {ms}ms request_id={rid}
+  - POST /labels 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 11
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: warn
+  per_minute: 24
+  from: -5m
+  lines:
+  - 'carrier shipping-api slow: POST /v1/rates answered in 8640ms request_id={rid}'
+  - 'carrier shipping-api slow: POST /v1/labels answered in 9120ms request_id={rid}'
+- labels:
+    service: orders
+    level: error
+  per_minute: 6
+  from: -45m
+  to: -38m
+  lines:
+  - 'order export job failed: S3 PutObject throttled, retrying'
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -119m
+  to: -118m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v1.6.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 20
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v6.9.0'
+- labels:
+    service: orders
+    level: info
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - 'config reloaded from config-service: orders.export.compression=zstd (was gzip), changed by ops-bot'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: dependency_failure
+  service: shipping-api
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: upstream_latency_p99_seconds{peer="shipping-api", service="shipping"}
+    pattern: upstream_latency_p99_seconds\{peer="shipping-api", service="shipping"\}
+  - tool: query_logs
+    args:
+      query: '{service="shipping", level="warn"}'
+    pattern: carrier shipping-api slow
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: scale_service
+    target: shipping
+  - kind: restart_service
+    target: shipping
+  - kind: rollback_deploy
+    target: accounts
+  - kind: rollback_deploy
+    target: checkout
+  red_herrings:
+  - orders' error ratio rose 45 to 38 minutes before the alert, from a failed export job
+  - accounts v1.6.0 shipped 119 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'analytics beacon rejected' errors all window long, before and after
+  - checkout v6.9.0 shipped 2 minutes before the alert, after its latency had already risen with shipping's
+  - orders's config key orders.export.compression changed 6 minutes before the alert, and none of its
+    metrics moved after it

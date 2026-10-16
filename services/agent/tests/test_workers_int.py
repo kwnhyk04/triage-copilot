@@ -8,32 +8,37 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import Connection, Engine, create_engine, delete, insert, select, text
+from sqlalchemy import Connection, Engine, create_engine, delete, func, insert, select, text, update
 from types_boto3_sqs import SQSClient
 
 from agent.api import add_internal_api
 from agent.consumer import Consumer
-from agent.db import AiUsage, DeadLetter, Investigation, ToolCall
+from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ToolCall
 from agent.dlq import replay_dead_letters, replay_dlq
 from agent.job import MAX_TOOL_CALLS, UTC_TODAY, Job, Outcome, Request
+from agent.llm import Binding, Limiter, Router
 from agent.model import (
     HypothesisDraft,
     Model,
     ModelTurn,
+    QuotaExhausted,
     Report,
     ReportDraft,
     ScriptedModel,
     ToolRequest,
     TurnRequest,
+    is_model_turn,
 )
+from agent.providers import Provider
+from agent.settings import Role
 from agent.steps import StepRecordedV2, TokenUsage, record_step, replay
 from agent.tools import Tool, ToolContext
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
@@ -594,3 +599,91 @@ def test_state_reports_parked_investigations_and_when_they_can_run(engine: Engin
     with engine.begin() as conn:
         conn.execute(delete(AiUsage))
     assert state(api, over.investigation_id)["resumable"] is True
+
+
+class SpentAfter:
+    """The day's quota runs out once `turns` model turns are recorded, the first time only."""
+
+    def __init__(self, model: Model, turns: int) -> None:
+        self.model = model
+        self.turns = turns
+        self.spent = False
+
+    async def turn(self, request: TurnRequest) -> ModelTurn:
+        if not self.spent and sum(map(is_model_turn, request.steps)) == self.turns:
+            self.spent = True
+            raise QuotaExhausted("all requests for today are spent")
+        return await self.model.turn(request)
+
+    def available(self, conn: Connection) -> bool:
+        return True
+
+
+def test_a_run_resumed_after_a_quota_park_keeps_the_time_it_had_left(engine: Engine) -> None:
+    tools = Tools()
+    request = new_request()
+    inv = request.investigation_id
+    job = make_job(engine, tools.all(), SpentAfter(ScriptedModel(SCRIPT), 1))
+    assert asyncio.run(job.run(request, asyncio.Event())) == "parked"
+    # It ran for a minute, then waited nine for the quota: more than MAX_SECONDS in all.
+    with engine.begin() as conn:
+        conn.execute(
+            update(Investigation)
+            .where(Investigation.id == inv)
+            .values(
+                started_at=func.now() - timedelta(minutes=10),
+                waiting_since=func.now() - timedelta(minutes=9),
+            )
+        )
+    assert asyncio.run(job.run(request, asyncio.Event())) == "done"
+    with engine.connect() as conn:
+        report, ran = conn.execute(
+            select(Investigation.final_report, func.now() - Investigation.started_at).where(
+                Investigation.id == inv
+            )
+        ).one()
+    assert Report.model_validate(report).partial is False
+    assert tools.calls == list(TOOLS)
+    assert timedelta(minutes=1) <= ran < timedelta(minutes=2)
+
+
+def test_a_day_the_provider_called_spent_holds_parked_work_until_midnight_pacific(
+    engine: Engine,
+) -> None:
+    """Google's "daily quota spent" ends the quota day whatever RPD allows: a parked
+    investigation, resumed or new, is not resumable until midnight Pacific, so the sweeper
+    leaves it alone and an eval sees a quota stop instead of a re-send every sweep."""
+    unused = cast("Provider", object())
+    router = Router(
+        Binding(Role("primary", "gemini", "m", None, rpm=0, rpd=260), unused),
+        None,
+        Binding(Role("small", "gemini", "s", None, rpm=0, rpd=0), unused),
+        fallback_on_rate_limit=False,
+        limiter=Limiter(None),
+    )
+    job = make_job(engine, Tools().all(), router)
+    inv = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(insert(Investigation).values(id=inv))
+        conn.execute(
+            insert(ModelCall).values(
+                investigation_id=inv,
+                role="primary",
+                provider="gemini",
+                model="m",
+                outcome="quota_exhausted",
+                input_tokens=0,
+                output_tokens=0,
+                cached_tokens=0,
+                thought_tokens=0,
+                latency_ms=400,
+                error="QuotaExhausted: gemini 429: daily quota spent",
+            )
+        )
+    with engine.connect() as conn:
+        assert not job.resumable(conn, inv, "budget", TENANT, new=False)
+        assert not job.resumable(conn, inv, "budget", TENANT, new=True)
+    with engine.begin() as conn:
+        conn.execute(update(ModelCall).values(created_at=func.now() - timedelta(days=1)))
+    with engine.connect() as conn:
+        assert job.resumable(conn, inv, "budget", TENANT, new=False)

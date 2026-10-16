@@ -1,0 +1,374 @@
+id: memory-leak-4
+title: notifications keeps closed sessions
+seed: 9953
+alert:
+  labels:
+    alertname: NotificationsHighErrorRate
+    service: notifications
+    severity: critical
+  annotations:
+    summary: notifications 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="notifications"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: notifications
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - notifications
+  orders:
+    depends_on:
+    - notifications
+  notifications:
+    depends_on:
+    - events-broker
+    - coredns
+  events-broker: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v4.9.0
+  previous_version: v4.8.3
+  at: -116m
+  author: dev.kim
+  change: Translate the settings page
+- service: orders
+  version: v4.3.0
+  previous_version: v4.2.5
+  at: -3m
+  author: sam.okafor
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 146
+  noise: 7.3
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2058
+  noise: 0.01647
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3674
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4407
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 46
+  noise: 2.3
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.3034
+  noise: 0.02428
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.3442
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.4534
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 267
+  noise: 13.35
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.11
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.15
+  noise: 0.012
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.2517
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.4016
+  noise: 0.02
+  changes:
+  - at: -150m
+    value: 0.97
+    ramp: 141m
+  - at: -8m
+    value: 0.55
+  - at: -450s
+    value: 0.97
+    ramp: 90s
+  - at: -5m
+    value: 0.55
+  - at: -270s
+    value: 0.97
+    ramp: 90s
+  - at: -2m
+    value: 0.55
+  - at: -90s
+    value: 0.97
+    ramp: 90s
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 0
+  changes:
+  - at: -8m
+    value: 1
+  - at: -5m
+    value: 2
+  - at: -2m
+    value: 3
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 147
+  noise: 7.35
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.2921
+  noise: 0.02337
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.533
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5507
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 2
+- name: node_cpu_usage_ratio
+  labels:
+    service: notifications
+    node: node-7
+  base: 0.5458
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: notifications
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: notifications
+    peer: events-broker
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1632
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-2
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 10
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 14
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 12
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 9
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: warn
+  per_minute: 4
+  from: -20m
+  to: -8m
+  lines:
+  - 'websocket sessions in memory: 48213 (connected clients: 3120); heap 1.8GB of 2GB'
+  asserts:
+  - metric: memory_usage_ratio
+    labels:
+      service: notifications
+    op: '>='
+    value: 0.85
+- labels:
+    service: notifications
+    level: error
+  per_minute: 1
+  from: -8m
+  to: -7m
+  lines:
+  - container notifications-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: notifications
+    level: error
+  per_minute: 1
+  from: -5m
+  to: -4m
+  lines:
+  - container notifications-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: notifications
+    level: error
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - container notifications-{rid} OOMKilled (exit code 137), memory limit 2Gi; restarting
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -116m
+  to: -115m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v4.9.0'
+- labels:
+    service: orders
+    level: error
+  per_minute: 35
+  lines:
+  - 'analytics beacon rejected: 413 Payload Too Large (batch={n})'
+- labels:
+    service: orders
+    level: info
+  per_minute: 2
+  from: -3m
+  to: -2m
+  lines:
+  - 'Rolling update: pod orders-{rid} started version=v4.3.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-2
+labels:
+  root_cause_class: resource_exhaustion
+  service: notifications
+  alternatives: []
+  onset: -150m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: memory_usage_ratio{service="notifications"}
+    pattern: memory_usage_ratio\{service="notifications"\}
+  - tool: query_logs
+    args:
+      query: '{service="notifications", level="error"}'
+    pattern: OOMKilled
+  acceptable_actions:
+  - kind: restart_service
+    target: notifications
+  - kind: scale_service
+    target: notifications
+  forbidden_actions:
+  - kind: restart_service
+    target: events-broker
+  - kind: rollback_deploy
+    target: accounts
+  - kind: rollback_deploy
+    target: orders
+  red_herrings:
+  - accounts v4.9.0 shipped 116 minutes before the alert, and none of its metrics moved after it
+  - orders logs 'analytics beacon rejected' errors all window long, before and after
+  - orders v4.3.0 shipped 3 minutes before the alert, and none of its metrics moved after it

@@ -1,0 +1,401 @@
+id: bad-deploy-5
+title: cart v4.6.0 calls a Redis command too new
+seed: 90228
+alert:
+  labels:
+    alertname: CartHighErrorRate
+    service: cart
+    severity: critical
+  annotations:
+    summary: cart 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="cart"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: cart
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - cart
+    - catalog
+  checkout:
+    depends_on:
+    - cart
+  cart:
+    depends_on:
+    - redis-cart
+    - catalog
+    - coredns
+  redis-cart: {}
+  catalog: {}
+  search: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: cart
+  version: v4.6.0
+  previous_version: v4.5.2
+  at: -270s
+  author: renovate-bot
+  change: Refresh cart TTLs on read with GETEX (#1290)
+- service: search
+  version: v1.8.0
+  previous_version: v1.7.8
+  at: -128m
+  author: sam.okafor
+  change: Tune log sampling
+- service: checkout
+  version: v5.6.0
+  previous_version: v5.5.0
+  at: -2m
+  author: maria.g
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 269
+  noise: 13.45
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.05
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2625
+  noise: 0.021
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4726
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.541
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 142
+  noise: 7.1
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.09
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2286
+  noise: 0.01828
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3046
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3725
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 164
+  noise: 8.2
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.32
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.1848
+  noise: 0.01478
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.2553
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.3879
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 169
+  noise: 8.45
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.1957
+  noise: 0.01565
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4644
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4774
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 229
+  noise: 11.45
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.09985
+  noise: 0.007988
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.3574
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.3613
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 1
+- name: memory_usage_ratio
+  labels:
+    service: redis-cart
+  base: 0.81
+  noise: 0.01
+- name: cpu_usage_ratio
+  labels:
+    service: redis-cart
+  base: 0.22
+  noise: 0.02
+- name: node_cpu_usage_ratio
+  labels:
+    service: cart
+    node: node-9
+  base: 0.4407
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: cart
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: cart
+    peer: redis-cart
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1753
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-5
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 13
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 14
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 10
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 14
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 10
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -270s
+  to: -210s
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v4.6.0'
+- labels:
+    service: cart
+    level: error
+  per_minute: 50
+  from: -4m
+  lines:
+  - 'redis error: ERR unknown command ''GETEX'', with args beginning with: ''cart:{rid}'' version=v4.6.0'
+  - GET /cart/{n} 500 {ms}ms version=v4.6.0 request_id={rid}
+- labels:
+    service: redis-cart
+    level: info
+  per_minute: 2
+  lines:
+  - Redis 6.0.16 used_memory_human:6.4G maxmemory:8G
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -128m
+  to: -127m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v1.8.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 36
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v5.6.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-5
+labels:
+  root_cause_class: bad_deploy
+  service: cart
+  alternatives: []
+  onset: -270s
+  required_signals:
+  - tool: list_deploys
+    args:
+      service: cart
+    pattern: cart v4\.5\.2 -> v4\.6\.0
+  - tool: query_logs
+    args:
+      query: '{service="cart", level="error"}'
+    pattern: unknown command 'GETEX'
+  acceptable_actions:
+  - kind: rollback_deploy
+    target: cart
+    parameters:
+      to_version: v4.5.2
+  forbidden_actions:
+  - kind: restart_service
+    target: redis-cart
+  - kind: rollback_deploy
+    target: search
+  - kind: rollback_deploy
+    target: checkout
+  red_herrings:
+  - redis-cart's memory sits at 81% all window long and never moved
+  - search v1.8.0 shipped 128 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after
+  - checkout v5.6.0 shipped 2 minutes before the alert, after its error ratio had already risen with cart's

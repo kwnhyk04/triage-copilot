@@ -1,0 +1,374 @@
+id: expired-cert-2
+title: inventory's mesh certificate expires
+seed: 17318
+alert:
+  labels:
+    alertname: OrdersHighErrorRate
+    service: orders
+    severity: critical
+  annotations:
+    summary: orders 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="orders"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: orders
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - orders
+  orders:
+    depends_on:
+    - inventory
+    - orders-db
+    - coredns
+  inventory:
+    depends_on:
+    - inventory-db
+  orders-db: {}
+  inventory-db: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: accounts
+  version: v2.14.0
+  previous_version: v2.13.3
+  at: -2h
+  author: renovate-bot
+  change: Add a metrics label to the request histogram
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 264
+  noise: 13.2
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2126
+  noise: 0.01701
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3941
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.421
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 268
+  noise: 13.4
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.27
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.3443
+  noise: 0.02755
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.3345
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.5685
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: inventory
+  base: 248
+  noise: 12.4
+- name: http_error_ratio
+  labels:
+    service: inventory
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: inventory
+  base: 0.101
+  noise: 0.008079
+- name: cpu_usage_ratio
+  labels:
+    service: inventory
+  base: 0.3031
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: inventory
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: inventory
+  base: 0.5996
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: inventory
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 260
+  noise: 13
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.2004
+  noise: 0.01603
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.5428
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3949
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 0
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 60
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: orders-db
+  base: 0.3715
+  noise: 0.03
+- name: db_connections
+  labels:
+    service: inventory-db
+  base: 48
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: inventory-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: inventory-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: inventory-db
+  base: 0.3499
+  noise: 0.03
+- name: tls_cert_days_remaining
+  labels:
+    service: inventory
+  base: 0.2472
+  changes:
+  - at: -6h
+    value: 0
+    ramp: 356m
+- name: tls_handshake_errors_per_second
+  labels:
+    service: orders
+    peer: inventory
+  base: 0
+  changes:
+  - at: -4m
+    value: 30
+    ramp: 30s
+- name: node_cpu_usage_ratio
+  labels:
+    service: orders
+    node: node-1
+  base: 0.5447
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: orders
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1866
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 13
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 10
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: inventory
+    level: info
+  per_minute: 14
+  lines:
+  - GET /stock/{n} 200 {ms}ms request_id={rid}
+  - POST /reservations 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 12
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: inventory-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: orders
+    level: error
+  per_minute: 36
+  from: -4m
+  lines:
+  - 'reserve stock: rpc error: code = Unavailable desc = tls: failed to verify certificate for inventory.internal:
+    x509: certificate has expired'
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -2h
+  to: -119m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v2.14.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 33
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: orders
+    level: info
+  per_minute: 1
+  from: -2m
+  to: -1m
+  lines:
+  - 'config reloaded from config-service: orders.invoice_template=v7 (was v6), changed by ops-bot'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: certificate_expiry
+  service: inventory
+  alternatives: []
+  onset: -4m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: tls_handshake_errors_per_second{peer="inventory", service="orders"}
+    pattern: tls_handshake_errors_per_second\{peer="inventory", service="orders"\}
+  - tool: query_logs
+    args:
+      query: '{service="orders", level="error"}'
+    pattern: certificate has expired
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: inventory-db
+  - kind: rollback_deploy
+    target: orders
+  - kind: rollback_deploy
+    target: accounts
+  red_herrings:
+  - accounts v2.14.0 shipped 120 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'email template promo-weekly has no translation for locale pt-BR' errors all window
+    long, before and after
+  - orders's config key orders.invoice_template changed 2 minutes before the alert, after its errors had
+    begun

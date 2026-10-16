@@ -1,0 +1,317 @@
+id: dns-partition-1
+title: coredns answers SERVFAIL
+seed: 86059
+alert:
+  labels:
+    alertname: PaymentsHighErrorRate
+    service: payments
+    severity: critical
+  annotations:
+    summary: payments 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="payments"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: payments
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  checkout:
+    depends_on:
+    - payments
+  payments:
+    depends_on:
+    - card-network
+    - coredns
+  shipping:
+    depends_on:
+    - shipping-api
+    - coredns
+  card-network: {}
+  shipping-api: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: checkout
+  version: v4.9.0
+  previous_version: v4.8.8
+  at: -113m
+  author: ci-bot
+  change: Update header copy and footer links
+- service: payments
+  version: v6.16.0
+  previous_version: v6.15.0
+  at: -2m
+  author: sam.okafor
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 243
+  noise: 12.15
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.3157
+  noise: 0.02525
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5347
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4553
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 260
+  noise: 13
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.31
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.3373
+  noise: 0.02698
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.5347
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.445
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: shipping
+  base: 93
+  noise: 4.65
+- name: http_error_ratio
+  labels:
+    service: shipping
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -210s
+    value: 0.09
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: shipping
+  base: 0.1964
+  noise: 0.01571
+- name: cpu_usage_ratio
+  labels:
+    service: shipping
+  base: 0.4626
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: shipping
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: shipping
+  base: 0.3992
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: shipping
+  base: 0
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+  changes:
+  - at: -330s
+    value: 0.71
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2
+  noise: 0.02
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -5m
+    value: 31
+    ramp: 1m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: shipping
+  base: 0
+  noise: 0.1
+  changes:
+  - at: -5m
+    value: 12
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-1
+  base: 0.3869
+  noise: 0.03
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 8
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 11
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: shipping
+    level: info
+  per_minute: 9
+  lines:
+  - POST /rates 200 {ms}ms request_id={rid}
+  - POST /labels 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: error
+  per_minute: 36
+  from: -4m
+  lines:
+  - 'dial tcp: lookup api.card-network.example on 10.96.0.10:53: server misbehaving request_id={rid}'
+- labels:
+    service: coredns
+    level: error
+  per_minute: 20
+  from: -330s
+  lines:
+  - '[ERROR] plugin/errors: 2 api.card-network.example. A: read udp 10.4.0.12:{n}->169.254.169.253:53:
+    i/o timeout'
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -113m
+  to: -112m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v4.9.0'
+- labels:
+    service: shipping
+    level: error
+  per_minute: 31
+  lines:
+  - 'session store: key over 250 bytes, not cached ({user})'
+- labels:
+    service: payments
+    level: info
+  per_minute: 2
+  from: -2m
+  to: -1m
+  lines:
+  - 'Rolling update: pod payments-{rid} started version=v6.16.0'
+- labels:
+    service: checkout
+    level: info
+  per_minute: 1
+  from: -6m
+  to: -5m
+  lines:
+  - 'feature flag one-click-checkout changed: rollout 10% -> 25% (by maria.g)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: infrastructure
+  service: coredns
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: dns_servfail_ratio{service="coredns"}
+    pattern: dns_servfail_ratio\{service="coredns"\}
+  - tool: query_logs
+    args:
+      query: '{service="payments", level="error"}'
+    pattern: server misbehaving
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: payments
+  - kind: scale_service
+    target: payments
+  - kind: restart_service
+    target: coredns
+  - kind: rollback_deploy
+    target: checkout
+  - kind: disable_feature_flag
+    target: checkout
+    parameters:
+      flag: one-click-checkout
+  red_herrings:
+  - shipping fails too, at the same moment, for the same kind of lookup
+  - checkout v4.9.0 shipped 113 minutes before the alert, and none of its metrics moved after it
+  - shipping logs 'session store' errors all window long, before and after
+  - payments v6.16.0 shipped 2 minutes before the alert, after its lookups had begun to fail
+  - checkout's flag one-click-checkout changed 6 minutes before the alert, and none of its metrics moved
+    after it

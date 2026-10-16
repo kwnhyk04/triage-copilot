@@ -1,0 +1,307 @@
+id: noisy-neighbor-3
+title: log-compactor starves orders
+seed: 37866
+alert:
+  labels:
+    alertname: OrdersHighLatency
+    service: orders
+    severity: warning
+  annotations:
+    summary: orders p99 latency above 1.5 s for 3 minutes
+    description: http_latency_p99_seconds{service="orders"} > 1.5 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: orders
+    op: '>'
+    threshold: 1.5
+    for: 3m
+services:
+  checkout:
+    depends_on:
+    - orders
+  orders:
+    depends_on:
+    - orders-db
+    - coredns
+  orders-db: {}
+  log-compactor: {}
+  notifications: {}
+  coredns: {}
+deploys:
+- service: notifications
+  version: v1.12.0
+  previous_version: v1.11.0
+  at: -122m
+  author: ana.lopez
+  change: Tune log sampling
+- service: checkout
+  version: v3.17.0
+  previous_version: v3.16.1
+  at: -4m
+  author: ci-bot
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 105
+  noise: 5.25
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2442
+  noise: 0.01954
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.3373
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4503
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: orders
+  base: 126
+  noise: 6.3
+- name: http_error_ratio
+  labels:
+    service: orders
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: orders
+  base: 0.2
+  noise: 0.016
+  changes:
+  - at: -5m
+    value: 3.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: orders
+  base: 0.4053
+  noise: 0.03
+  changes:
+  - at: -5m
+    value: 0.15
+    ramp: 1m
+- name: cpu_throttled_ratio
+  labels:
+    service: orders
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: orders
+  base: 0.5976
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: orders
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 211
+  noise: 10.55
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.2143
+  noise: 0.01714
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.3955
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.5756
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 0
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 40
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: orders-db
+  base: 0.3845
+  noise: 0.03
+- name: cpu_usage_ratio
+  labels:
+    service: log-compactor
+    node: node-5
+  base: 0
+  noise: 0.01
+  changes:
+  - at: -10m
+    value: 0.96
+    ramp: 5m
+- name: node_cpu_usage_ratio
+  labels:
+    service: orders
+    node: node-5
+  base: 0.46
+  noise: 0.03
+  changes:
+  - at: -10m
+    value: 0.99
+    ramp: 5m
+- name: dns_lookup_errors_per_second
+  labels:
+    service: orders
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: orders
+    peer: orders-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1559
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+logs:
+- labels:
+    service: checkout
+    level: info
+  per_minute: 10
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: orders
+    level: info
+  per_minute: 11
+  lines:
+  - POST /orders 200 {ms}ms request_id={rid}
+  - GET /orders/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: notifications
+    level: info
+  per_minute: 14
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: log-compactor
+    level: info
+  per_minute: 2
+  from: -10m
+  lines:
+  - compacting segment 0041 on node-5 (zstd level 19)
+  - compacting segment 0042 on node-5 (zstd level 19)
+  - compacting segment 0043 on node-5 (zstd level 19)
+- labels:
+    service: notifications
+    level: info
+  per_minute: 2
+  from: -122m
+  to: -121m
+  lines:
+  - 'Rolling update: pod notifications-{rid} started version=v1.12.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 23
+  lines:
+  - 'failed to export spans: exporter queue full, dropped {n} spans'
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -4m
+  to: -3m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v3.17.0'
+labels:
+  root_cause_class: infrastructure
+  service: log-compactor
+  alternatives: []
+  onset: -10m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{node="node-5", service="log-compactor"}
+    pattern: cpu_usage_ratio\{node="node-5", service="log-compactor"\}
+  - tool: query_logs
+    args:
+      query: '{service="log-compactor"}'
+    pattern: on node-5
+  acceptable_actions:
+  - kind: scale_service
+    target: orders
+  - kind: scale_service
+    target: log-compactor
+    parameters:
+      replicas: '0'
+  forbidden_actions:
+  - kind: restart_service
+    target: orders-db
+  - kind: rollback_deploy
+    target: notifications
+  - kind: rollback_deploy
+    target: checkout
+  red_herrings:
+  - notifications v1.12.0 shipped 122 minutes before the alert, and none of its metrics moved after it
+  - checkout logs 'failed to export spans' errors all window long, before and after
+  - checkout v3.17.0 shipped 4 minutes before the alert, and none of its metrics moved after it

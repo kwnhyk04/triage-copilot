@@ -1,0 +1,420 @@
+id: bad-deploy-3
+title: payments v3.0.0 serializes charges
+seed: 21857
+alert:
+  labels:
+    alertname: PaymentsHighLatency
+    service: payments
+    severity: warning
+  annotations:
+    summary: payments p99 latency above 1 s for 3 minutes
+    description: http_latency_p99_seconds{service="payments"} > 1 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: payments
+    op: '>'
+    threshold: 1.0
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - payments
+    - cart
+  payments:
+    depends_on:
+    - card-network
+    - payments-db
+    - coredns
+  card-network: {}
+  payments-db: {}
+  cart: {}
+  accounts: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: payments
+  version: v3.0.0
+  previous_version: v2.9.7
+  at: -8m
+  author: dev.kim
+  change: Idempotency cache with a global lock (#918)
+- service: accounts
+  version: v7.10.0
+  previous_version: v7.9.9
+  at: -125m
+  author: dev.kim
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 159
+  noise: 7.95
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.3363
+  noise: 0.0269
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5273
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.598
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 269
+  noise: 13.45
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.2297
+  noise: 0.01837
+  changes:
+  - at: -270s
+    value: 3.6
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.5433
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4159
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 181
+  noise: 9.05
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.3
+  noise: 0.024
+  changes:
+  - at: -5m
+    value: 3.1
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.4504
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.4182
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 193
+  noise: 9.65
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.1765
+  noise: 0.01412
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.4
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.5436
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: accounts
+  base: 77
+  noise: 3.85
+- name: http_error_ratio
+  labels:
+    service: accounts
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: accounts
+  base: 0.1512
+  noise: 0.0121
+- name: cpu_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3607
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: accounts
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: accounts
+  base: 0.3998
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: accounts
+  base: 3
+- name: db_connections
+  labels:
+    service: payments-db
+  base: 37
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: payments-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: payments-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: payments-db
+  base: 0.3153
+  noise: 0.03
+- name: db_pool_in_use
+  labels:
+    service: payments
+  base: 8
+  noise: 0.15
+- name: db_pool_max
+  labels:
+    service: payments
+  base: 30
+- name: upstream_latency_p99_seconds
+  labels:
+    service: payments
+    peer: card-network
+  base: 0.32
+  noise: 0.03
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-6
+  base: 0.4346
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1793
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 11
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 8
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 8
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 9
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: accounts
+    level: info
+  per_minute: 14
+  lines:
+  - POST /login 200 {ms}ms request_id={rid}
+  - GET /me 200 {ms}ms request_id={rid}
+  - POST /addresses 200 {ms}ms request_id={rid}
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: payments
+    level: info
+  per_minute: 2
+  from: -8m
+  to: -5m
+  lines:
+  - 'Rolling update: pod payments-{rid} started version=v3.0.0'
+- labels:
+    service: payments
+    level: warn
+  per_minute: 30
+  from: -5m
+  lines:
+  - 'slow request: POST /charge took 2412ms, 2280ms waiting for the idempotency lock version=v3.0.0'
+  - 'slow request: POST /charge took 3005ms, 2871ms waiting for the idempotency lock version=v3.0.0'
+- labels:
+    service: accounts
+    level: info
+  per_minute: 2
+  from: -125m
+  to: -124m
+  lines:
+  - 'Rolling update: pod accounts-{rid} started version=v7.10.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 24
+  lines:
+  - 'session store: key over 250 bytes, not cached ({user})'
+- labels:
+    service: payments
+    level: info
+  per_minute: 1
+  from: -3m
+  to: -2m
+  lines:
+  - 'feature flag payments-receipt-email changed: off -> on (by sam.okafor)'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: bad_deploy
+  service: payments
+  alternatives: []
+  onset: -8m
+  required_signals:
+  - tool: list_deploys
+    args:
+      service: payments
+    pattern: payments v2\.9\.7 -> v3\.0\.0
+  - tool: query_logs
+    args:
+      query: '{service="payments", level="warn"}'
+    pattern: waiting for the idempotency lock
+  acceptable_actions:
+  - kind: rollback_deploy
+    target: payments
+    parameters:
+      to_version: v2.9.7
+  forbidden_actions:
+  - kind: scale_service
+    target: payments-db
+  - kind: rollback_deploy
+    target: accounts
+  - kind: disable_feature_flag
+    target: payments
+    parameters:
+      flag: payments-receipt-email
+  red_herrings:
+  - card-network's latency as payments sees it stays flat, so the provider is not slow
+  - accounts v7.10.0 shipped 125 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'session store' errors all window long, before and after
+  - payments's flag payments-receipt-email changed 3 minutes before the alert, after its latency had already
+    risen

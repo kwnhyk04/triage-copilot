@@ -1,0 +1,396 @@
+id: db-pool-exhaustion-5
+title: an ad hoc query saturates catalog-db
+seed: 40190
+alert:
+  labels:
+    alertname: CatalogHighLatency
+    service: catalog
+    severity: warning
+  annotations:
+    summary: catalog p99 latency above 1.5 s for 3 minutes
+    description: http_latency_p99_seconds{service="catalog"} > 1.5 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: catalog
+    op: '>'
+    threshold: 1.5
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - catalog
+    - search
+  search:
+    depends_on:
+    - catalog
+  catalog:
+    depends_on:
+    - catalog-db
+    - coredns
+  catalog-db: {}
+  recommendations: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: recommendations
+  version: v4.13.0
+  previous_version: v4.12.6
+  at: -125m
+  author: dev.kim
+  change: Update header copy and footer links
+- service: search
+  version: v7.13.0
+  previous_version: v7.12.7
+  at: -4m
+  author: ci-bot
+  change: Update header copy and footer links
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 65
+  noise: 3.25
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.158
+  noise: 0.01264
+  changes:
+  - at: -270s
+    value: 3.9
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.2909
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3966
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 271
+  noise: 13.55
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.3176
+  noise: 0.02541
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.4885
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.5781
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 243
+  noise: 12.15
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.12
+  noise: 0.0096
+  changes:
+  - at: -5m
+    value: 3.4
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2564
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.5423
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: recommendations
+  base: 292
+  noise: 14.6
+- name: http_error_ratio
+  labels:
+    service: recommendations
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: recommendations
+  base: 0.1228
+  noise: 0.009824
+- name: cpu_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.5191
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: recommendations
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.4825
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: recommendations
+  base: 2
+- name: db_connections
+  labels:
+    service: catalog-db
+  base: 50
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: catalog-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: catalog-db
+  base: 0.1
+  noise: 0.05
+  changes:
+  - at: -11m
+    value: 22
+    ramp: 2m
+- name: cpu_usage_ratio
+  labels:
+    service: catalog-db
+  base: 0.2211
+  noise: 0.03
+  changes:
+  - at: -11m
+    value: 0.97
+    ramp: 1m
+- name: db_pool_in_use
+  labels:
+    service: catalog
+  base: 10
+  noise: 0.2
+  changes:
+  - at: -11m
+    value: 39.8
+    ramp: 5m
+- name: db_pool_max
+  labels:
+    service: catalog
+  base: 40
+- name: node_cpu_usage_ratio
+  labels:
+    service: catalog
+    node: node-7
+  base: 0.3892
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: catalog
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: catalog
+    peer: catalog-db
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2492
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-7
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 10
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 8
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 8
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: recommendations
+    level: info
+  per_minute: 13
+  lines:
+  - GET /recommendations/{n} 200 {ms}ms request_id={rid}
+  - GET /recommendations/trending 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: catalog-db
+    level: warn
+  per_minute: 2
+  from: -11m
+  lines:
+  - 'long-running query pid 30117 (user analyst, application psql) running for 9 min: SELECT p.*, count(*)
+    FROM products p JOIN product_views v USING (sku) GROUP BY p.sku'
+- labels:
+    service: catalog
+    level: warn
+  per_minute: 6
+  from: -6m
+  lines:
+  - connection pool catalog-db at 40/40 connections, {n} requests waiting
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: catalog
+    op: '>='
+    value: 39
+- labels:
+    service: catalog
+    level: error
+  per_minute: 30
+  from: -6m
+  lines:
+  - timeout acquiring connection from pool after 5000ms (pool=catalog-db, active=40, idle=0) request_id={rid}
+  - 'request failed: PoolTimeoutException request_id={rid}'
+  asserts:
+  - metric: db_pool_in_use
+    labels:
+      service: catalog
+    op: '>='
+    value: 39
+- labels:
+    service: recommendations
+    level: info
+  per_minute: 2
+  from: -125m
+  to: -124m
+  lines:
+  - 'Rolling update: pod recommendations-{rid} started version=v4.13.0'
+- labels:
+    service: search
+    level: error
+  per_minute: 33
+  lines:
+  - email template promo-weekly has no translation for locale pt-BR
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -4m
+  to: -3m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v7.13.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-7
+labels:
+  root_cause_class: database
+  service: catalog-db
+  alternatives: []
+  onset: -11m
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: cpu_usage_ratio{service="catalog-db"}
+    pattern: cpu_usage_ratio\{service="catalog-db"\}
+  - tool: query_logs
+    args:
+      query: '{service="catalog-db", level="warn"}'
+    pattern: pid 30117
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: catalog-db
+  - kind: scale_service
+    target: catalog
+  - kind: rollback_deploy
+    target: recommendations
+  - kind: rollback_deploy
+    target: search
+  red_herrings:
+  - recommendations v4.13.0 shipped 125 minutes before the alert, and none of its metrics moved after
+    it
+  - search logs 'email template promo-weekly has no translation for locale pt-BR' errors all window long,
+    before and after
+  - search v7.13.0 shipped 4 minutes before the alert, and none of its metrics moved after it

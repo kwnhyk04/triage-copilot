@@ -63,7 +63,9 @@ class Settings(EnvSettings):
     llm_primary_model: str = "gemini-3.5-flash-lite"
     llm_primary_base_url: str | None = None
     llm_primary_rpm: Annotated[int, Field(ge=0)] = 10
-    llm_primary_rpd: Annotated[int, Field(ge=0)] = 500
+    # Google answered "daily quota spent" after 275 requests on 2026-10-16 (measured, not a
+    # documented limit); stop a little short, so the agent parks before a 429.
+    llm_primary_rpd: Annotated[int, Field(ge=0)] = 260
     llm_fallback_provider: Provider = "nvidia"
     llm_fallback_model: str = "deepseek-ai/deepseek-v4.1-flash"
     llm_fallback_base_url: str | None = None

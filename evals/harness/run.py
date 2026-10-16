@@ -1,61 +1,103 @@
-"""Runs scenarios against the running stack (gateway, agent, sim) and keeps each run's result.
+"""Runs one scenario through the real path and collects what scoring reads.
 
-    uv run python evals/harness/run.py bad-deploy [--run 1]
+    uv run python evals/harness/run.py bad-deploy-1 [--run 1]     (make smoke)
 
-Each run gets its own tenant, so repeated runs of a scenario never join an earlier run's alert
-group. Results go to evals/reports/runs/<scenario>-run<n>.json, and a finished run is skipped
-next time. A run that parks because the day's model quota is spent stops with exit code 3; run
-the same command after the quota resets (midnight Pacific) and it resumes that investigation:
-the sim gets the run's anchor and seed again, so the data is the same.
+The real path: the sim's admin port activates the scenario, its alert goes to the gateway's
+webhook as a new tenant, the gateway queues the investigation, the agent runs it, and the report
+comes back to the gateway's mirror tables, whose copy scoring reads. Each run gets its own tenant
+with an opaque name, so repeated runs never join an earlier run's alert group and nothing the
+agent can see names the scenario. eval.py drives whole splits with these functions; this script
+runs one scenario, keeping its result in evals/reports/runs/smoke/. A run that parks because the
+day's model quota is spent stops with exit code 2; the same command after the quota resets
+(midnight Pacific) resumes it with the run's anchor and seed, so the data is the same.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import httpx2
-from sqlalchemy import create_engine, text
+from sqlalchemy import Engine, create_engine, text
 
 from agent.runbooks import embedding_info
 from py_clients.clients import AgentClient, AlertsClient, ApiError, GatewayClient
 from py_clients.generated.gateway import AlertmanagerWebhook
 
 REPO = Path(__file__).resolve().parents[2]
-RUNS = REPO / "evals" / "reports" / "runs"
-QUOTA_STOP = 3
+SMOKE = REPO / "evals" / "reports" / "runs" / "smoke"
+QUOTA_STOP = 2
 FINISHED = ("resolved", "awaiting_approval")
-REPORT = text(
-    "SELECT status, final_report, budget_tokens_used FROM agent.investigations WHERE id = :id"
-)
-STEPS = text(
-    "SELECT seq, event FROM agent.investigation_steps WHERE investigation_id = :id ORDER BY seq"
-)
-CALLS = text("""
+Json = dict[str, Any]
+REPORT = text("""
+    SELECT r.status, r.report, r.recorded_at, r.created_at, g.created_at AS intake
+    FROM gateway.investigation_reports r
+    JOIN gateway.alert_groups g ON g.investigation_id = r.investigation_id
+    WHERE r.investigation_id = :id
+""")
+STEPS = text("""
+    SELECT seq, kind, summary, tool_name, tool_call_id, result, tool_status, tokens_input,
+           tokens_output, recorded_at
+    FROM gateway.investigation_steps WHERE investigation_id = :id ORDER BY seq
+""")
+# Approvals and executions of the run's proposals: nothing approves them, so both stay 0.
+DECISIONS = text("""
+    SELECT (SELECT count(*) FROM gateway.approvals a
+              JOIN gateway.proposed_actions p ON p.id = a.action_id
+             WHERE p.investigation_id = :id),
+           (SELECT count(*) FROM gateway.executions e
+              JOIN gateway.proposed_actions p ON p.id = e.action_id
+             WHERE p.investigation_id = :id)
+""")
+INVESTIGATION = text("SELECT status, budget_tokens_used FROM agent.investigations WHERE id = :id")
+TOOL_CALLS = text("""
+    SELECT id, name, args, error FROM agent.tool_calls
+    WHERE investigation_id = :id ORDER BY created_at, id
+""")
+MODEL_CALLS = text("""
     SELECT role, provider, model, outcome, input_tokens, output_tokens, cached_tokens,
-           thought_tokens, input_bound, max_output_tokens, latency_ms, error
+           thought_tokens, input_bound, max_output_tokens, latency_ms, error, prompt_sha
     FROM agent.model_calls WHERE investigation_id = :id ORDER BY id
 """)
-MIRRORED = text(
-    "SELECT status, recorded_at FROM gateway.investigation_reports WHERE investigation_id = :id"
-)
-MIRRORED_STEPS = text(
-    "SELECT count(*) FROM gateway.investigation_steps WHERE investigation_id = :id"
-)
+
+
+class RunError(Exception):
+    """The run cannot go on: a service is down or answered wrongly, or the investigation failed."""
 
 
 def env(name: str, default: str | None = None) -> str:
     value = os.environ.get(name) or default
     if value is None:
-        sys.exit(f"run: {name} is required (make passes .env)")
+        raise RunError(f"{name} is required (make passes .env)")
     return value
+
+
+def engines() -> tuple[Engine, Engine]:
+    """The agent's and the gateway's databases, read-only use."""
+    gateway = env("GATEWAY_DATABASE_URL").replace("postgres://", "postgresql+psycopg://", 1)
+    return create_engine(env("AGENT_DATABASE_URL")), create_engine(gateway)
+
+
+def activate(scenario: str, seed: int | None = None, anchor: str | None = None) -> Json:
+    """Makes the sim serve the scenario, on its admin port, which only the harness knows."""
+    admin = env("SIM_ADMIN_URL", "http://127.0.0.1:4231")
+    body = {k: v for k, v in (("seed", seed), ("anchor", anchor)) if v is not None}
+    try:
+        response = httpx2.post(
+            f"{admin}/admin/scenarios/{scenario}/activate", json=body, timeout=10
+        )
+    except httpx2.HTTPError as error:
+        raise RunError(f"the sim's admin port at {admin} is unreachable: {error}") from None
+    if response.status_code != 200:
+        raise RunError(f"activating {scenario} answered {response.status_code}: {response.text}")
+    return response.json()
 
 
 def tenant_token(name: str) -> str:
@@ -68,16 +110,13 @@ def tenant_token(name: str) -> str:
     return out.stdout.strip().splitlines()[-1]
 
 
-def start(scenario: str, state_file: Path) -> dict[str, Any]:
+def start(scenario: str) -> Json:
     """Activates the scenario, posts its alert as a new tenant, and finds the investigation."""
-    sim = env("SIM_URL", "http://127.0.0.1:4230")
-    activation = httpx2.post(f"{sim}/admin/scenarios/{scenario}/activate", json={}, timeout=10)
-    activation.raise_for_status()
-    body = activation.json()
-    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    token = tenant_token(f"eval-{scenario}-{stamp}")
+    body = activate(scenario)
+    stamp = f"{scenario}|{time.time_ns()}|{os.getpid()}"
+    tenant = "eval-" + hashlib.sha256(stamp.encode()).hexdigest()[:12]
     gateway = env("GATEWAY_URL", "http://127.0.0.1:4200")
-    with AlertsClient(gateway, token) as alerts:
+    with AlertsClient(gateway, tenant_token(tenant)) as alerts:
         accepted = alerts.post(AlertmanagerWebhook.model_validate(body["alertmanager"]))
     group = str(accepted.group_id)
     with GatewayClient(gateway, env("GATEWAY_API_KEY")) as client:
@@ -88,29 +127,30 @@ def start(scenario: str, state_file: Path) -> dict[str, Any]:
             if found:
                 break
             if time.monotonic() > deadline:
-                sys.exit(f"run: no investigation for alert group {group}")
+                raise RunError(f"no investigation for alert group {group}")
             time.sleep(1)
-    state = {
+    return {
         "scenario": scenario,
+        "sha256": body["sha256"],
         "seed": body["seed"],
         "anchor": body["anchor"],
+        "down": body["down"],
+        "tenant": tenant,
         "group_id": group,
         "investigation_id": str(found[0].id),
+        "resumed": False,
     }
-    state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    return state
 
 
-def resume(state: dict[str, Any]) -> None:
-    """Serves the run's data again: same scenario, anchor and seed."""
-    sim = env("SIM_URL", "http://127.0.0.1:4230")
-    body = {"seed": state["seed"], "anchor": state["anchor"]}
-    url = f"{sim}/admin/scenarios/{state['scenario']}/activate"
-    httpx2.post(url, json=body, timeout=10).raise_for_status()
+def resume(state: Json) -> None:
+    """Serves the run's world again, same scenario, anchor and seed, before the agent resumes."""
+    body = activate(state["scenario"], state["seed"], state["anchor"])
+    if body["sha256"] != state["sha256"]:
+        raise RunError(f"{state['scenario']} changed since its run started; it cannot resume")
 
 
 def wait(investigation: UUID, within: float) -> str:
-    """The investigation's final status, or "quota" when it waits for tomorrow's quota."""
+    """The investigation's final status, or "quota" while it waits for tomorrow's quota."""
     agent = AgentClient(env("AGENT_URL", "http://127.0.0.1:4210"), env("AGENT_SERVICE_TOKEN"))
     deadline = time.monotonic() + within
     with agent:
@@ -125,55 +165,76 @@ def wait(investigation: UUID, within: float) -> str:
                 continue
             if state.status in FINISHED:
                 return str(state.status)
+            if state.status == "failed":
+                raise RunError(f"investigation {investigation} failed; make dlq-replay resumes it")
             if state.waiting_for == "budget" and not state.resumable:
                 return "quota"
             time.sleep(2)
-    sys.exit(f"run: investigation {investigation} did not finish within {within:.0f} s")
+    raise RunError(f"investigation {investigation} did not finish within {within:.0f} s")
 
 
-def collect(state: dict[str, Any]) -> dict[str, Any]:
-    """The report, each tool call and model turn (agent), and the gateway's mirror rows."""
+def mirrored(investigation: str, within: float = 120) -> None:
+    """Waits for the report to reach the gateway's mirror, behind its steps."""
+    _, gateway_db = engines()
+    deadline = time.monotonic() + within
+    try:
+        while time.monotonic() < deadline:
+            with gateway_db.connect() as conn:
+                if conn.execute(REPORT, {"id": investigation}).one_or_none():
+                    return
+            time.sleep(1)
+    finally:
+        gateway_db.dispose()
+    raise RunError(f"the report of {investigation} did not reach the gateway in {within:.0f} s")
+
+
+def collect(state: Json) -> Json:
+    """The gateway's copy of the report and steps, and the agent's tool and model calls."""
     inv = {"id": state["investigation_id"]}
-    agent_db = create_engine(env("AGENT_DATABASE_URL"))
-    gateway_url = env("GATEWAY_DATABASE_URL").replace("postgres://", "postgresql+psycopg://", 1)
-    gateway_db = create_engine(gateway_url)
+    agent_db, gateway_db = engines()
     with agent_db.connect() as conn:
-        report = conn.execute(REPORT, inv).one()
-        steps = conn.execute(STEPS, inv).all()
-        calls = conn.execute(CALLS, inv).mappings().all()
+        investigation = conn.execute(INVESTIGATION, inv).one()
+        tool_calls = [dict(c) for c in conn.execute(TOOL_CALLS, inv).mappings()]
+        model_calls = [dict(c) for c in conn.execute(MODEL_CALLS, inv).mappings()]
     with gateway_db.connect() as conn:
-        mirrored = conn.execute(MIRRORED, inv).one_or_none()
-        mirrored_steps = conn.scalar(MIRRORED_STEPS, inv)
+        report = conn.execute(REPORT, inv).one()
+        steps = [dict(s) for s in conn.execute(STEPS, inv).mappings()]
+        approvals, executions = conn.execute(DECISIONS, inv).one()
     agent_db.dispose()
     gateway_db.dispose()
     cache = os.environ.get("FASTEMBED_CACHE_PATH")
     return {
         **state,
-        "status": report.status,
-        "tokens": report.budget_tokens_used,
-        "report": report.final_report,
-        "steps": [{"seq": seq, **event} for seq, event in steps],
-        "model_calls": [dict(c) for c in calls],
-        "models": sorted({f"{c['role']}={c['model']}" for c in calls}),
+        "status": investigation.status,
+        "tokens": investigation.budget_tokens_used,
+        "report_status": report.status,
+        "report": report.report,
+        # Both on the database's clock: the alert group's intake and the report step.
+        "seconds": (report.recorded_at - report.intake).total_seconds(),
+        "delivered_after_seconds": (report.created_at - report.recorded_at).total_seconds(),
+        "steps": steps,
+        "tool_calls": tool_calls,
+        "model_calls": model_calls,
+        "models": sorted({f"{c['role']}={c['model']}" for c in model_calls}),
+        "approvals": approvals,
+        "executions": executions,
         "embedding": embedding_info(Path(cache) if cache else None),
-        "gateway": {
-            "report_status": mirrored.status if mirrored else None,
-            "report_recorded_at": str(mirrored.recorded_at) if mirrored else None,
-            "steps": mirrored_steps,
-        },
     }
 
 
-def show(result: dict[str, Any]) -> None:
-    lines = [f"{result['scenario']}: {result['status']}, {result['tokens']} tokens"]
+def show(result: Json) -> None:
+    lines = [
+        f"{result['scenario']}: {result['status']}, {result['tokens']} tokens, "
+        f"{result['seconds']:.0f} s"
+    ]
     for step in result["steps"]:
         if step["kind"] != "tool_call":
             continue
-        if step.get("tokens"):
+        if step["tokens_input"] is not None:
             lines.append(f"  call   {step['tool_name']}: {step['summary']}")
         else:
-            shown = (step.get("result") or step["summary"]).replace("\n", " | ")[:150]
-            lines.append(f"  result {step['tool_name']} ({step['latency_ms']} ms): {shown}")
+            shown = (step["result"] or step["summary"]).replace("\n", " | ")[:150]
+            lines.append(f"  result {step['tool_name']} ({step['tool_status']}): {shown}")
     for c in result["model_calls"]:
         lines.append(
             f"  model {c['role']} {c['model']} {c['outcome']}: in {c['input_tokens']}"
@@ -181,7 +242,6 @@ def show(result: dict[str, Any]) -> None:
             f" (thinking {c['thought_tokens']}), {c['latency_ms']} ms"
         )
     lines.append(json.dumps(result["report"], indent=2))
-    lines.append(f"gateway: {result['gateway']}")
     lines.append(f"models: {result['models']}; embedding: {result['embedding']}")
     print("\n".join(lines))  # noqa: T201 - CLI output
 
@@ -190,23 +250,29 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="evals/harness/run.py")
     parser.add_argument("scenario")
     parser.add_argument("--run", type=int, default=1)
-    parser.add_argument("--within", type=float, default=600.0, help="seconds to wait")
+    parser.add_argument("--within", type=float, default=900.0, help="seconds to wait")
     args = parser.parse_args()
-    RUNS.mkdir(parents=True, exist_ok=True)
-    result_file = RUNS / f"{args.scenario}-run{args.run}.json"
-    state_file = RUNS / f"{args.scenario}-run{args.run}.state.json"
+    SMOKE.mkdir(parents=True, exist_ok=True)
+    result_file = SMOKE / f"{args.scenario}-run{args.run}.json"
+    state_file = SMOKE / f"{args.scenario}-run{args.run}.state.json"
     if result_file.exists():
         show(json.loads(result_file.read_text(encoding="utf-8")))
         return
-    if state_file.exists():
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        resume(state)
-    else:
-        state = start(args.scenario, state_file)
-    if wait(UUID(state["investigation_id"]), args.within) == "quota":
-        print("quota stop: today's model quota is spent; run again after it resets")  # noqa: T201
-        sys.exit(QUOTA_STOP)
-    result = collect(state)
+    try:
+        if state_file.exists():
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            resume(state)
+            state["resumed"] = True
+        else:
+            state = start(args.scenario)
+        state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        if wait(UUID(state["investigation_id"]), args.within) == "quota":
+            print("quota stop: today's model quota is spent; run again after it resets")  # noqa: T201
+            sys.exit(QUOTA_STOP)
+        mirrored(state["investigation_id"])
+        result = collect(state)
+    except RunError as error:
+        sys.exit(f"run: {error}")
     result_file.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     state_file.unlink()
     show(result)

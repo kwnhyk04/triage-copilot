@@ -1,0 +1,398 @@
+id: slow-dependency-1
+title: card-network slows payments
+seed: 30394
+alert:
+  labels:
+    alertname: PaymentsHighLatency
+    service: payments
+    severity: warning
+  annotations:
+    summary: payments p99 latency above 2 s for 3 minutes
+    description: http_latency_p99_seconds{service="payments"} > 2 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: payments
+    op: '>'
+    threshold: 2.0
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - checkout
+  checkout:
+    depends_on:
+    - payments
+    - cart
+  payments:
+    depends_on:
+    - card-network
+    - payments-db
+    - coredns
+  card-network: {}
+  payments-db: {}
+  cart: {}
+  search: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: search
+  version: v1.20.0
+  previous_version: v1.19.9
+  at: -128m
+  author: ci-bot
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 247
+  noise: 12.35
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.09059
+  noise: 0.007247
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.3382
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.5146
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 0
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 106
+  noise: 5.3
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.1545
+  noise: 0.01236
+  changes:
+  - at: -270s
+    value: 7.2
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4923
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: checkout
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.4282
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: checkout
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 71
+  noise: 3.55
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -4m
+    value: 0.015
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.4
+  noise: 0.032
+  changes:
+  - at: -5m
+    value: 6
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: payments
+  base: 0.3298
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: payments
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: payments
+  base: 0.5142
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: payments
+  base: 2
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 95
+  noise: 4.75
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.1809
+  noise: 0.01448
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3939
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.4407
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 1
+- name: http_requests_per_second
+  labels:
+    service: search
+  base: 112
+  noise: 5.6
+- name: http_error_ratio
+  labels:
+    service: search
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: search
+  base: 0.3328
+  noise: 0.02662
+- name: cpu_usage_ratio
+  labels:
+    service: search
+  base: 0.4291
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: search
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: search
+  base: 0.4768
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: search
+  base: 0
+- name: db_connections
+  labels:
+    service: payments-db
+  base: 43
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: payments-db
+  base: 0.003
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: payments-db
+  base: 0.1
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: payments-db
+  base: 0.221
+  noise: 0.03
+- name: db_pool_in_use
+  labels:
+    service: payments
+  base: 8
+  noise: 0.15
+- name: db_pool_max
+  labels:
+    service: payments
+  base: 30
+- name: upstream_latency_p99_seconds
+  labels:
+    service: payments
+    peer: card-network
+  base: 0.35
+  noise: 0.03
+  changes:
+  - at: -330s
+    value: 5.9
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: payments
+    node: node-6
+  base: 0.3917
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: payments
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: payments
+    peer: card-network
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.2057
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-4
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 9
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 8
+  lines:
+  - POST /checkout 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 14
+  lines:
+  - POST /charge 200 {ms}ms request_id={rid}
+  - POST /refund 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 12
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 10
+  lines:
+  - GET /search 200 {ms}ms request_id={rid}
+  - GET /search/suggest 200 {ms}ms request_id={rid}
+- labels:
+    service: payments-db
+    level: info
+  per_minute: 3
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: payments
+    level: warn
+  per_minute: 30
+  from: -5m
+  lines:
+  - timeout calling card-network after 6000ms (POST /v2/authorize) request_id={rid}
+  - card-network answered POST /v2/authorize in 4810ms request_id={rid}
+  - card-network answered POST /v2/authorize in 5320ms request_id={rid}
+- labels:
+    service: search
+    level: info
+  per_minute: 2
+  from: -128m
+  to: -127m
+  lines:
+  - 'Rolling update: pod search-{rid} started version=v1.20.0'
+- labels:
+    service: cart
+    level: error
+  per_minute: 29
+  lines:
+  - deprecated endpoint /v1/legacy-search called by client mobile-ios/4.{n}
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-4
+labels:
+  root_cause_class: dependency_failure
+  service: card-network
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: upstream_latency_p99_seconds{peer="card-network", service="payments"}
+    pattern: upstream_latency_p99_seconds\{peer="card-network", service="payments"\}
+  - tool: query_logs
+    args:
+      query: '{service="payments", level="warn"}'
+    pattern: card-network
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: scale_service
+    target: payments
+  - kind: rollback_deploy
+    target: payments
+  - kind: rollback_deploy
+    target: search
+  red_herrings:
+  - search v1.20.0 shipped 128 minutes before the alert, and none of its metrics moved after it
+  - cart logs 'deprecated endpoint /v1/legacy-search called by client mobile-ios/4.' errors all window
+    long, before and after

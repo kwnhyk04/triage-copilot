@@ -2179,6 +2179,7 @@ dependencies = [
     { name = "google-re2" },
     { name = "py-config" },
     { name = "py-telemetry" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 
@@ -2188,6 +2189,7 @@ requires-dist = [
     { name = "google-re2", specifier = ">=1.1.20251105" },
     { name = "py-config", editable = "packages/py-config" },
     { name = "py-telemetry", editable = "packages/py-telemetry" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 

@@ -2,6 +2,13 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-16: Prompt sha on model calls (agent 0008)
+
+- Expand only: a nullable `agent.model_calls.prompt_sha text` (`lock_timeout` 3 s), which rewrites no rows.
+- The agent writes on every call the sha256 of the prompt its process runs (`agent.job.prompt_sha`). The eval files a run only when its calls name the source's prompt.
+- Rows from before 0008 stay null. The eval accepts them only beside calls that name its prompt, so no backfill or contract phase follows.
+- The downgrade drops the column.
+
 ## 2026-10-15: AI pipeline (agent 0007, gateway 0004, gateway API 0.4.0, ReportRecorded v1)
 
 Expand only: nothing is dropped or rewritten.

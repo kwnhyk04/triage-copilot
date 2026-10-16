@@ -1,0 +1,381 @@
+id: bad-deploy-1
+title: checkout v1.8.0 throws on bundle carts
+seed: 95053
+alert:
+  labels:
+    alertname: CheckoutHighErrorRate
+    service: checkout
+    severity: critical
+  annotations:
+    summary: checkout 5xx ratio above 5% for 2 minutes
+    description: http_error_ratio{service="checkout"} > 0.05 for 2m
+  rule:
+    metric: http_error_ratio
+    labels:
+      service: checkout
+    op: '>'
+    threshold: 0.05
+    for: 2m
+services:
+  frontend:
+    depends_on:
+    - checkout
+    - catalog
+  checkout:
+    depends_on:
+    - payments
+    - orders-db
+    - catalog
+    - notifications
+    - coredns
+  payments: {}
+  catalog: {}
+  orders-db: {}
+  notifications: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: checkout
+  version: v1.8.0
+  previous_version: v1.7.3
+  at: -6m
+  author: ci-bot
+  change: 'Rework cart total calculation for bundle discounts (PR #4812)'
+- service: frontend
+  version: v2.3.1
+  previous_version: v2.3.0
+  at: -50m
+  author: ana.lopez
+  change: Update header copy
+- service: notifications
+  version: v6.3.0
+  previous_version: v6.2.2
+  at: -116m
+  author: sam.okafor
+  change: Translate the settings page
+- service: catalog
+  version: v7.16.0
+  previous_version: v7.15.5
+  at: -3m
+  author: renovate-bot
+  change: Bump dependencies
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: checkout
+  base: 120
+  noise: 6
+- name: http_error_ratio
+  labels:
+    service: checkout
+  base: 0.002
+  noise: 0.0005
+  changes:
+  - at: -5m
+    value: 0.14
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: checkout
+  base: 0.28
+  noise: 0.02
+  changes:
+  - at: -5m
+    value: 0.65
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: checkout
+  base: 0.42
+  noise: 0.03
+- name: memory_usage_ratio
+  labels:
+    service: checkout
+  base: 0.55
+  noise: 0.02
+- name: db_pool_in_use
+  labels:
+    service: checkout
+  base: 12
+  noise: 0.25
+- name: db_pool_max
+  labels:
+    service: checkout
+  base: 50
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 300
+  noise: 12
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.003
+  noise: 0.0008
+  changes:
+  - at: -5m
+    value: 0.05
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.35
+  noise: 0.03
+- name: http_requests_per_second
+  labels:
+    service: payments
+  base: 80
+  noise: 4
+- name: http_error_ratio
+  labels:
+    service: payments
+  base: 0.001
+  noise: 0.0003
+- name: http_latency_p99_seconds
+  labels:
+    service: payments
+  base: 0.18
+  noise: 0.015
+  changes:
+  - at: -14m
+    value: 0.62
+    ramp: 30s
+    until: -10m
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.001
+  noise: 0.0003
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.09
+  noise: 0.01
+- name: cache_hit_ratio
+  labels:
+    service: catalog
+  base: 0.93
+  noise: 0.01
+- name: db_connections
+  labels:
+    service: orders-db
+  base: 42
+  noise: 3
+- name: db_lock_wait_seconds
+  labels:
+    service: orders-db
+  base: 0.004
+  noise: 0.002
+- name: db_slow_queries_per_second
+  labels:
+    service: orders-db
+  base: 0.2
+  noise: 0.1
+- name: http_requests_per_second
+  labels:
+    service: notifications
+  base: 71
+  noise: 3.55
+- name: http_error_ratio
+  labels:
+    service: notifications
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: notifications
+  base: 0.1265
+  noise: 0.01012
+- name: cpu_usage_ratio
+  labels:
+    service: notifications
+  base: 0.2612
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: notifications
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: notifications
+  base: 0.5873
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: notifications
+  base: 0
+- name: node_cpu_usage_ratio
+  labels:
+    service: checkout
+    node: node-7
+  base: 0.469
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: checkout
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: checkout
+    peer: payments
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1368
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-8
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: notifications
+    level: info
+  per_minute: 8
+  lines:
+  - POST /send 200 {ms}ms request_id={rid}
+  - GET /preferences/{n} 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 30
+  lines:
+  - GET /cart 200 {ms}ms request_id={rid}
+  - GET /cart/total 200 {ms}ms request_id={rid}
+  - POST /checkout 200 {ms}ms request_id={rid}
+- labels:
+    service: checkout
+    level: info
+  per_minute: 2
+  from: -6m
+  to: -5m
+  lines:
+  - 'Rolling update: pod checkout-{rid} started version=v1.8.0'
+- labels:
+    service: checkout
+    level: error
+  per_minute: 40
+  from: -5m
+  lines:
+  - 'java.lang.NullPointerException: Cannot invoke "BundlePrice.amount()" because "line.bundle" is null
+    at CartTotal.compute(CartTotal.java:88) request_id={rid}'
+  - POST /checkout 500 {ms}ms version=v1.8.0 request_id={rid}
+  - GET /cart/total 500 {ms}ms version=v1.8.0 request_id={rid}
+- labels:
+    service: frontend
+    level: info
+  per_minute: 30
+  lines:
+  - GET / 200 {ms}ms
+  - GET /product/{n} 200 {ms}ms
+- labels:
+    service: frontend
+    level: info
+  per_minute: 2
+  from: -50m
+  to: -49m
+  lines:
+  - 'Rolling update: pod frontend-{rid} started version=v2.3.1'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 15
+  from: -5m
+  lines:
+  - upstream checkout returned 500 for POST /checkout request_id={rid}
+- labels:
+    service: payments
+    level: info
+  per_minute: 20
+  lines:
+  - POST /charge 200 {ms}ms
+  - POST /refund 200 {ms}ms
+- labels:
+    service: payments
+    level: warn
+  per_minute: 6
+  from: -14m
+  to: -10m
+  lines:
+  - slow upstream response from card-network latency_ms={ms}
+- labels:
+    service: orders-db
+    level: info
+  per_minute: 4
+  lines:
+  - 'checkpoint complete: wrote {n} buffers'
+- labels:
+    service: notifications
+    level: info
+  per_minute: 2
+  from: -116m
+  to: -115m
+  lines:
+  - 'Rolling update: pod notifications-{rid} started version=v6.3.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 34
+  lines:
+  - 'session store: key over 250 bytes, not cached ({user})'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -3m
+  to: -2m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v7.16.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-8
+labels:
+  root_cause_class: bad_deploy
+  service: checkout
+  alternatives: []
+  onset: -6m
+  required_signals:
+  - tool: list_deploys
+    args:
+      service: checkout
+    pattern: checkout v1\.7\.3 -> v1\.8\.0
+  - tool: query_logs
+    args:
+      query: '{service="checkout", level="error"}'
+    pattern: NullPointerException
+  acceptable_actions:
+  - kind: rollback_deploy
+    target: checkout
+    parameters:
+      to_version: v1.7.3
+  forbidden_actions:
+  - kind: rollback_deploy
+    target: frontend
+  - kind: rollback_deploy
+    target: notifications
+  - kind: rollback_deploy
+    target: catalog
+  red_herrings:
+  - frontend v2.3.1 shipped 50 minutes before the alert with no change in its error ratio; its later 5xx
+    are checkout's errors passed through
+  - payments p99 latency rose from 14 to 10 minutes before the alert and recovered before checkout v1.8.0
+    shipped
+  - notifications v6.3.0 shipped 116 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'session store' errors all window long, before and after
+  - catalog v7.16.0 shipped 3 minutes before the alert, after checkout's errors began, and none of its
+    metrics moved after it

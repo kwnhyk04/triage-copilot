@@ -1,0 +1,338 @@
+id: slow-dependency-3
+title: feature-store slows recommendations
+seed: 18518
+alert:
+  labels:
+    alertname: RecommendationsHighLatency
+    service: recommendations
+    severity: warning
+  annotations:
+    summary: recommendations p99 latency above 1 s for 3 minutes
+    description: http_latency_p99_seconds{service="recommendations"} > 1 for 3m
+  rule:
+    metric: http_latency_p99_seconds
+    labels:
+      service: recommendations
+    op: '>'
+    threshold: 1.0
+    for: 3m
+services:
+  frontend:
+    depends_on:
+    - recommendations
+    - catalog
+  recommendations:
+    depends_on:
+    - feature-store
+    - catalog
+    - coredns
+  feature-store: {}
+  catalog: {}
+  cart: {}
+  coredns: {}
+  nightly-backup: {}
+deploys:
+- service: cart
+  version: v7.15.0
+  previous_version: v7.14.6
+  at: -119m
+  author: dev.kim
+  change: Bump dependencies
+- service: catalog
+  version: v2.14.0
+  previous_version: v2.13.6
+  at: -6m
+  author: maria.g
+  change: Tune log sampling
+background_deploys_days: 7
+metrics:
+- name: http_requests_per_second
+  labels:
+    service: frontend
+  base: 193
+  noise: 9.65
+- name: http_error_ratio
+  labels:
+    service: frontend
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: frontend
+  base: 0.2929
+  noise: 0.02343
+- name: cpu_usage_ratio
+  labels:
+    service: frontend
+  base: 0.2997
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: frontend
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: frontend
+  base: 0.4171
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: frontend
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: recommendations
+  base: 55
+  noise: 2.75
+- name: http_error_ratio
+  labels:
+    service: recommendations
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: recommendations
+  base: 0.12
+  noise: 0.0096
+  changes:
+  - at: -5m
+    value: 2.9
+    ramp: 1m
+- name: cpu_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.3202
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: recommendations
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: recommendations
+  base: 0.4253
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: recommendations
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: catalog
+  base: 47
+  noise: 2.35
+- name: http_error_ratio
+  labels:
+    service: catalog
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: catalog
+  base: 0.3064
+  noise: 0.02451
+- name: cpu_usage_ratio
+  labels:
+    service: catalog
+  base: 0.2842
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: catalog
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: catalog
+  base: 0.4507
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: catalog
+  base: 3
+- name: http_requests_per_second
+  labels:
+    service: cart
+  base: 40
+  noise: 2
+- name: http_error_ratio
+  labels:
+    service: cart
+  base: 0.002
+  noise: 0.0005
+- name: http_latency_p99_seconds
+  labels:
+    service: cart
+  base: 0.2109
+  noise: 0.01687
+- name: cpu_usage_ratio
+  labels:
+    service: cart
+  base: 0.3875
+  noise: 0.03
+- name: cpu_throttled_ratio
+  labels:
+    service: cart
+  base: 0.01
+  noise: 0.005
+- name: memory_usage_ratio
+  labels:
+    service: cart
+  base: 0.4972
+  noise: 0.02
+- name: container_restarts_total
+  labels:
+    service: cart
+  base: 3
+- name: upstream_latency_p99_seconds
+  labels:
+    service: recommendations
+    peer: feature-store
+  base: 0.04
+  noise: 0.004
+  changes:
+  - at: -330s
+    value: 2.6
+    ramp: 1m
+- name: http_latency_p99_seconds
+  labels:
+    service: feature-store
+  base: 0.03
+  noise: 0.003
+  changes:
+  - at: -330s
+    value: 2.4
+    ramp: 1m
+- name: node_cpu_usage_ratio
+  labels:
+    service: recommendations
+    node: node-4
+  base: 0.3966
+  noise: 0.03
+- name: dns_lookup_errors_per_second
+  labels:
+    service: recommendations
+  base: 0
+  noise: 0.05
+- name: tls_handshake_errors_per_second
+  labels:
+    service: recommendations
+    peer: feature-store
+  base: 0
+  noise: 0.05
+- name: cpu_usage_ratio
+  labels:
+    service: coredns
+  base: 0.1371
+  noise: 0.02
+- name: dns_servfail_ratio
+  labels:
+    service: coredns
+  base: 0.001
+  noise: 0.0005
+- name: cpu_usage_ratio
+  labels:
+    service: nightly-backup
+    node: node-1
+  base: 0.22
+  noise: 0.02
+logs:
+- labels:
+    service: frontend
+    level: info
+  per_minute: 13
+  lines:
+  - GET / 200 {ms}ms request_id={rid}
+  - GET /product/{n} 200 {ms}ms request_id={rid}
+  - GET /cart 200 {ms}ms request_id={rid}
+- labels:
+    service: recommendations
+    level: info
+  per_minute: 14
+  lines:
+  - GET /recommendations/{n} 200 {ms}ms request_id={rid}
+  - GET /recommendations/trending 200 {ms}ms request_id={rid}
+- labels:
+    service: catalog
+    level: info
+  per_minute: 13
+  lines:
+  - GET /products/{n} 200 {ms}ms request_id={rid}
+  - GET /categories 200 {ms}ms request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 10
+  lines:
+  - GET /cart/{n} 200 {ms}ms request_id={rid}
+  - POST /cart/{n}/items 200 {ms}ms request_id={rid}
+- labels:
+    service: recommendations
+    level: warn
+  per_minute: 20
+  from: -5m
+  lines:
+  - feature-store GetOnlineFeatures took 2410ms (budget 150ms) request_id={rid}
+  - feature-store GetOnlineFeatures took 2655ms (budget 150ms) request_id={rid}
+- labels:
+    service: cart
+    level: info
+  per_minute: 2
+  from: -119m
+  to: -118m
+  lines:
+  - 'Rolling update: pod cart-{rid} started version=v7.15.0'
+- labels:
+    service: frontend
+    level: error
+  per_minute: 31
+  lines:
+  - 'session store: key over 250 bytes, not cached ({user})'
+- labels:
+    service: catalog
+    level: info
+  per_minute: 2
+  from: -6m
+  to: -5m
+  lines:
+  - 'Rolling update: pod catalog-{rid} started version=v2.14.0'
+- labels:
+    service: nightly-backup
+    level: info
+  per_minute: 1
+  lines:
+  - backup of volume pvc-{rid} done on node-1
+labels:
+  root_cause_class: dependency_failure
+  service: feature-store
+  alternatives: []
+  onset: -330s
+  required_signals:
+  - tool: query_metrics
+    args:
+      query: upstream_latency_p99_seconds{peer="feature-store", service="recommendations"}
+    pattern: upstream_latency_p99_seconds\{peer="feature-store", service="recommendations"\}
+  - tool: query_metrics
+    args:
+      query: http_latency_p99_seconds{service="feature-store"}
+    pattern: http_latency_p99_seconds\{service="feature-store"\}
+  - tool: query_logs
+    args:
+      query: '{service="recommendations", level="warn"}'
+    pattern: feature-store GetOnlineFeatures
+  acceptable_actions: []
+  forbidden_actions:
+  - kind: restart_service
+    target: recommendations
+  - kind: scale_service
+    target: recommendations
+  - kind: rollback_deploy
+    target: cart
+  - kind: rollback_deploy
+    target: catalog
+  red_herrings:
+  - cart v7.15.0 shipped 119 minutes before the alert, and none of its metrics moved after it
+  - frontend logs 'session store' errors all window long, before and after
+  - catalog v2.14.0 shipped 6 minutes before the alert, and none of its metrics moved after it

@@ -1,0 +1,286 @@
+{
+  "set": "v1",
+  "generator_seed": 20261016,
+  "scenarios": {
+    "bad-deploy-1": {
+      "sha256": "72c72c14d34acfc67d16218cc8ee2357817b6e808fc2796c912149816aef7cf3",
+      "family": "bad-deploy",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "bad-deploy-2": {
+      "sha256": "3de7573c9eb5eedd5fc53f8f92e5fb6b7624f62eda8c6e29ec76f2fd8edb41af",
+      "family": "bad-deploy",
+      "split": "dev",
+      "ci": false,
+      "down": "deploys"
+    },
+    "bad-deploy-3": {
+      "sha256": "c03ba5159c84d8e5446406232d67d73784b3d9cd9d1d9b80376bc047ab2c0a44",
+      "family": "bad-deploy",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "bad-deploy-4": {
+      "sha256": "9c48c991095626cdca6143b4fabc9a48f8c5bd5a969ef4af904d079582cfab78",
+      "family": "bad-deploy",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "bad-deploy-5": {
+      "sha256": "de64d193382cee764678496b8d07998f6b10ca4581bfd0c1f2fc7a3ebbad33d3",
+      "family": "bad-deploy",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "db-pool-exhaustion-1": {
+      "sha256": "5392633db2217e403b4b0b93807bf8b2b1976243bd692fd5b8980fdd545eb3e1",
+      "family": "db-pool-exhaustion",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "db-pool-exhaustion-2": {
+      "sha256": "d37372409ebd556692319c33eed838024c9bb1a77e4b792a8604626046d52b6c",
+      "family": "db-pool-exhaustion",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "db-pool-exhaustion-3": {
+      "sha256": "ba5be565aaa4b0596fc1669113b956fa65f6253f968f161aa8f47526bc009d86",
+      "family": "db-pool-exhaustion",
+      "split": "dev",
+      "ci": false,
+      "down": null
+    },
+    "db-pool-exhaustion-4": {
+      "sha256": "50a97642f13321a908ebd73882af274d10a368d590b6dad5ec978b58d60afb15",
+      "family": "db-pool-exhaustion",
+      "split": "test",
+      "ci": false,
+      "down": "logs"
+    },
+    "db-pool-exhaustion-5": {
+      "sha256": "359a2553b14e705d8aec3e0f8a8ed9d811246ff83e8d774cbf5b2d13e6f4ff02",
+      "family": "db-pool-exhaustion",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "slow-dependency-1": {
+      "sha256": "6885b1e2c028d44b3815c28f76990a22767dd4f78d07ce5ad4869b7055fd7a79",
+      "family": "slow-dependency",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "slow-dependency-2": {
+      "sha256": "67869ec60bf1e79721d3bd9a80ab6d0560eff95700bb6eefd253affde4e0d3fa",
+      "family": "slow-dependency",
+      "split": "dev",
+      "ci": false,
+      "down": null
+    },
+    "slow-dependency-3": {
+      "sha256": "62862732f51a1fe231978c0fd2defa823cec71ec7953cd852128d64076dbf815",
+      "family": "slow-dependency",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "slow-dependency-4": {
+      "sha256": "8711a04b921e7fe03d1328ca318e9118a8b2e5f2ea69428ee07b0fbeba59f68a",
+      "family": "slow-dependency",
+      "split": "test",
+      "ci": false,
+      "down": "metrics"
+    },
+    "slow-dependency-5": {
+      "sha256": "aab0c26765d58b301ae20742c5f151e1c54a544c88dbac540d976469a0e748f5",
+      "family": "slow-dependency",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "memory-leak-1": {
+      "sha256": "6a33b25a6636ad5a69b01501041893365c37012f7b578fa128577fd08bf2368b",
+      "family": "memory-leak",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "memory-leak-2": {
+      "sha256": "e5b514d7b747a2aea391c64f19f049af6fc71bbe1f4027215c4ce26b2238e806",
+      "family": "memory-leak",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "memory-leak-3": {
+      "sha256": "ad3acd60f0ada22f236574b9c14dd2c4249240377b85ec615e92edd9a45c67e4",
+      "family": "memory-leak",
+      "split": "dev",
+      "ci": false,
+      "down": "logs"
+    },
+    "memory-leak-4": {
+      "sha256": "025d414137ee643a70deb009f66cf1438ee904a09aaa7f81e0816a85ac558d8c",
+      "family": "memory-leak",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "memory-leak-5": {
+      "sha256": "f13eff3fb522b7013476027e9807483e267528364c2697b2f4cc3236854f50f7",
+      "family": "memory-leak",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "expired-cert-1": {
+      "sha256": "4bb980028654ab16100e4e33963f9c2847bead6a5b6d1d77be994c1ae451fcb2",
+      "family": "expired-cert",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "expired-cert-2": {
+      "sha256": "4584fbc2388c9586aaf23b4954f194d1a16a4d4991f209966ccca709d1033b49",
+      "family": "expired-cert",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "expired-cert-3": {
+      "sha256": "5c6918027e41854126e35e29af0d66d6439f718594985d23e2bcda9c7ddd2435",
+      "family": "expired-cert",
+      "split": "test",
+      "ci": false,
+      "down": "dependencies"
+    },
+    "expired-cert-4": {
+      "sha256": "7b690958aa1fb15b2562b9186f7bcff3ea479c1ceed4fb3db6a3d6f62715c58c",
+      "family": "expired-cert",
+      "split": "dev",
+      "ci": false,
+      "down": null
+    },
+    "expired-cert-5": {
+      "sha256": "a4070505040955fdcb1b0a189295ccb4500c1e464772270fd6162e78c3880331",
+      "family": "expired-cert",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "bad-config-1": {
+      "sha256": "93a7a36e96bae6417c6e8c77f5a60c8282916bf00c5df7608fee8c596e17798a",
+      "family": "bad-config",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "bad-config-2": {
+      "sha256": "6f9e97e5c72c20df75bbd848ad9acd997c82270474efcbf5e817bf8445a749b9",
+      "family": "bad-config",
+      "split": "dev",
+      "ci": false,
+      "down": null
+    },
+    "bad-config-3": {
+      "sha256": "bd2dd57e3dc63c421a4b97b2770ae4788a3b62bb9bb07434bf0039294ede32ec",
+      "family": "bad-config",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "bad-config-4": {
+      "sha256": "da45aead2e68a23153cc076afbb5d8e09e6b1df35d6af637089ea78a379e1755",
+      "family": "bad-config",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "bad-config-5": {
+      "sha256": "ce24ccc1f1b7c8a253d069de6b976eee2c30ef2f251bf64096588fcd205de679",
+      "family": "bad-config",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "noisy-neighbor-1": {
+      "sha256": "af83b5d85fdc9eb2e52ddab19cef93c3a9f9c86611cbb82244785b71f6b06e76",
+      "family": "noisy-neighbor",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "noisy-neighbor-2": {
+      "sha256": "8cf906025ca9f6d2ffc83f89ec9ce4605cbb45bdbafb9a879b2b854dc897938c",
+      "family": "noisy-neighbor",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "noisy-neighbor-3": {
+      "sha256": "efd387cd7b9a8e03743c3ffccf511d2d42cd3977542810021d59b10b2fcb47d2",
+      "family": "noisy-neighbor",
+      "split": "dev",
+      "ci": false,
+      "down": null
+    },
+    "noisy-neighbor-4": {
+      "sha256": "bbc822892f7dd76b6a5c2f2342e5d87692ea3f9594b8cedd15303ed382956974",
+      "family": "noisy-neighbor",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "noisy-neighbor-5": {
+      "sha256": "d54b6f709111dee9476434918e624698e961c52202a1f20dc27f840c516a0eba",
+      "family": "noisy-neighbor",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "dns-partition-1": {
+      "sha256": "13773533d2698e90ce0fb668d4b3f8f279815e3751e2d0a928d70b73cbe9b710",
+      "family": "dns-partition",
+      "split": "dev",
+      "ci": true,
+      "down": null
+    },
+    "dns-partition-2": {
+      "sha256": "3b85fdf8c5d0c2543d0a7b2d0ec53cd93bddf5d33e18b0dad87b5124e62312e3",
+      "family": "dns-partition",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "dns-partition-3": {
+      "sha256": "970bc107a2d41675b1cb3862bd8112c689a7edefa630bd36ada0874a9ee592ff",
+      "family": "dns-partition",
+      "split": "test",
+      "ci": false,
+      "down": "metrics"
+    },
+    "dns-partition-4": {
+      "sha256": "dcc310eb6ab1e0838d6024422f35ac660c67c895a028268ec1334a2b105d3409",
+      "family": "dns-partition",
+      "split": "test",
+      "ci": false,
+      "down": null
+    },
+    "dns-partition-5": {
+      "sha256": "94e6fd9e25438660eed0df65758a7949202f4d30f75fae5bf97f763e07b23e66",
+      "family": "dns-partition",
+      "split": "test",
+      "ci": false,
+      "down": null
+    }
+  }
+}
