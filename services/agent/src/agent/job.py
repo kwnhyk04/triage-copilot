@@ -896,6 +896,7 @@ def _store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
                     "input_tokens": c.usage.input,
                     "output_tokens": c.usage.output,
                     "cached_tokens": c.usage.cached,
+                    "cache_write_tokens": c.usage.cache_writes,
                     "thought_tokens": c.usage.thoughts,
                     "input_bound": c.input_bound,
                     "max_output_tokens": c.max_output_tokens,

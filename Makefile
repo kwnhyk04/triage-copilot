@@ -6,7 +6,7 @@ export
 # Only dev-ts (gateway and web) gets the approver key; the Python services, tests and tools never do.
 unexport APPROVER_API_KEY
 # Only the agent gets the model provider keys; tests use fake models and never see them.
-unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY
+unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
 # Only the eval harness gets the sim's admin address: its state names each scenario's answer.
 unexport SIM_ADMIN_URL
 
@@ -36,11 +36,14 @@ dev-ts: export APPROVER_API_KEY := $(APPROVER_API_KEY)
 dev-ts:
 	pnpm turbo run dev --env-mode=loose
 
+# The agent's reloader watches the whole repo; for evals pass AGENT_RELOAD= so no edit restarts it.
+AGENT_RELOAD ?= --reload
 dev-agent: export GEMINI_API_KEY := $(GEMINI_API_KEY)
 dev-agent: export NVIDIA_API_KEY := $(NVIDIA_API_KEY)
 dev-agent: export OPENROUTER_API_KEY := $(OPENROUTER_API_KEY)
+dev-agent: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
 dev-agent:
-	uv run agent --reload
+	uv run agent $(AGENT_RELOAD)
 
 dev-executor:
 	uv run executor --reload

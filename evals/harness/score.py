@@ -71,15 +71,27 @@ def matches(proposal: Json, action: Action) -> bool:
     return all(str(given.get(k, "")).strip() == str(v) for k, v in action.parameters.items())
 
 
-def cost(calls: Sequence[Json], prices: dict[str, Json]) -> float:
-    """USD at the paid tier's rates; input counts cached tokens, which bill at the cached rate."""
-    total = 0.0
+def cost(calls: Sequence[Json], prices: dict[str, Json]) -> tuple[float, float]:
+    """USD at each model's rates, and the part billed: models paid from credits, not free ones.
+    Input counts cache reads and writes, which bill at their own rates; runs from before agent
+    migration 0009 recorded no writes."""
+    paid = billed = 0.0
     for call in calls:
         price = prices[call["model"]]
-        cached = call["cached_tokens"] or 0
-        total += (call["input_tokens"] - cached) * price["input"] + cached * price["cached_input"]
-        total += call["output_tokens"] * price["output"]
-    return total / 1_000_000
+        reads = call["cached_tokens"] or 0
+        writes = call.get("cache_write_tokens") or 0
+        usd = (call["input_tokens"] - reads - writes) * price["input"]
+        usd += reads * price["cached_input"] + writes * price.get("cache_write", price["input"])
+        usd += call["output_tokens"] * price["output"]
+        paid += usd
+        if price["billing"] != "free":
+            billed += usd
+    return paid / 1_000_000, billed / 1_000_000
+
+
+def free(models: Sequence[str], prices: dict[str, Json]) -> bool:
+    """Whether every model bills nothing, so the $0-billed gate applies."""
+    return all(prices[m]["billing"] == "free" for m in models)
 
 
 def score(
@@ -88,7 +100,6 @@ def score(
     family: str,
     down: str | None,
     prices: dict[str, Json],
-    billed: bool,
 ) -> Scored:
     report: Json = record["report"]
     hypotheses: list[Json] = report["hypotheses"]
@@ -122,7 +133,7 @@ def score(
     missing: list[str] = report["missing_evidence"]
     reader = READERS[down] if down else ""
     calls: list[Json] = record["tool_calls"]
-    spent = cost(record["model_calls"], prices)
+    paid, billed = cost(record["model_calls"], prices)
     return Scored(
         scenario=record["scenario"],
         family=family,
@@ -137,8 +148,8 @@ def score(
         invalid_calls=sum((c["error"] or "").startswith("ToolInputError") for c in calls),
         tokens=record["tokens"],
         seconds=None if record["resumed"] else record["seconds"],
-        cost=spent,
-        billed=spent if billed else 0.0,
+        cost=paid,
+        billed=billed,
         degraded=down is not None,
         names_missing=bool(down) and any(reader in m or f"{down} backend" in m for m in missing),
     )

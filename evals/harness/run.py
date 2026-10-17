@@ -63,7 +63,8 @@ TOOL_CALLS = text("""
 """)
 MODEL_CALLS = text("""
     SELECT role, provider, model, outcome, input_tokens, output_tokens, cached_tokens,
-           thought_tokens, input_bound, max_output_tokens, latency_ms, error, prompt_sha
+           cache_write_tokens, thought_tokens, input_bound, max_output_tokens, latency_ms, error,
+           prompt_sha
     FROM agent.model_calls WHERE investigation_id = :id ORDER BY id
 """)
 

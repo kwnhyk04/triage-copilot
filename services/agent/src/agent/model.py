@@ -1,8 +1,8 @@
 """Provider layer types: the investigation job makes every model call through a Model.
 
-agent.llm.Router is the real one (Gemini, NVIDIA NIM, OpenRouter, Ollama); ScriptedModel plays
-fixed actions in tests. Every turn states its token budget, and a Model must keep within it: the
-input under `TurnBudget.limits`' bound and the output under its max output tokens.
+agent.llm.Router is the real one (Gemini, Claude, NVIDIA NIM, OpenRouter, Ollama); ScriptedModel
+plays fixed actions in tests. Every turn states its token budget, and a Model must keep within it:
+the input under `TurnBudget.limits`' bound and the output under its max output tokens.
 """
 
 from collections.abc import Sequence
@@ -28,7 +28,7 @@ RootCause = Literal[
     "certificate_expiry",
     "unknown",
 ]
-Outcome = Literal["ok", "rate_limited", "quota_exhausted", "error"]
+Outcome = Literal["ok", "rate_limited", "quota_exhausted", "credits_exhausted", "error"]
 # Framing a provider adds around each message and tool definition, in tokens.
 MESSAGE_OVERHEAD = 16
 PROMPT_OVERHEAD = 256
@@ -48,17 +48,7 @@ class HypothesisDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     root_cause_class: RootCause
-    service: Annotated[
-        str,
-        Field(
-            min_length=1,
-            max_length=200,
-            description=(
-                "The component where the cause lives, often not the alerting service: the "
-                "database, the DNS server, the workload on a shared node, the failing dependency."
-            ),
-        ),
-    ]
+    service: Annotated[str, Field(min_length=1, max_length=200)]
     confidence: Annotated[float, Field(ge=0, le=1)]
     summary: Annotated[str, Field(min_length=1, max_length=500)]
     evidence_ids: Annotated[list[str], Field(max_length=20)]
@@ -81,8 +71,10 @@ class Usage:
     input: int = 0
     # Thinking tokens included: providers bill them as output.
     output: int = 0
+    # Of the input: tokens read from the provider's prompt cache, and tokens written to it.
     cached: int = 0
     thoughts: int = 0
+    cache_writes: int = 0
 
 
 NO_USAGE = Usage()
@@ -139,6 +131,10 @@ class RateLimited(ModelError):
 
 class QuotaExhausted(ModelError):
     """The model's requests for the day are spent, by the limiter's count or the provider's."""
+
+
+class CreditsExhausted(QuotaExhausted):
+    """Claude's API credits or spend limit are used up: no call to it until the month ends."""
 
 
 class BudgetRefused(Exception):

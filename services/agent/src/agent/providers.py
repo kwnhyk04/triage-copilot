@@ -1,31 +1,53 @@
 """Model providers behind one tool-calling interface, each returning the call and its usage.
 
-Gemini goes through the google-genai SDK; NVIDIA NIM, OpenRouter and Ollama share one
-OpenAI-compatible client. Both run on httpx2 clients with a timeout, and neither retries:
-agent.llm.Router and the job decide what happens after a failure.
+Gemini goes through the google-genai SDK and Claude through the anthropic SDK; NVIDIA NIM,
+OpenRouter and Ollama share one OpenAI-compatible client. All run on httpx2 clients with a
+timeout, and none retries: agent.llm.Router and the job decide what happens after a failure.
 """
 
 import base64
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+import anthropic
 import httpx2
+from anthropic.types import (
+    MessageParam,
+    ToolChoiceParam,
+    ToolParam,
+    ToolResultBlockParam,
+    ToolUseBlockParam,
+)
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
-from agent.model import Message, ModelError, QuotaExhausted, RateLimited, ToolSpec, Usage
+from agent.model import (
+    CreditsExhausted,
+    Message,
+    ModelError,
+    QuotaExhausted,
+    RateLimited,
+    ToolSpec,
+    Usage,
+)
 from agent.settings import Role
 
 REQUEST_TIMEOUT = 60.0
 DEFAULT_BASE_URLS = {
+    "anthropic": "https://api.anthropic.com",
     "nvidia": "https://integrate.api.nvidia.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama": "http://127.0.0.1:11434/v1",
 }
+# Anthropic's 400 once a spend limit is reached ("You have reached your specified API usage
+# limits"): like a 402 billing_error, nothing gets through until the month ends.
+SPEND_LIMIT = re.compile(r"(spend|usage) limit", re.IGNORECASE)
 # Gemini's documented value for a function call it did not sign, such as one replayed from
 # another model's turn.
 UNSIGNED = b"skip_thought_signature_validator"
@@ -63,6 +85,8 @@ def make_provider(role: Role, http: httpx2.AsyncClient | None = None) -> Provide
     if role.provider == "gemini":
         return GeminiProvider(role.model, role.api_key or "", base_url=role.base_url, http=http)
     base_url = role.base_url or DEFAULT_BASE_URLS[role.provider]
+    if role.provider == "anthropic":
+        return AnthropicProvider(role.model, role.api_key or "", base_url, http)
     return OpenAICompatibleProvider(role.provider, role.model, base_url, role.api_key, http)
 
 
@@ -219,6 +243,151 @@ def _retry_delay(details: object) -> float | None:
         if delay.endswith("s") and delay[:-1].replace(".", "", 1).isdigit():
             return float(delay[:-1])
     return None
+
+
+class AnthropicProvider:
+    """Claude with native tool use. The system prompt and the tool definitions are cached: tools
+    render before the system prompt, so its one breakpoint covers both."""
+
+    name = "anthropic"
+
+    def __init__(
+        self, model: str, api_key: str, base_url: str, http: httpx2.AsyncClient | None = None
+    ) -> None:
+        self.model = model
+        # The explicit key and URL win over ANTHROPIC_* variables in the environment, and SDK spans
+        # never carry prompts, so no log line from a tool result reaches a span attribute.
+        self._client = anthropic.AsyncAnthropic(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=REQUEST_TIMEOUT,
+            max_retries=0,
+            http_client=http,
+            open_telemetry={"traces": {"content_mode": "metadata_only"}},
+        )
+
+    async def generate(
+        self,
+        system: str,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec],
+        allowed: tuple[str, ...] | None,
+        max_output_tokens: int,
+    ) -> ProviderTurn:
+        definitions: list[ToolParam] = [
+            {"name": t.name, "description": t.description, "input_schema": t.parameters}
+            for t in tools
+        ]
+        # One forced call per turn, as the job runs one; Claude skips thinking on a forced call,
+        # so no thinking block ever needs replaying.
+        choice: ToolChoiceParam = (
+            {"type": "tool", "name": allowed[0], "disable_parallel_tool_use": True}
+            if allowed
+            else {"type": "any", "disable_parallel_tool_use": True}
+        )
+        with _anthropic_errors():
+            response = await self._client.messages.create(
+                model=self.model,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=[_anthropic_message(m) for m in messages],
+                tools=definitions,
+                tool_choice=choice,
+                max_tokens=max_output_tokens,
+            )
+        usage = _anthropic_usage(response.usage)
+        if response.stop_reason == "refusal":
+            category = response.stop_details.category if response.stop_details else None
+            message = f"anthropic declined the request (category {category})"
+            raise ModelError(message, retryable=False, usage=usage)
+        for block in response.content:
+            if block.type == "tool_use":
+                return ProviderTurn(block.name, dict(block.input), None, usage)
+        reason = response.stop_reason
+        raise ModelError(f"anthropic returned no tool call (stop reason {reason})", usage=usage)
+
+    async def complete(self, system: str, text: str, max_output_tokens: int) -> tuple[str, Usage]:
+        # A summary's few hundred output tokens leave no room for thinking.
+        with _anthropic_errors():
+            response = await self._client.messages.create(
+                model=self.model,
+                system=system,
+                messages=[{"role": "user", "content": text}],
+                max_tokens=max_output_tokens,
+                thinking={"type": "disabled"},
+            )
+        reply = "".join(block.text for block in response.content if block.type == "text")
+        return reply, _anthropic_usage(response.usage)
+
+
+@contextmanager
+def _anthropic_errors() -> Generator[None]:
+    try:
+        yield
+    except anthropic.APIStatusError as error:
+        raise _anthropic_error(error) from None
+
+
+def _anthropic_message(message: Message) -> MessageParam:
+    if message.call is not None:
+        call = message.call
+        use: ToolUseBlockParam = {
+            "type": "tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": call.args,
+        }
+        return {"role": "assistant", "content": [use]}
+    if message.result is not None:
+        result = message.result
+        block: ToolResultBlockParam = {
+            "type": "tool_result",
+            "tool_use_id": result.id,
+            "content": result.content,
+        }
+        return {"role": "user", "content": [block]}
+    return {"role": "user", "content": message.text or ""}
+
+
+def _anthropic_usage(usage: anthropic.types.Usage) -> Usage:
+    """input_tokens counts only what follows the last cache breakpoint; the cap needs it all."""
+    reads = usage.cache_read_input_tokens or 0
+    writes = usage.cache_creation_input_tokens or 0
+    return Usage(
+        input=usage.input_tokens + reads + writes,
+        output=usage.output_tokens,
+        cached=reads,
+        cache_writes=writes,
+    )
+
+
+def _anthropic_error(error: anthropic.APIStatusError) -> ModelError:
+    """Credits gone (a 402 billing_error, a 400 naming a spend limit, or a 429 without
+    retry-after) is CreditsExhausted: the router stops calling Claude until the month ends."""
+    code = error.status_code
+    detail = _api_message(error)
+    if code == 402 or error.type == "billing_error" or (code == 400 and SPEND_LIMIT.search(detail)):
+        return CreditsExhausted(f"anthropic {code}: credits or spend limit used up: {detail}"[:300])
+    if code == 429:
+        header = error.response.headers.get("retry-after")
+        if header is None:
+            return CreditsExhausted("anthropic 429 without retry-after: credits used up")
+        delay = float(header) if header.replace(".", "", 1).isdigit() else None
+        return RateLimited("anthropic 429: rate limited", retry_after=delay)
+    if code in (401, 403):
+        return ModelError(f"anthropic {code}: the API key was rejected", retryable=False)
+    return ModelError(f"anthropic {code}: {detail}"[:300], retryable=code >= 500)
+
+
+def _api_message(error: anthropic.APIStatusError) -> str:
+    """The API's own message from the error body, else the SDK's."""
+    body = error.body
+    if isinstance(body, dict):
+        inner = cast("dict[str, Any]", body).get("error")
+        if isinstance(inner, dict):
+            message = cast("dict[str, Any]", inner).get("message")
+            if isinstance(message, str):
+                return message
+    return error.message
 
 
 class _Function(BaseModel):

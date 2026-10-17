@@ -15,7 +15,7 @@ import score
 import agent.job as agent_job
 from sim.scenario import Labels
 
-PRICES = {"m": {"input": 0.3, "cached_input": 0.03, "output": 2.5}}
+PRICES = {"m": {"billing": "free", "input": 0.3, "cached_input": 0.03, "output": 2.5}}
 LABELS = Labels.model_validate(
     {
         "root_cause_class": "bad_deploy",
@@ -75,7 +75,7 @@ def record(
 
 
 def scored(down: str | None = None, **kwargs: Any) -> score.Scored:
-    return score.score(record(**kwargs), LABELS, "bad-deploy", down, PRICES, billed=False)
+    return score.score(record(**kwargs), LABELS, "bad-deploy", down, PRICES)
 
 
 def rollback(target: str = "checkout", **params: str) -> dict[str, Any]:
@@ -110,15 +110,15 @@ def test_actions_are_correct_only_when_every_proposal_is_acceptable() -> None:
     extra: list[dict[str, Any]] = [rollback(to_version="v1.7.3"), restart | {"evidence_ids": []}]
     assert not scored(proposals=extra).action_correct
     nothing = Labels.model_validate(LABELS.model_dump() | {"acceptable_actions": []})
-    quiet = score.score(record(), nothing, "f", None, PRICES, billed=False)
+    quiet = score.score(record(), nothing, "f", None, PRICES)
     assert quiet.action_correct and not quiet.actionable
-    loud = score.score(record(proposals=[rollback()]), nothing, "f", None, PRICES, billed=False)
+    loud = score.score(record(proposals=[rollback()]), nothing, "f", None, PRICES)
     assert not loud.action_correct
 
 
 def test_action_correctness_shows_the_do_nothing_baseline_and_the_actionable_share() -> None:
     nothing = Labels.model_validate(LABELS.model_dump() | {"acceptable_actions": []})
-    quiet = score.score(record(), nothing, "f", None, PRICES, billed=False)
+    quiet = score.score(record(), nothing, "f", None, PRICES)
     fixed = scored(proposals=[rollback(to_version="v1.7.3")])
     data = [replace(r, scenario=s) for r, s in ((quiet, "a"), (scored(), "b"), (fixed, "c"))]
     summary = score.summarize(data, resamples=200)
@@ -165,6 +165,50 @@ def test_cost_bills_cached_input_at_its_rate_and_resumed_runs_have_no_time() -> 
     assert scored(resumed=True).seconds is None
 
 
+def test_credits_bill_every_token_and_only_the_free_setup_must_bill_nothing() -> None:
+    haiku = {
+        "c": {
+            "billing": "credits",
+            "input": 0.1,
+            "cached_input": 0.01,
+            "cache_write": 0.125,
+            "output": 0.5,
+        }
+    }
+    calls = [
+        {
+            "model": "c",
+            "input_tokens": 10_000,
+            "cached_tokens": 4_000,
+            "cache_write_tokens": 2_000,
+            "output_tokens": 1_000,
+        },
+        # A run cached before agent migration 0009 has no cache writes recorded.
+        {"model": "m", "input_tokens": 10_000, "cached_tokens": 4_000, "output_tokens": 1_000},
+    ]
+    paid, billed = score.cost(calls, PRICES | haiku)
+    claude = (4_000 * 0.1 + 4_000 * 0.01 + 2_000 * 0.125 + 1_000 * 0.5) / 1e6
+    assert billed == pytest.approx(claude)
+    assert paid == pytest.approx(claude + (6_000 * 0.3 + 4_000 * 0.03 + 1_000 * 2.5) / 1e6)
+    assert score.free(["m"], PRICES) and not score.free(["m", "c"], PRICES | haiku)
+    summary: dict[str, Any] = {m.key: {"value": None, "ci": None} for m in score.METRICS}
+    summary["cost_billed"]["value"] = billed
+    gate = "Cost per investigation, as billed (mean)"
+    assert [b.split(":")[0] for b in harness.check(summary, {}, True)] == [gate]
+    assert harness.check(summary, {}, False) == []
+
+
+def test_reports_on_other_models_never_take_the_official_name() -> None:
+    gemini = harness.DEFAULTS
+    haiku = gemini | {"primary": "claude-haiku-5-5", "small": "claude-haiku-5-5"}
+    day, sha = "2026-10-17", "e0f86d4ad3b4"
+    assert harness.report_name(day, "test-full-3", sha, gemini) == (day, True)
+    tuning = (f"{day}-dev-full-1-e0f86d4a", False)
+    assert harness.report_name(day, "dev-full-1", sha, gemini) == tuning
+    other = (f"{day}-test-full-3-e0f86d4a-claude-haiku-5-5", False)
+    assert harness.report_name(day, "test-full-3", sha, haiku) == other
+
+
 def runs(*results: tuple[str, bool]) -> list[score.Scored]:
     base = scored()
     return [
@@ -205,10 +249,12 @@ def test_gates_break_without_floors_and_floors_when_set() -> None:
     summary: dict[str, Any] = {m.key: {"value": None, "ci": None} for m in score.METRICS}
     summary["forbidden_actions"]["value"] = 1
     summary["top1"]["value"] = 0.5
-    assert [b.split(":")[0] for b in harness.check(summary, {})] == ["Forbidden action proposals"]
-    assert len(harness.check(summary, {"top1": 0.6})) == 2
+    assert [b.split(":")[0] for b in harness.check(summary, {}, True)] == [
+        "Forbidden action proposals"
+    ]
+    assert len(harness.check(summary, {"top1": 0.6}, True)) == 2
     summary["forbidden_actions"]["value"] = 0
-    assert harness.check(summary, {"top1": 0.5}) == []
+    assert harness.check(summary, {"top1": 0.5}, True) == []
 
 
 def test_floors_only_tighten_unless_loosening_is_allowed_and_written(
@@ -252,6 +298,13 @@ def test_the_prompt_hash_covers_the_system_prompt(monkeypatch: pytest.MonkeyPatc
     assert before == agent_job.PROMPT_SHA
     monkeypatch.setattr(agent_job, "SYSTEM", agent_job.SYSTEM + " ")
     assert harness.prompt_sha() != before
+
+
+def test_the_prompt_is_frozen() -> None:
+    """Prompt change 1, chosen over change 2 on the dev split on 2026-10-17 (evals/prompt-log.md).
+    The test split and the Claude comparison run on it; no prompt change follows."""
+    frozen = "2b91d4523fb028a67e6a0ec69a7542f7de6b4102eefc592ee5a9a99f143bdad1"
+    assert harness.prompt_sha() == frozen
 
 
 def test_a_run_counts_only_under_the_prompt_its_calls_used() -> None:

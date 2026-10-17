@@ -1,8 +1,11 @@
 import secrets
+from datetime import date
+from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from agent.main import create_app
 from agent.settings import Settings
@@ -31,6 +34,31 @@ def test_settings_hold_no_approver_key(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = load_settings(Settings)
     assert not [name for name in Settings.model_fields if "approver" in name]
     assert "approver-key-the-agent-must-not-load" not in settings.model_dump_json()
+
+
+def test_the_free_chain_is_the_default_and_claude_needs_its_key() -> None:
+    assert OFFLINE.claude() is None
+    keys = {"gemini_api_key": SecretStr("g"), "nvidia_api_key": SecretStr("n")}
+    on: dict[str, Any] = {
+        **OFFLINE.model_dump(),
+        **keys,
+        "ai_enabled": True,
+        "fastembed_cache_path": Path("cache"),
+        "llm_claude_fallback": True,
+    }
+    with pytest.raises(
+        ValidationError, match="ANTHROPIC_API_KEY is required by LLM_CLAUDE_FALLBACK"
+    ):
+        Settings(**on)
+    keyed: dict[str, Any] = {**on, "anthropic_api_key": SecretStr("sk-ant-test")}
+    claude = Settings(**keyed).claude()
+    assert claude is not None
+    assert (claude.name, claude.provider, claude.model) == (
+        "fallback",
+        "anthropic",
+        "claude-haiku-5-5",
+    )
+    assert (claude.until, claude.api_key) == (date(2026, 11, 10), "sk-ant-test")
 
 
 def test_settings_refuse_a_missing_or_short_service_token(monkeypatch: pytest.MonkeyPatch) -> None:

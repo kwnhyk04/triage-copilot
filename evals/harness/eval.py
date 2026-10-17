@@ -5,8 +5,9 @@ the full test split also writes the README's eval table.
     make eval SPLIT=dev|test RUNS=3 SUBSET=ci|full [ESTIMATE=1] [SET_FLOORS=1] [ALLOW_LOOSER=1]
 
 Exit codes: 0 every floor and gate holds; 1 a floor or a gate broke, which any forbidden proposal
-does; 2 the day's model quota ran out, so run the same command after midnight Pacific and it goes
-on from the parked run; 3 the stack or the setup is wrong.
+does; 2 the model's quota or credits ran out, so run the same command once they are back (Gemini
+after midnight Pacific, Claude with new credits) and it goes on from the parked run; 3 the stack
+or the setup is wrong.
 
 Each run is cached in evals/reports/runs/ under a key of the prompt hash, every pinned model id,
 the scenario file's sha256 and the run index: a changed prompt, model or scenario runs again, and
@@ -51,6 +52,7 @@ GAP = 60
 WITHIN = 900.0
 FAILED, QUOTA, SETUP = 1, 2, 3
 ROLES = ("primary", "fallback", "small")
+DEFAULTS = {role: str(Settings.model_fields[f"llm_{role}_model"].default) for role in ROLES}
 # Calls an investigation makes per role before any run measured it (docs/memory.md, 6a).
 GUESS = {"primary": 9.0, "small": 0.5}
 RUNBOOKS = {
@@ -101,8 +103,14 @@ CAVEATS = (
     "project wrote the scenarios, the tools and the labels. Prompts were tuned on the dev split "
     "only (evals/prompt-log.md), never on the test scenarios. 25 scenarios run 3 times is a "
     "small sample: the 95% intervals, which resample scenarios, are wide, and per-family figures "
-    "rest on 2 to 4 scenarios each. Costs are what the paid tier would charge for the same "
-    "tokens; the free tier billed nothing."
+    "rest on 2 to 4 scenarios each."
+)
+FREE_COST = (
+    "Costs are what the paid tier would charge for the same tokens; the free tier billed nothing."
+)
+CREDITS_COST = (
+    "Costs are what the run spent in Anthropic API credits; the $0-billed gate applies to the free "
+    "setup only."
 )
 START, END = "<!-- eval:start -->", "<!-- eval:end -->"
 Json = dict[str, Any]
@@ -122,12 +130,17 @@ def pinned() -> dict[str, str]:
         raise Setup("evals need LLM_FALLBACK_ON_RATE_LIMIT=false, for the agent and here")
     if os.environ.get("AI_ENABLED", "false").lower() != "true":
         raise Setup("evals need AI_ENABLED=true")
-    defaults = Settings.model_fields
-    return {
-        role: os.environ.get(f"LLM_{role.upper()}_MODEL")
-        or str(defaults[f"llm_{role}_model"].default)
-        for role in ROLES
-    }
+    return {role: os.environ.get(f"LLM_{role.upper()}_MODEL") or DEFAULTS[role] for role in ROLES}
+
+
+def report_name(today: str, scope: str, prompt: str, models: dict[str, str]) -> tuple[str, bool]:
+    """The report's name, and whether it is the official one: the full test split on the default
+    models, which also writes the README table. Tuning runs of one day keep a report per prompt,
+    and runs on other models their own."""
+    if scope.startswith("test-full-") and models == DEFAULTS:
+        return today, True
+    name = f"{today}-{scope}-{prompt[:8]}"
+    return (name if models == DEFAULTS else f"{name}-{models['primary']}"), False
 
 
 def key(prompt: str, models: dict[str, str], scenario_sha: str, index: int) -> str:
@@ -218,8 +231,9 @@ def execute(jobs: Sequence[Job], models: dict[str, str], prompt: str) -> int | N
                 state = {**run.start(job.scenario), "run": job.run, "key": job.key}
             save(job.state, state)
             if run.wait(UUID(state["investigation_id"]), WITHIN) == "quota":
-                say("quota stop: the day's model quota is spent; run the same command once it")
-                say("resets (midnight Pacific), and the eval goes on from this run")
+                say("quota stop: the model's quota or credits are spent; run the same command once")
+                say("they are back (Gemini: midnight Pacific; Claude: new credits, or next month")
+                say("after a spend limit), and the eval goes on from this run")
                 return QUOTA
             run.mirrored(state["investigation_id"])
             record = run.collect(state)
@@ -238,8 +252,17 @@ def execute(jobs: Sequence[Job], models: dict[str, str], prompt: str) -> int | N
 def estimate(jobs: Sequence[Job], models: dict[str, str]) -> None:
     """Calls each model still has to make against its daily quota, and the days that takes."""
     pending = [j for j in jobs if not j.result.exists()]
-    done = [load(p) for p in CACHE.glob("*-run*-*.json") if not p.name.endswith(".state.json")]
-    say(f"{len(jobs)} investigations planned, {len(pending)} to run ({len(done)} runs cached)")
+    cached = [load(p) for p in CACHE.glob("*-run*-*.json") if not p.name.endswith(".state.json")]
+    # Only runs whose agent ran on this primary model say how this one behaves.
+    done = [
+        r
+        for r in cached
+        if any(c["role"] == "primary" and c["model"] == models["primary"] for c in r["model_calls"])
+    ]
+    say(
+        f"{len(jobs)} investigations planned, {len(pending)} to run "
+        f"({len(done)} cached runs on {models['primary']})"
+    )
     agent_db, gateway_db = run.engines()
     gateway_db.dispose()
     with agent_db.connect() as conn:
@@ -258,8 +281,9 @@ def estimate(jobs: Sequence[Job], models: dict[str, str]) -> None:
         left = max(rpd - used[model], 0)
         days = 1 if needed <= left or not rpd else 1 + math.ceil((needed - left) / rpd)
         basis = f"measured over {len(counted)} runs" if counted else "a guess"
+        provider = os.environ.get(f"LLM_{role.upper()}_PROVIDER") or "gemini"
         say(
-            f"{role} gemini {model}: about {each:.1f} calls per investigation ({basis}), "
+            f"{role} {provider} {model}: about {each:.1f} calls per investigation ({basis}), "
             f"{needed} to make; {rpd} a day and {used[model]} used today: {days} quota day(s), "
             "today included"
         )
@@ -271,24 +295,29 @@ def estimate(jobs: Sequence[Job], models: dict[str, str]) -> None:
 
 def scored(jobs: Sequence[Job], manifest: Json) -> tuple[list[score.Scored], list[Json]]:
     loaded = load_scenarios(SET)
-    pricing = load(PRICING)
-    billed = pricing["billing"] != "free"
+    prices: dict[str, Json] = load(PRICING)["models"]
     runs: list[score.Scored] = []
     records: list[Json] = []
     for job in jobs:
         record = load(job.result)
         entry = manifest["scenarios"][job.scenario]
         labels = loaded[job.scenario].scenario.labels
-        prices = pricing["models"]
-        runs.append(score.score(record, labels, entry["family"], entry["down"], prices, billed))
+        runs.append(score.score(record, labels, entry["family"], entry["down"], prices))
         records.append(record)
     return runs, records
 
 
-def check(summary: dict[str, Json], floors: dict[str, float]) -> list[str]:
+def ungated(metric: score.Metric, free: bool) -> bool:
+    """The $0-billed gate holds the free setup only; a run on credits reports what it spent."""
+    return metric.key == "cost_billed" and not free
+
+
+def check(summary: dict[str, Json], floors: dict[str, float], free: bool) -> list[str]:
     """What broke: a floor, when the scope has floors, and the gates, always."""
     broke: list[str] = []
     for metric in score.METRICS:
+        if ungated(metric, free):
+            continue
         value = summary[metric.key]["value"]
         gate = metric.kind == "gate"
         limit = metric.target if gate else floors.get(metric.key)
@@ -364,10 +393,13 @@ def build_report(
     runs: list[score.Scored], records: list[Json], floors: dict[str, float], meta: Json
 ) -> Json:
     summary = score.summarize(runs)
+    free = meta["billing"] == "free"
     metrics: dict[str, Json] = {}
     for metric in score.METRICS:
         value = summary[metric.key]["value"]
-        result = score.passes(metric, value, metric.target)
+        off = ungated(metric, free)
+        result = None if off else score.passes(metric, value, metric.target)
+        floor = metric.target if metric.kind == "gate" else floors.get(metric.key)
         metrics[metric.key] = {
             "name": metric.name,
             "target": metric.target,
@@ -375,7 +407,7 @@ def build_report(
             "value": value,
             "ci": summary[metric.key]["ci"],
             "do_nothing": summary[metric.key]["do_nothing"],
-            "floor": metric.target if metric.kind == "gate" else floors.get(metric.key),
+            "floor": None if off else floor,
             "result": "n/a" if result is None else "pass" if result else "fail",
         }
     families: dict[str, Json] = {}
@@ -391,7 +423,7 @@ def build_report(
         **meta,
         "metrics": metrics,
         "proven_elsewhere": PROVEN,
-        "notes": [*NOTES, CAVEATS],
+        "notes": [*NOTES, f"{CAVEATS} {FREE_COST if free else CREDITS_COST}"],
         "approvals_during_eval": sum(r["approvals"] for r in records),
         "executions_during_eval": sum(r["executions"] for r in records),
         "resumed_runs": sum(bool(r["resumed"]) for r in records),
@@ -524,7 +556,8 @@ def readme_block(report: Json) -> str:
             f"| {row['name']} | {row['target']} | {row['measured']} | n/a | {row['result']} "
             f"(tests) | {row['date'] or report['date']} | n/a |"
         )
-    lines += ["", CAVEATS, "", NOTES[0], END]
+    # Only the default models, all free, write this table.
+    lines += ["", f"{CAVEATS} {FREE_COST}", "", NOTES[0], END]
     return "\n".join(lines)
 
 
@@ -567,6 +600,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"eval: {type(error).__name__}: {error}")
         return SETUP
     runs, records = scored(jobs, manifest)
+    free = score.free([models["primary"], models["small"]], load(PRICING)["models"])
     scope = f"{args.split}-{args.subset}-{args.runs}"
     summary = score.summarize(runs)
     if args.set_floors:
@@ -589,18 +623,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "models": models,
         "models_text": f"{models['primary']} (agent), {models['small']} (log summaries), "
         "no fallback",
+        "billing": "free" if free else "credits",
         "prompt_sha256": prompt,
         "embedding": records[0]["embedding"] if records else None,
     }
     report = build_report(runs, records, floors, meta)
-    official = (args.split, args.subset) == ("test", "full")
-    # Tuning runs of one day keep a report per prompt.
-    name = today if official else f"{today}-{scope}-{prompt[:8]}"
+    name, official = report_name(today, scope, prompt, models)
     save(REPORTS / f"{name}.json", report)
     (REPORTS / f"{name}.md").write_text(markdown(report), encoding="utf-8")
     if official:
         update_readme(report)
-    broke = check(summary, floors)
+    broke = check(summary, floors, free)
     for line in broke:
         say(f"broke: {line}")
     say(f"report: evals/reports/{name}.md")

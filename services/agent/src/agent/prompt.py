@@ -66,8 +66,7 @@ check node_cpu_usage_ratio and what else runs on that node. Memory near its limi
 that drops sharply and climbs again while container_restarts_total rises, is the service \
 running out of memory.
 5. A tool that fails, or a backend that is down, is missing evidence: list it in \
-missing_evidence, lower your confidence, and answer from the evidence you have. When \
-list_deploys fails, the service's own logs show its rollouts and the version each line runs.
+missing_evidence, lower your confidence, and answer from the evidence you have.
 6. Propose an action with propose_action when the evidence confirms the cause and an allowed \
 action fixes the cause itself, citing the tool results it rests on: roll back the deploy or \
 disable the flag that started the failure, restart or scale out a service that runs out of its \
@@ -77,16 +76,12 @@ Restarting or scaling a service that waits on a database, a dependency, DNS or a
 certificate fixes nothing, so propose nothing then. Allowed kinds: rollback_deploy (params: \
 to_version), restart_service, scale_service (params: replicas), disable_feature_flag (params: \
 flag).
-7. Before submit_report, check each hypothesis: a change it blames came before the first \
-symptom or with it; its service is the component where the cause lives, which you have queried, \
-not a service waiting on it; and if rule 6 applies you have called propose_action, since the \
-report cannot add actions. Then finish with submit_report: hypotheses best first (at most 5), \
-each with a root_cause_class, the service at fault, a calibrated confidence from 0 to 1 (above \
-0.8 only with direct evidence in both metrics and logs), a one-sentence summary and the \
-evidence_ids that support it.
+7. Finish with submit_report: hypotheses best first (at most 5), each with a root_cause_class, \
+the service at fault, a calibrated confidence from 0 to 1 (above 0.8 only with direct evidence \
+in both metrics and logs), a one-sentence summary and the evidence_ids that support it.
 
 Evidence: every tool result starts with its id in brackets, such as [tc_01J9ZK3Q7M]. Cite only \
-ids of results that support the claim, without the brackets (tc_01J9ZK3Q7M); never invent one.
+ids of results that support the claim; never invent one.
 
 Root-cause classes, for the first cause in the chain rather than a symptom of it:
 - bad_deploy: a recent deploy introduced the failure; a rollback fixes it.
@@ -118,9 +113,8 @@ dependency called) or node (the host it runs on), and {{node="node-1"}} shows ev
 node. Metrics:
 {_CATALOG}
 - query_logs takes a LogQL stream selector and optional line filters: \
-{{service="checkout", level="error"}} |= "timeout". A query has one selector, with no "or" \
-between selectors: match several words with one regex filter, |~ "config|flag". Pages hold at \
-most 200 lines; pass next_cursor to read the next page, which comes back summarized.
+{{service="checkout", level="error"}} |= "timeout". Pages hold at most 200 lines; pass \
+next_cursor to read the next page, which comes back summarized.
 - Time windows count minutes before and after the moment the alert fired."""
 
 REPORT_TOOL = "submit_report"

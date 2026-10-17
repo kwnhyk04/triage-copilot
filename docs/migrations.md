@@ -2,6 +2,15 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-17: Claude credits and cache writes on model calls (agent 0009)
+
+- Expand only, under `lock_timeout` 3 s:
+  - `agent.model_call_outcome` gains `credits_exhausted`, added in the revision's transaction (Postgres 12+); nothing uses it before the commit.
+  - `agent.model_calls.cache_write_tokens integer NOT NULL DEFAULT 0`: a constant default changes the catalog and rewrites no rows.
+- The agent records a `credits_exhausted` call when Anthropic says Claude's credits or spend limit are used up; `agent.llm.spent()` keeps Claude off until the month ends (UTC). It writes cache writes on every call; only Claude reports them.
+- Rows from before 0009 hold 0 cache writes, which is what Gemini's implicit caching bills, so no backfill or contract phase follows. The eval reads a missing value as 0.
+- The downgrade drops the column and rebuilds the enum without the value: `credits_exhausted` rows become `quota_exhausted`, which ends at midnight Pacific instead of the month's end.
+
 ## 2026-10-16: Prompt sha on model calls (agent 0008)
 
 - Expand only: a nullable `agent.model_calls.prompt_sha text` (`lock_timeout` 3 s), which rewrites no rows.

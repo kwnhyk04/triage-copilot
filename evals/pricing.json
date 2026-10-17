@@ -1,22 +1,31 @@
 {
-  "source": "https://ai.google.dev/gemini-api/docs/pricing",
-  "page_updated": "2026-10-15",
-  "checked": "2026-10-16",
-  "rates": "Standard paid tier, USD per 1M tokens. Input counts cached tokens, which bill at cached_input; output includes thinking tokens.",
-  "billing": "free",
-  "billing_note": "The project runs on the free tier with no billing account, so every call bills $0; cost_paid is what the same tokens would cost on the paid tier.",
+  "rates": "USD per 1M tokens. Input counts cache reads and cache writes, which bill at cached_input and cache_write; output includes thinking tokens.",
+  "billing_note": "billing free: the free tier, with no billing account, bills $0, and cost_paid is what the same tokens would cost on the paid tier. billing credits: prepaid Anthropic API credits pay for every token, so cost_billed is what the run spent, and the $0-billed gate applies to the free setup only.",
   "models": {
     "gemini-3.5-flash-lite": {
+      "source": "https://ai.google.dev/gemini-api/docs/pricing (updated 2026-10-15, checked 2026-10-16), standard paid tier",
+      "billing": "free",
       "version": "3.5-flash-lite-07-2026",
       "input": 0.3,
       "cached_input": 0.03,
       "output": 2.5
     },
     "gemini-3.1-flash-lite": {
+      "source": "https://ai.google.dev/gemini-api/docs/pricing (updated 2026-10-15, checked 2026-10-16), standard paid tier",
+      "billing": "free",
       "version": "3.1-flash-lite-05-2026",
       "input": 0.25,
       "cached_input": 0.025,
       "output": 1.5
+    },
+    "claude-haiku-5-5": {
+      "source": "the user (2026-10-17): $0.10 in and $0.50 out for prompts up to 100K tokens; cache reads 0.1x and 5-minute cache writes 1.25x the input rate (Claude API pricing, as of 2026-10-06)",
+      "billing": "credits",
+      "input": 0.1,
+      "cached_input": 0.01,
+      "cache_write": 0.125,
+      "output": 0.5,
+      "note": "Prompts over 100K tokens bill $0.50 and $2.50; none reaches that, since the 150,000-token cap counts every earlier prompt and a tool result adds at most 24 KB."
     }
   }
 }

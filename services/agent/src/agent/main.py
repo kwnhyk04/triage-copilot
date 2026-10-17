@@ -14,13 +14,13 @@ from sqlalchemy import Engine, create_engine, text
 from agent.api import add_internal_api
 from agent.consumer import Consumer, sqs_client
 from agent.job import Job
-from agent.llm import Binding, Limiter, Router, calls_today
+from agent.llm import Binding, Limiter, Router, spent
 from agent.model import Model, ScriptedModel
 from agent.outbox import Relay, sqs_sender
 from agent.partitions import maintain_partitions
 from agent.providers import make_provider
 from agent.runbooks import FastEmbedder, RunbookSearch
-from agent.settings import Settings
+from agent.settings import Role, Settings
 from agent.tools import Tools
 from py_clients.clients import AlertContextClient
 from py_config import ConfigError, load_settings
@@ -33,19 +33,21 @@ SIM_TIMEOUT = 10.0
 
 
 def make_router(settings: Settings, engine: Engine) -> Router:
-    """The primary, fallback and small roles, each under its own free-tier limits."""
+    """The primary, fallback and small roles, and Claude when it is on, each under its limits."""
 
-    def count_today(model: str) -> int:
+    def is_spent(role: Role) -> bool:
         with engine.connect() as conn:
-            return calls_today(conn, model)
+            return spent(conn, role)
 
     primary, fallback, small = (settings.role(n) for n in ("primary", "fallback", "small"))
+    claude = settings.claude()
     return Router(
         Binding(primary, make_provider(primary)),
         Binding(fallback, make_provider(fallback)),
         Binding(small, make_provider(small)),
         fallback_on_rate_limit=settings.llm_fallback_on_rate_limit,
-        limiter=Limiter(count_today),
+        limiter=Limiter(is_spent),
+        claude=Binding(claude, make_provider(claude)) if claude else None,
     )
 
 

@@ -26,6 +26,8 @@ make install
 make dev
 ```
 
+Model calls (`AI_ENABLED=true`) run on Gemini's free tier, falling back to NVIDIA NIM. With `LLM_CLAUDE_FALLBACK=true` and `ANTHROPIC_API_KEY` in `.env`, Claude Haiku 5.5 comes between them, paid from Anthropic API credits until `LLM_CLAUDE_UNTIL`.
+
 `make install` also installs the gitleaks pre-commit hook, which blocks commits that stage secrets. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
 
 ## Usage
@@ -43,7 +45,7 @@ make dev
 | `make contracts-breaking` | oasdiff breaking-change check of both OpenAPI specs against `CONTRACTS_BASE` (default `HEAD`; needs Docker) |
 | `make migrate` | Drizzle (gateway) and Alembic (agent) migrations; see `docs/migrations.md` |
 | `make seed` | The same fake history every run in both schemas; `SEED_ARGS=--reset` replaces existing rows, `SEED_ARGS=--large` tops the agent up to 2,000,000 steps |
-| `make eval` | The eval against the running stack (`make dev` with `AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`): `SPLIT=dev\|test`, `SUBSET=ci\|full`, `RUNS`; `ESTIMATE=1` prints the quota days, `SET_FLOORS=1` writes the floors. See `evals/README.md` |
+| `make eval` | The eval against the running stack (`make dev` with `AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`, the agent started with `AGENT_RELOAD=` so no edit restarts it): `SPLIT=dev\|test`, `SUBSET=ci\|full`, `RUNS`; `ESTIMATE=1` prints the quota days, `SET_FLOORS=1` writes the floors. See `evals/README.md` |
 | `make scenarios-check` | Validates every scenario set and fails when a released set's file changed against `SCENARIOS_BASE` (default `HEAD`) |
 | `make embed-model` | Downloads the runbook embedding model (nomic-embed-text-v1.5, about 0.5 GB) into `FASTEMBED_CACHE_PATH`; the only command that downloads it |
 | `make runbooks` | Embeds `runbooks/*.md` into `agent.runbook_chunks` for `search_runbooks` |

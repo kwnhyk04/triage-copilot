@@ -198,12 +198,22 @@ class ModelCall(Base):
     provider: Mapped[str]
     model: Mapped[str]
     outcome: Mapped[str] = mapped_column(
-        Enum("ok", "rate_limited", "quota_exhausted", "error", name="model_call_outcome")
+        Enum(
+            "ok",
+            "rate_limited",
+            "quota_exhausted",
+            "credits_exhausted",
+            "error",
+            name="model_call_outcome",
+        )
     )
+    # All input tokens, cached ones included.
     input_tokens: Mapped[int]
     # Thinking tokens included: they are billed as output.
     output_tokens: Mapped[int]
+    # Of the input: read from the provider's prompt cache, and written to it (since 0009).
     cached_tokens: Mapped[int]
+    cache_write_tokens: Mapped[int] = mapped_column(server_default="0")
     thought_tokens: Mapped[int]
     # The hard cap's upper bound on input_tokens, kept to check that it held.
     input_bound: Mapped[int | None]

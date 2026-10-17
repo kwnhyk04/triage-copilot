@@ -15,6 +15,50 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-17: Test split on Gemini, day 1, and the Prettier ignore lines
+
+- Changes:
+  - `.prettierignore` skips the frozen scenario YAMLs (`evals/scenarios/**/*.yaml`) and the eval reports (`evals/reports/`) rather than reformat them, since reformatting would change the scenarios' sha256. The config-protection hook blocked the agent's edit; the user added the lines.
+  - The test split started on the frozen prompt: infra, sim, gateway, then the agent with `AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=3000000`, then `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`.
+  - docs/todo.md holds the exact resume steps.
+- Files: .prettierignore (the user's edit), docs/ (todo.md, context.md, memory.md, activity-log.md), evals/README.md
+- Validation:
+  - With the lines in `.prettierignore`, `make lint` passes (exit 0): ESLint, `prettier --check .`, `ruff check .` and `ruff format --check .`.
+  - Test split: 9 of 75 runs done, all on gemini-3.5-flash-lite, then exit 2 at dns-partition-2 run 1, which parked with no steps when the UTC day's token budget ran out (3,050,302 of 3,000,000 tokens; the Claude dev pass had used 1.59 million of them). Gemini had answered 230 of its 260 requests since midnight Pacific; every call in the run was answered.
+  - Gateway, web, agent and sim stopped by process tree, no process left on their ports; `make infra-down`, with the `pgdata` and `elasticmq-data` volumes kept.
+- Outstanding: 66 runs, about 3 quota days, from the resume steps in docs/todo.md; then the floors and the Claude comparison. Nothing is committed.
+
+### 2026-10-17: Claude Haiku 5.5 as the first fallback, and its dev split run
+
+- Changes:
+  - `agent/providers.py`: `AnthropicProvider` on the official anthropic SDK (1.15.0, added to the agent), native tool use with a forced `tool_choice` and parallel calls off, one cache breakpoint on the system prompt (caching it and the tool definitions), `max_retries=0`, explicit key and base URL, spans pinned to `metadata_only`. Errors: a 402 `billing_error`, a 400 naming a spend or usage limit, or a 429 without retry-after raise `CreditsExhausted`; a 429 with retry-after `RateLimited`; a refusal is not retried. Usage counts cache reads and writes into the input.
+  - `agent/llm.py`: the chain Gemini, then Claude (`LLM_CLAUDE_FALLBACK`, default false), then the free fallback, for turns and for summaries; Claude's 429 with retry-after goes back to the job to retry. `spent()` replaces `Limiter.spent`: Claude from `LLM_CLAUDE_UNTIL` (2026-11-10) on, RPD, Google's daily quota, and a `credits_exhausted` call this month (UTC), with a warning log line. The limiter refuses a spent role before any request.
+  - `agent/settings.py`, `.env.example`, `Makefile`: provider `anthropic`, `LLM_CLAUDE_FALLBACK|MODEL|RPM|UNTIL`, `ANTHROPIC_API_KEY` (passed to the agent alone), and `AGENT_RELOAD` for `make dev-agent`.
+  - Agent migration 0009 (expand only): outcome `credits_exhausted`, `model_calls.cache_write_tokens` (docs/migrations.md).
+  - Harness: per-model billing in `evals/pricing.json` (Haiku $0.10 in, $0.01 cache reads, $0.125 cache writes, $0.50 out, `credits`); `cost_billed` gated at $0 on the free setup only; reports on other models named `...-<model>` and never written to the README; `estimate()` counts only runs on the pinned primary model.
+  - The dev split once with `claude-haiku-5-5` pinned for the agent and summaries, on the frozen prompt, without tuning.
+- Files: services/agent (pyproject.toml, src/agent/providers.py, llm.py, model.py, settings.py, main.py, db.py, job.py, migrations/versions/0009_model_calls_credits.py, tests/test_providers.py, test_llm.py, test_agent_api.py, test_workers_int.py), uv.lock, evals/harness (eval.py, score.py, run.py, test_eval_score.py), evals/pricing.json, evals/reports/2026-10-17-dev-full-1-2b91d452-claude-haiku-5-5.{json,md}, evals/README.md, Makefile, .env.example, docs/
+- Validation:
+  - Tests for each case: 402, a 400 naming the spend limit and a 429 without retry-after raise `CreditsExhausted`; a 429 with retry-after raises `RateLimited` with its delay, and the router asks Claude again; credits gone move the turn to the free fallback with a warning, and a spent Claude is never asked; the chain order; evals never reach Claude; summaries go to Claude while the small model is rate limited; Claude is spent from its end date; a `credits_exhausted` call holds parked work until the month ends (integration); the key and URL win over the environment; the free chain is the default and Claude needs its key.
+  - Python unit tests 400 passed; `make test-int`: Jest 33 and pytest 41 passed; ruff and pyright clean. `make migrate` took the dev database to 0009.
+  - Haiku dev pass (`reports/2026-10-17-dev-full-1-2b91d452-claude-haiku-5-5.md`), exit 0: top-1 0.80, grounding 0.80, action correctness 0.80 (do-nothing 0.53), 0.57 with an acceptable action, 0 forbidden, validity 1.00, tool calls median 10, tokens median 109,442, p95 24 s. All 169 calls answered; one 5,036-token cache write, 846,048 tokens read from the cache; no input above its bound. 11 of 15 runs reached the token reserve. Credits: $0.0971 ($0.0065 per investigation).
+  - Test-split estimates (no calls): Gemini about 795 requests (10.6 per investigation), 3 full quota days plus a few requests; Haiku about 846 calls, 1.7 hours, about $0.49.
+- Outstanding: the test split on Gemini, floors, then the Haiku comparison on the test split before 2026-11-10 (docs/todo.md). Gateway, web, agent and sim are stopped and the compose infra is down. Nothing is committed.
+
+### 2026-10-17: Step 6b, change 2's dev pass and the prompt freeze
+
+- Changes:
+  - Stack restarted in the order the parked run needs: sim, bad-deploy-1's saved world (its anchor and seed, through `run.resume`), gateway, then the agent with `DAILY_AI_TOKEN_BUDGET=3000000` on its command line only and no reloader. The resumed run recorded prompt sha `e0f86d4ad3b47b1c` on every new call.
+  - Change 2's dev pass finished: 13 runs and the resumed one, 129 requests, all answered.
+  - Change 1 won on every accuracy metric, so `prompt.py` and `model.py` went back to it by undoing change 2's six edits (taken from the previous session's transcript; no commit held change 1), which gives its sha `2b91d4523fb028a6` byte for byte. `test_the_prompt_is_frozen` pins the full sha; `evals/prompt-log.md` logs the choice.
+  - The ci subset scored on the frozen prompt from cached runs, with no model calls.
+- Files: services/agent/src/agent (prompt.py, model.py), evals/prompt-log.md, evals/harness/test_eval_score.py, evals/reports (2026-10-17-dev-full-1-e0f86d4a, 2026-10-17-dev-ci-1-2b91d452), evals/README.md, docs/
+- Validation:
+  - Change 2 (`reports/2026-10-17-dev-full-1-e0f86d4a.md`), eval exit 1 on the forbidden-proposal gate: top-1 0.53, grounding 0.80, action correctness 0.60, 0.29 with an acceptable action, 2 forbidden proposals, validity 0.97, degraded top-1 0.00; change 1 had 0.73, 0.93, 0.73, 0.43, 0, 0.98 and 0.50.
+  - ci subset on the frozen prompt (`reports/2026-10-17-dev-ci-1-2b91d452.md`): top-1 0.62, grounding 0.88, action correctness 0.75 (do-nothing 0.50), 0 forbidden.
+  - The source's prompt sha is `2b91d4523fb028a67e6a0ec69a7542f7de6b4102eefc592ee5a9a99f143bdad1`, equal to the cached change-1 runs' key.
+- Outstanding: none for tuning; the prompt is frozen.
+
 ### 2026-10-16: Quota stop, measured RPD and the per-run prompt check (no quota used)
 
 - Changes:

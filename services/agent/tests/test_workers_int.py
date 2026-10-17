@@ -8,7 +8,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -687,3 +687,55 @@ def test_a_day_the_provider_called_spent_holds_parked_work_until_midnight_pacifi
         conn.execute(update(ModelCall).values(created_at=func.now() - timedelta(days=1)))
     with engine.connect() as conn:
         assert job.resumable(conn, inv, "budget", TENANT, new=False)
+
+
+def test_claude_credits_gone_hold_parked_work_until_the_month_ends(engine: Engine) -> None:
+    """Credits gone keep Claude off for the rest of the month (UTC), and its credits' end date
+    for good: an eval pinned to Claude stays parked and stops with exit 2, with no second call."""
+    unused = cast("Provider", object())
+    today = datetime.now(UTC).date()
+
+    def job_until(until: date) -> Job:
+        haiku = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, until=until)
+        small = Role("small", "anthropic", "claude-haiku-5-5", None, 0, 0, until=until)
+        router = Router(
+            Binding(haiku, unused),
+            None,
+            Binding(small, unused),
+            fallback_on_rate_limit=False,
+            limiter=Limiter(None),
+        )
+        return make_job(engine, Tools().all(), router)
+
+    job = job_until(today + timedelta(days=60))
+    inv = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(insert(Investigation).values(id=inv))
+        conn.execute(
+            insert(ModelCall).values(
+                investigation_id=inv,
+                role="primary",
+                provider="anthropic",
+                model="claude-haiku-5-5",
+                outcome="credits_exhausted",
+                input_tokens=0,
+                output_tokens=0,
+                cached_tokens=0,
+                thought_tokens=0,
+                latency_ms=300,
+                error="CreditsExhausted: anthropic 402: credits or spend limit used up",
+            )
+        )
+    month = "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"
+    with engine.begin() as conn:
+        # Still this month: a credits stop outlasts the quota day.
+        conn.execute(update(ModelCall).values(created_at=text(month)))
+    with engine.connect() as conn:
+        assert not job.resumable(conn, inv, "budget", TENANT, new=False)
+    with engine.begin() as conn:
+        last_month = text(f"{month} - interval '1 second'")
+        conn.execute(update(ModelCall).values(created_at=last_month))
+    with engine.connect() as conn:
+        assert job.resumable(conn, inv, "budget", TENANT, new=False)
+        # From the day the credits expire, Claude is spent whatever the calls say.
+        assert not job_until(today).resumable(conn, inv, "budget", TENANT, new=False)

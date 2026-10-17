@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -7,12 +8,13 @@ from pydantic import Field, SecretStr, model_validator
 from py_config import EnvSettings
 from py_telemetry import LogLevel
 
-Provider = Literal["gemini", "nvidia", "openrouter", "ollama"]
+Provider = Literal["gemini", "anthropic", "nvidia", "openrouter", "ollama"]
 RoleName = Literal["primary", "fallback", "small"]
 ROLES: tuple[RoleName, ...] = ("primary", "fallback", "small")
 # Each provider's key setting; ollama runs locally without one.
 KEY_SETTINGS: dict[Provider, str | None] = {
     "gemini": "gemini_api_key",
+    "anthropic": "anthropic_api_key",
     "nvidia": "nvidia_api_key",
     "openrouter": "openrouter_api_key",
     "ollama": None,
@@ -21,7 +23,8 @@ KEY_SETTINGS: dict[Provider, str | None] = {
 
 @dataclass(frozen=True)
 class Role:
-    """One model role: where to call it, with which key, and its free-tier limits (0: none)."""
+    """One model role: where to call it, with which key, its free-tier limits (0: none), and for
+    Claude the day its API credits expire, from which on (UTC) it is never called."""
 
     name: RoleName
     provider: Provider
@@ -30,6 +33,7 @@ class Role:
     rpm: int
     rpd: int
     api_key: str | None = field(default=None, repr=False)
+    until: date | None = None
 
 
 class Settings(EnvSettings):
@@ -78,7 +82,14 @@ class Settings(EnvSettings):
     llm_small_rpd: Annotated[int, Field(ge=0)] = 500
     # A 429 or a spent daily quota on the primary moves the turn to the fallback; evals set false.
     llm_fallback_on_rate_limit: bool = True
+    # Claude as the first fallback of every role, after Gemini and before the free fallbacks,
+    # while its API credits last and before LLM_CLAUDE_UNTIL (UTC). Off by default: free only.
+    llm_claude_fallback: bool = False
+    llm_claude_model: str = "claude-haiku-5-5"
+    llm_claude_rpm: Annotated[int, Field(ge=0)] = 50
+    llm_claude_until: date = date(2026, 11, 10)
     gemini_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     # Local embedding model cache for search_runbooks; it must be set (on H:) whenever model calls
@@ -97,6 +108,8 @@ class Settings(EnvSettings):
             key = KEY_SETTINGS[getattr(self, f"llm_{name}_provider")]
             if key is not None and getattr(self, key) is None:
                 raise ValueError(f"{key.upper()} is required by LLM_{name.upper()}_PROVIDER")
+        if self.llm_claude_fallback and self.anthropic_api_key is None:
+            raise ValueError("ANTHROPIC_API_KEY is required by LLM_CLAUDE_FALLBACK")
         return self
 
     def role(self, name: RoleName) -> Role:
@@ -111,4 +124,21 @@ class Settings(EnvSettings):
             rpm=getattr(self, f"llm_{name}_rpm"),
             rpd=getattr(self, f"llm_{name}_rpd"),
             api_key=secret.get_secret_value() if secret else None,
+            until=self.llm_claude_until if provider == "anthropic" else None,
+        )
+
+    def claude(self) -> Role | None:
+        """The Claude fallback, when LLM_CLAUDE_FALLBACK turns it on; it has no daily cap."""
+        if not self.llm_claude_fallback:
+            return None
+        secret = self.anthropic_api_key
+        return Role(
+            name="fallback",
+            provider="anthropic",
+            model=self.llm_claude_model,
+            base_url=None,
+            rpm=self.llm_claude_rpm,
+            rpd=0,
+            api_key=secret.get_secret_value() if secret else None,
+            until=self.llm_claude_until,
         )

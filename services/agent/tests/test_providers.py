@@ -1,4 +1,4 @@
-"""Both providers against recorded-shape responses: auth, request shape, usage and errors."""
+"""The providers against recorded-shape responses: auth, request shape, usage and errors."""
 
 import asyncio
 import base64
@@ -8,8 +8,17 @@ from typing import Any
 import httpx2
 import pytest
 
-from agent.model import Message, ModelError, QuotaExhausted, RateLimited, ToolCallPart, ToolSpec
-from agent.providers import UNSIGNED, GeminiProvider, OpenAICompatibleProvider
+from agent.model import (
+    CreditsExhausted,
+    Message,
+    ModelError,
+    QuotaExhausted,
+    RateLimited,
+    ToolCallPart,
+    ToolResultPart,
+    ToolSpec,
+)
+from agent.providers import UNSIGNED, AnthropicProvider, GeminiProvider, OpenAICompatibleProvider
 
 TOOLS = [ToolSpec("query_metrics", "Metrics.", {"type": "object", "properties": {}})]
 HISTORY = [
@@ -40,12 +49,14 @@ GEMINI_REPLY = {
 }
 
 
-def recorder(status: int, body: Any) -> tuple[list[httpx2.Request], httpx2.AsyncClient]:
+def recorder(
+    status: int, body: Any, headers: dict[str, str] | None = None
+) -> tuple[list[httpx2.Request], httpx2.AsyncClient]:
     seen: list[httpx2.Request] = []
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
-        return httpx2.Response(status, json=body)
+        return httpx2.Response(status, json=body, headers=headers)
 
     return seen, httpx2.AsyncClient(transport=httpx2.MockTransport(handle))
 
@@ -165,3 +176,132 @@ def test_openai_compatible_failures_keep_their_usage_and_retry_after() -> None:
     with pytest.raises(RateLimited) as raised:
         asyncio.run(limited.generate("system", HISTORY, TOOLS, None, 300))
     assert raised.value.retry_after == 9.0
+
+
+CLAUDE_REPLY: dict[str, Any] = {
+    "id": "msg_01",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [
+        {"type": "tool_use", "id": "toolu_01", "name": "query_metrics", "input": {"query": "up"}}
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": None,
+    "usage": {
+        "input_tokens": 300,
+        "output_tokens": 40,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 2_500,
+    },
+}
+
+
+def claude(
+    status: int, body: Any, headers: dict[str, str] | None = None
+) -> tuple[list[httpx2.Request], AnthropicProvider]:
+    seen, http = recorder(status, body, headers)
+    provider = AnthropicProvider("claude-haiku-5-5", "sk-ant-right", "https://claude.test", http)
+    return seen, provider
+
+
+def test_claude_sends_its_key_and_caches_the_system_prompt_and_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "wrong-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "wrong-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://wrong.test")
+    seen, provider = claude(200, CLAUDE_REPLY)
+    result = ToolResultPart("tc_0000000001", "query_metrics", "[tc_0000000001] up 1")
+    history = [*HISTORY, Message("tool", result=result)]
+
+    turn = asyncio.run(provider.generate("system", history, TOOLS, None, 512))
+
+    request = seen[0]
+    assert request.headers["x-api-key"] == "sk-ant-right"
+    assert "authorization" not in request.headers
+    assert str(request.url) == "https://claude.test/v1/messages"
+    body = json.loads(request.content)
+    cached = {"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}
+    schema: dict[str, Any] = {"type": "object", "properties": {}}
+    assert body["system"] == [cached]
+    assert body["tools"] == [
+        {"name": "query_metrics", "description": "Metrics.", "input_schema": schema}
+    ]
+    assert body["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    assert (body["model"], body["max_tokens"]) == ("claude-haiku-5-5", 512)
+    use = {
+        "type": "tool_use",
+        "id": "tc_0000000001",
+        "name": "query_metrics",
+        "input": {"query": "x"},
+    }
+    back = {
+        "type": "tool_result",
+        "tool_use_id": "tc_0000000001",
+        "content": "[tc_0000000001] up 1",
+    }
+    assert body["messages"][1:] == [
+        {"role": "assistant", "content": [use]},
+        {"role": "user", "content": [back]},
+    ]
+    assert (turn.tool, turn.args) == ("query_metrics", {"query": "up"})
+    # input_tokens counts only what follows the cache breakpoint; the token cap needs it all.
+    usage = (turn.usage.input, turn.usage.cached, turn.usage.cache_writes, turn.usage.output)
+    assert usage == (2_800, 2_500, 0, 40)
+
+
+def test_claude_forces_the_report_and_summarizes_without_thinking() -> None:
+    seen, provider = claude(200, CLAUDE_REPLY)
+    asyncio.run(provider.generate("system", HISTORY, TOOLS, ("submit_report",), 4_096))
+    choice = json.loads(seen[0].content)["tool_choice"]
+    assert choice == {"type": "tool", "name": "submit_report", "disable_parallel_tool_use": True}
+
+    text = {"content": [{"type": "text", "text": "- 40 timeouts"}], "stop_reason": "end_turn"}
+    seen, provider = claude(200, CLAUDE_REPLY | text)
+    summary, usage = asyncio.run(provider.complete("Summarize.", "lines", 400))
+    body = json.loads(seen[0].content)
+    assert (body["thinking"], body["max_tokens"]) == ({"type": "disabled"}, 400)
+    assert (summary, usage.input) == ("- 40 timeouts", 2_800)
+
+
+LIMITS = "You have reached your specified API usage limits. You will regain access on 2026-11-01."
+BUSY = "This request would exceed your organization's rate limit."
+
+
+@pytest.mark.parametrize(
+    ("status", "kind", "message", "headers", "error"),
+    [
+        (402, "billing_error", "Your credit balance is too low.", None, CreditsExhausted),
+        (400, "invalid_request_error", LIMITS, None, CreditsExhausted),
+        (429, "rate_limit_error", BUSY, None, CreditsExhausted),
+        (429, "rate_limit_error", BUSY, {"retry-after": "7"}, RateLimited),
+        (400, "invalid_request_error", "messages: roles must alternate", None, ModelError),
+        (529, "overloaded_error", "Overloaded", None, ModelError),
+    ],
+)
+def test_claude_tells_credits_gone_from_a_busy_minute(
+    status: int, kind: str, message: str, headers: dict[str, str] | None, error: type[ModelError]
+) -> None:
+    body = {"type": "error", "error": {"type": kind, "message": message}}
+    _, provider = claude(status, body, headers)
+
+    with pytest.raises(ModelError) as raised:
+        asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
+
+    assert type(raised.value) is error
+    assert raised.value.retry_after == (7.0 if headers else None)
+    # Only an overloaded or failing server is worth asking again.
+    assert raised.value.retryable is (error is not ModelError or status >= 500)
+
+
+def test_a_claude_refusal_is_not_retried() -> None:
+    details = {"type": "refusal", "category": "cyber", "explanation": None}
+    refused: dict[str, Any] = {"content": [], "stop_reason": "refusal", "stop_details": details}
+    _, provider = claude(200, CLAUDE_REPLY | refused)
+
+    with pytest.raises(ModelError) as raised:
+        asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
+
+    assert raised.value.retryable is False
+    assert raised.value.usage.input == 2_800
