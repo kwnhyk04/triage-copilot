@@ -1,0 +1,17 @@
+# Never in an image: local settings and secrets, git history, installed dependencies, caches and
+# eval output. The build contexts are the repo root.
+.env
+.env.*
+!.env.example
+.git
+.github
+**/node_modules
+**/.venv
+**/.next
+**/.turbo
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.tsbuildinfo
+evals/reports

@@ -1,0 +1,127 @@
+name: eval
+
+# Off until the repository variable EVAL_ENABLED is true: scheduled runs are skipped and a manual
+# run fails at once. Its model calls spend the same free Gemini quota as the local evals. A quota
+# stop fails the run; it is never a pass. CI never calls Claude.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: The ci subset (8 runs, about 85 Gemini requests) or the full dev split (15 runs, about 160)
+        type: choice
+        options:
+          - ci subset
+          - full dev split
+        default: ci subset
+  schedule:
+    # Mondays 18:00 UTC: the ci subset, about 85 of Gemini's 260 requests a day.
+    - cron: '0 18 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    if: github.event_name == 'workflow_dispatch' || vars.EVAL_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.scope == 'full dev split' && 100 || 60 }}
+    env:
+      LLM_CLAUDE_FALLBACK: 'false'
+    steps:
+      - name: The eval is on
+        env:
+          ENABLED: ${{ vars.EVAL_ENABLED }}
+        run: |
+          if [ "$ENABLED" != true ]; then
+            echo "::error title=Eval off::The eval is off: set the repository variable EVAL_ENABLED=true to turn it on."
+            exit 1
+          fi
+      - name: CI never calls Claude
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ "$LLM_CLAUDE_FALLBACK" != false ]; then
+            echo "::error::CI must never call Claude: ANTHROPIC_API_KEY is set or LLM_CLAUDE_FALLBACK is on."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Embedding model cache path
+        run: echo "FASTEMBED_CACHE_PATH=$RUNNER_TEMP/fastembed" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        id: model
+        with:
+          path: ${{ env.FASTEMBED_CACHE_PATH }}
+          key: fastembed-nomic-embed-text-v1.5-e9b6763-${{ hashFiles('uv.lock') }}
+      - name: Download the embedding model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: make embed-model
+      - name: Infra, migrations and runbooks
+        run: |
+          make infra-up
+          for _ in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1:4566/ && break
+            sleep 1
+          done
+          make migrate
+          make runbooks
+      - name: Start the sim and the gateway
+        run: |
+          mkdir -p logs
+          nohup make dev-sim > logs/sim.log 2>&1 &
+          echo "SIM_PID=$!" >> "$GITHUB_ENV"
+          nohup make dev-ts > logs/gateway.log 2>&1 &
+          echo "GATEWAY_PID=$!" >> "$GITHUB_ENV"
+      - name: Start the agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # The startup check wants every role's key, but evals never call the fallback: a call
+          # with this placeholder fails loudly instead of spending shared credits.
+          NVIDIA_API_KEY: ci-unused-not-a-key
+        run: |
+          nohup make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false > logs/agent.log 2>&1 &
+          echo "AGENT_PID=$!" >> "$GITHUB_ENV"
+      - name: Wait until every server is ready
+        run: |
+          ready() {
+            for _ in $(seq 1 180); do
+              curl -fs -o /dev/null "$2" && return 0
+              if ! kill -0 "$3" 2>/dev/null; then
+                echo "::error::$1 exited before it was ready; its log is in the artifact."
+                return 1
+              fi
+              sleep 1
+            done
+            echo "::error::$1 was not ready within 180 s."
+            return 1
+          }
+          ready sim http://127.0.0.1:4231/admin/state "$SIM_PID"
+          ready gateway http://127.0.0.1:4200/readyz "$GATEWAY_PID"
+          ready agent http://127.0.0.1:4210/readyz "$AGENT_PID"
+      - name: Eval
+        env:
+          SCOPE: ${{ inputs.scope || 'ci subset' }}
+        run: |
+          if [ "$SCOPE" = "full dev split" ]; then set -- SPLIT=dev SUBSET=full RUNS=1; else set -- SUBSET=ci; fi
+          set +e
+          make eval "$@" AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false 2>&1 | tee logs/eval.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if grep -q '^quota stop:' logs/eval.log; then
+            echo "::error title=Quota stop::The model's daily quota ran out before the eval finished. This is not a pass: rerun after the quota resets (midnight Pacific)."
+            exit 1
+          fi
+          exit "$rc"
+      - name: Keep the report and the logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eval-${{ github.run_id }}
+          path: |
+            logs/
+            evals/reports/
+          if-no-files-found: ignore

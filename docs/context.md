@@ -188,6 +188,22 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
     - Costs: `cost_paid` prices every token at its model's rates (cache reads and writes at their own); `cost_billed` counts only models billed from credits, and its $0 gate holds only when every pinned model is free.
   - `evals/thresholds.json` holds the floor rules and per-scope floors (none set yet). `evals/pricing.json` holds each model's rates and billing: the Gemini models at paid-tier rates (official page, 2026-10-15) and `free`; `claude-haiku-5-5` at $0.10 in, $0.01 cache reads, $0.125 cache writes and $0.50 out per million tokens, `credits`. `evals/prompt-log.md` logs prompt changes; the prompt is frozen at `2b91d4523fb028a6` (`test_eval_score.py` pins it).
   - `make dev-agent AGENT_RELOAD=` runs the agent without its reloader, which watches the whole repo, so code edits never restart it during an eval.
+- CI (`.github/`, step 7; every action pinned to a full commit SHA, every base image by digest):
+  - `ci.yml` on pull requests and pushes to main. Jobs:
+    - `checks`: lint, typecheck, contracts-check, build, actionlint, then scenarios-check and contracts-breaking against `HEAD^1`, or the pushed `before` commit when it exists.
+    - `unit`, `integration` (`make test-int` with the fastembed cache restored), `secrets` (gitleaks over the full history) and `images` (build only).
+    - `ci-result`, the one check branch protection requires: it fails unless every job succeeded.
+    - No job gets a secret or a model key.
+  - `publish.yml` pushes the four images to `ghcr.io/<owner>/triage-copilot-<service>` (tags `sha-<12>`, `main`). It runs only after a successful `ci.yml` run of a push to this repo's main, builds exactly that commit and downloads nothing from it.
+  - `eval.yml`, off until the variable `EVAL_ENABLED` is true:
+    - Triggers: a manual run (ci subset or full dev split) and Mondays 18:00 UTC (the ci subset, about 85 Gemini requests).
+    - Only `GEMINI_API_KEY` is a secret. `NVIDIA_API_KEY` is the placeholder `ci-unused-not-a-key`, which the startup check accepts and evals never use. It fails if Claude could be called.
+    - A quota stop fails with "rerun after the quota resets".
+  - `.github/actions/setup` installs pnpm, Node 24, uv and the locked dependencies. It writes CI's `.env` with `scripts/ci_env.sh`: `.env.example` without the provider keys, `FASTEMBED_CACHE_PATH`, `AI_ENABLED` and `LLM_FALLBACK_ON_RATE_LIMIT`, which the Makefile's include would otherwise force on the job.
+- Images (`infra/docker/`, built from the repo root, `.dockerignore` keeps `.env*` and `.git` out):
+  - `python.Dockerfile` has targets agent, executor and sim (`uv sync --frozen --no-dev --no-editable`, non-root). Agent adds runbooks and migrations and mounts the model at `/models/fastembed`; sim adds the scenarios.
+  - `gateway.Dockerfile` keeps the workspace layout for Node's type stripping and includes drizzle-kit for `db:migrate`.
+  - Services still bind 127.0.0.1 by default; step 10's compose sets the hosts.
 
 Still planned: the counted eval runs (ci subset, dev split, test split 3 times, then floors; commands in Current Development Status), the executor's queue consumer and effectors.
 
@@ -273,6 +289,7 @@ Step 6b is in progress: the scenario set (frozen, manifest sha256 `b81c80f4ba442
 - The test split on Gemini started on 2026-10-17: 9 of 75 runs done, then exit 2 when the UTC day's token budget ran out (3,050,302 of 3,000,000; Gemini at 230 of 260 requests). dns-partition-2 run 1 is parked with no steps.
 - Gateway, web, agent and sim are stopped, with no process left on their ports, and the compose infra is down (volumes kept).
 - `make lint` passes (2026-10-17): `.prettierignore` skips the frozen scenario YAMLs and the eval reports, which are generated, instead of reformatting them.
+- Step 7 (CI/CD) is built locally and verified (2026-10-17): actionlint, the four image builds, lint, typecheck, unit tests, build, contracts and scenario checks, gitleaks. Waiting on the GitHub steps in docs/todo.md; `make test-int` runs locally again after the exam.
 
 Next, in this order:
 

@@ -7,7 +7,16 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 ## Pending
 
 - [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
-- [ ] (manual, before step 7) GitHub repo created; provider keys added as Actions secrets.
+- [ ] (manual) GitHub, in this order (step 7):
+  1. Create an empty public repo (no README, license or .gitignore).
+  2. `git remote add origin https://github.com/<you>/<repo>.git`, then `git push -u origin main`. Run gitleaks over the full history right before; it was clean on 2026-10-17.
+  3. Settings → Secrets and variables → Actions → Secrets: `GEMINI_API_KEY` only. Never `ANTHROPIC_API_KEY`, never a real NIM key.
+  4. Variables: leave `EVAL_ENABLED` unset until the exam is done.
+  5. Settings → Actions → General: workflow permissions read-only; Actions may not create or approve pull requests. Actions pinned to full-length SHAs and approval for outside contributors' pull requests are already set.
+  6. Commit the step 7 work on a branch, push it, and open the test PR to main; it must be green.
+  7. After its first green run: branch protection on main requiring the `ci-result` check. Then merge; `publish.yml` pushes the four images.
+  8. Packages: set each `triage-copilot-*` package's visibility.
+- [ ] (manual) pre-commit's cache, with its gitleaks build, is on C: (`PRE_COMMIT_HOME` unset), against the AGENTS.md disk rule. Set `PRE_COMMIT_HOME` to a folder under `H:\.cache` and run `make install` again.
 - [ ] (manual, before step 10) Vercel and Tailscale accounts created.
 - [ ] Contract the unused `queued_budget` status: once no investigation holds it, rebuild `agent.investigation_status` without it in a maintenance window (docs/migrations.md, 2026-10-15 parking entry).
 - [ ] Parked investigations resume oldest first (`PARKED_AHEAD` in `services/agent/src/agent/job.py` orders by `waiting_since`, then id), but the design says overflow waits by severity. The agent never learns a severity: InvestigationRequested v2 has none, and only the gateway's `alert_groups.severity` holds it. Ordering by severity needs: InvestigationRequested v3 with `severity` (expand, migrate, contract), an `agent.investigations.severity` column recorded when an investigation parks (as `tenant_id` is), `PARKED_AHEAD` ordered by severity rank (critical, warning, info) and then `waiting_since`, and the gateway's sweeper asking about groups in that order. Done when a critical investigation parked after a warning one takes the next free slot.
@@ -36,9 +45,10 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [ ] Emit an early hypothesis step, so time to first hypothesis is measured directly instead of by its proxy (webhook intake to the report, an upper bound) and step 9's timeline can show it. Today hypotheses exist only in the final report. A new step kind needs StepRecorded v4 (expand, migrate, contract) or a `hypothesis` step with the existing kind; the job records it the first time the model names a likely cause, and the eval harness reads its `recorded_at`. Done when the eval report measures time to first hypothesis from that step and the timeline shows it.
 - [ ] Before step 10: the sim's admin port (`SIM_ADMIN_PORT`, 4231) is never published in `docker-compose.prod.yml`, and only the eval harness gets `SIM_ADMIN_URL`.
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
-  - Run `make scenarios-check SCENARIOS_BASE=<target branch>` (the validator and the frozen-set check) and `make eval SUBSET=ci`, the 8-scenario ci subset, which needs a model key and about 72 model calls.
-  - At about 55 investigations a day on the free tier (gemini-3.5-flash-lite, about 500 requests a day, unverified), the full eval (25 scenarios x 3 runs, 75 investigations) cannot run nightly: schedule it weekly, or one run per night.
-  - Mount the fastembed model cache (`FASTEMBED_CACHE_PATH`) into the agent container as a volume; do not bake the 0.5 GB model into the image. CI restores the cache before the tests, which load it offline.
+  - [x] Built locally (2026-10-17): `ci.yml`, `publish.yml`, `eval.yml`, the setup action, `scripts/ci_env.sh`, `infra/docker/` images and `.dockerignore`. actionlint passes; all four images build; lint, typecheck, unit tests, build, contracts and scenario checks pass; gitleaks finds nothing.
+  - [ ] The GitHub steps under Pending, then the test PR green on `ci-result` and the images in GHCR.
+  - [ ] After the exam: `make test-int` locally (skipped during the exam: its scratch databases and queues share the exam's Postgres, ElasticMQ and volumes; the test PR runs it); set `EVAL_ENABLED=true` once the Gemini split and the local Haiku comparison are done; optionally ask for a role's key only when the router can call it, which drops the NIM placeholder.
+  - [ ] After the exam: a manual eval run on a spent quota must end red with the quota message.
 - [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved. Include an alert on executions stuck in claimed (the sweeper only logs them now) and a count of payload fingerprints that differ from the computed ones.
 - [ ] 9. Review UI and demo mode: resolvers, login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass
 - [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off

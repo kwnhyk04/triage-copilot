@@ -85,7 +85,9 @@ contracts-check:
 # breaking OpenAPI changes, or an edited or deleted message version (changes ship as a new version).
 CONTRACTS_BASE ?= HEAD
 # oasdiff sees only the specs and the git history, offline; .env stays out of the container.
+# safe.directory: git in the container refuses a .git owned by another user, as on CI runners.
 OASDIFF = docker run --rm --network none -w /repo \
+	-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
 	--mount "type=bind,src=$(CURDIR)/.git,dst=/repo/.git,readonly" \
 	--mount "type=bind,src=$(CURDIR)/contracts,dst=/repo/contracts,readonly" \
 	tufin/oasdiff:v1.33.0

@@ -28,7 +28,9 @@ make dev
 
 Model calls (`AI_ENABLED=true`) run on Gemini's free tier, falling back to NVIDIA NIM. With `LLM_CLAUDE_FALLBACK=true` and `ANTHROPIC_API_KEY` in `.env`, Claude Haiku 5.5 comes between them, paid from Anthropic API credits until `LLM_CLAUDE_UNTIL`.
 
-`make install` also installs the gitleaks pre-commit hook, which blocks commits that stage secrets. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
+`make install` also installs the gitleaks pre-commit hook, which blocks commits that stage secrets.
+
+CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, contract and scenario checks, a gitleaks scan of the full history and the image builds on every pull request and push to main; `ci-result` is the required check. `publish.yml` pushes the gateway, agent, executor and sim images to GHCR from main. `eval.yml` stays off until the repository variable `EVAL_ENABLED` is `true`; its only secret is `GEMINI_API_KEY`, and CI never calls Claude. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
 
 ## Usage
 

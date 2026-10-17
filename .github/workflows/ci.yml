@@ -1,0 +1,144 @@
+name: ci
+
+# Lint, types, unit and integration tests, contracts, the frozen scenario set, secrets and image
+# builds. No job gets a secret or a model key: the tests run scripted models. Branch protection
+# requires ci-result alone, which passes only when every job succeeded.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: make lint
+      - run: make typecheck
+      - run: make contracts-check
+      - run: make build
+      - name: actionlint
+        run: >-
+          docker run --rm --network none -v "$PWD:/repo:ro" -w /repo
+          rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+      - name: Frozen scenario set and breaking contract changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base=HEAD^1
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base=$BEFORE
+          else
+            base=HEAD
+            echo "::warning::No earlier commit to compare with (a first push or a force-push): both checks compare HEAD with itself."
+          fi
+          make scenarios-check SCENARIOS_BASE="$base"
+          make contracts-breaking CONTRACTS_BASE="$base"
+
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: make test
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Embedding model cache path
+        run: echo "FASTEMBED_CACHE_PATH=$RUNNER_TEMP/fastembed" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        id: model
+        with:
+          path: ${{ env.FASTEMBED_CACHE_PATH }}
+          # nomic-embed-text-v1.5 at the revision agent.runbooks pins; fastembed's version is in uv.lock.
+          key: fastembed-nomic-embed-text-v1.5-e9b6763-${{ hashFiles('uv.lock') }}
+      - name: Download the embedding model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: make embed-model
+      - name: Start the infra
+        run: |
+          make infra-up
+          # ElasticMQ has no healthcheck, so compose's --wait does not wait for it.
+          for _ in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1:4566/ && exit 0
+            sleep 1
+          done
+          echo "::error::ElasticMQ did not answer on port 4566 within 60 s."
+          exit 1
+      - run: make test-int
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks over the full history
+        run: >-
+          docker run --rm --network none -v "$PWD:/repo:ro"
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo
+          ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --redact --no-banner --log-opts=--all /repo
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        service: [gateway, agent, executor, sim]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image (pushed only by publish.yml, from main)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/docker/${{ matrix.service == 'gateway' && 'gateway' || 'python' }}.Dockerfile
+          target: ${{ matrix.service != 'gateway' && matrix.service || '' }}
+          build-args: PACKAGE=${{ matrix.service }}
+          push: false
+
+  ci-result:
+    if: always()
+    needs: [checks, unit, integration, secrets, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every CI job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [ "$result" != success ]; then
+              echo "::error::A CI job ended '$result'; ci-result passes only when every job succeeds."
+              exit 1
+            fi
+          done
