@@ -91,6 +91,8 @@ make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMAR
 
 Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in their name, and it never writes the README table. Credits gone (a 402, a 400 naming a spend limit, or a 429 without retry-after) park the run and stop the eval with exit 2.
 
+In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (about 85 Gemini requests) or a chosen scope by hand, only once the repository variable `EVAL_ENABLED` is `true`. A quota stop fails it with "rerun after the quota resets"; CI keeps no run cache, so a rerun starts over.
+
 Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `SUBSET=full`, `RUNS` 1 for the ci subset and 3 otherwise.
 
 ## Runs and scores

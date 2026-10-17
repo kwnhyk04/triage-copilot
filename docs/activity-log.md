@@ -15,6 +15,25 @@ Chronological record of significant development activity, newest first. Skip tri
 
 ## Entries
 
+### 2026-10-17: Step 7, CI/CD built locally
+
+- Changes:
+  - `.github/workflows/ci.yml`: checks, unit, integration, secrets and images jobs, plus `ci-result`, the one required check.
+  - `publish.yml`: GHCR pushes, guarded against `workflow_run` from pull requests and forks.
+  - `eval.yml`: off until `EVAL_ENABLED` is true; a weekly ci subset; a quota stop fails; no Claude.
+  - `.github/actions/setup`, `scripts/ci_env.sh`, `infra/docker/python.Dockerfile` (agent, executor, sim), `infra/docker/gateway.Dockerfile`, `.dockerignore`.
+  - Makefile: oasdiff gets `safe.directory`.
+  - Actions are pinned by SHA to releases at least 14 days old; base images by digest.
+  - The agent, the eval harness, the prompt and the scenarios are untouched; the exam is parked.
+- Files: .github/ (actions/setup/action.yml, workflows/ci.yml, publish.yml, eval.yml), scripts/ci_env.sh, infra/docker/, .dockerignore, Makefile, docs/
+- Validation (no exam server or container up):
+  - actionlint passes on all workflows, shellcheck included.
+  - All four images build: agent and gateway stop on missing config with their one-line error, and executor and sim start.
+  - Passing make targets: `lint`, `typecheck`, `test`, `build`, `contracts-check`, `scenarios-check`, `contracts-breaking`.
+  - gitleaks finds nothing in the full history (11 commits) or the new files.
+  - `make test-int` was not run: it shares the exam's Postgres, ElasticMQ and volumes. The test PR runs it.
+- Outstanding: the GitHub steps in docs/todo.md, the test PR, branch protection on `ci-result`; after the exam, local `make test-int` and `EVAL_ENABLED`. Nothing is committed.
+
 ### 2026-10-17: Test split on Gemini, day 1, and the Prettier ignore lines
 
 - Changes:
