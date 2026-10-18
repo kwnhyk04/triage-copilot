@@ -46,6 +46,8 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## In Progress
 
+- [ ] Partition test flake (2026-10-18, branch `fix/partition-test-flake`): `phase_done` in `services/agent/tests/test_partitioning_int.py` polls up to 10 s for a write past the previous phase's count instead of sleeping 0.3 s. Done when CI's integration job passes on its pull request (the user ships it).
+
 - [ ] 6b. Scenario set v1, eval harness and the full eval (2026-10-16). Done when the full test split runs 3 times end to end (resuming across quota days if needed) and the report lists every target with pass or fail; the ci subset runs; unit and integration tests stay green.
   - [x] Agent: a run resumed after a quota park keeps the wall-clock time it had left.
   - [x] Sim: admin routes on their own port (4231); tests prove no agent tool reaches them.

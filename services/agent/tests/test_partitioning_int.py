@@ -89,7 +89,16 @@ def test_partition_swap_while_a_writer_runs(scratch_db: "ScratchDb") -> None:
     written_after: dict[str, int] = {}
 
     def phase_done(name: str) -> None:
-        time.sleep(0.3)  # Every phase must see writes of its own.
+        # Every phase must see writes of its own: wait for one past the previous phase's count.
+        before = max(written_after.values(), default=0)
+        deadline = time.monotonic() + 10
+        while writer.written <= before:
+            if time.monotonic() > deadline:
+                pytest.fail(
+                    f"the writer recorded no step in the {name!r} phase within 10 s "
+                    f"({before} before it; last errors: {writer.errors[-3:]})"
+                )
+            time.sleep(0.01)
         written_after[name] = writer.written
 
     far = month_start(datetime.now(UTC).date(), 3)
