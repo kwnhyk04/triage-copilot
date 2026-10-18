@@ -7,15 +7,6 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 ## Pending
 
 - [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
-- [ ] (manual) GitHub, in this order (step 7):
-  1. Create an empty public repo (no README, license or .gitignore).
-  2. `git remote add origin https://github.com/<you>/<repo>.git`, then `git push -u origin main`. Run gitleaks over the full history right before; it was clean on 2026-10-17.
-  3. Settings → Secrets and variables → Actions → Secrets: `GEMINI_API_KEY` only. Never `ANTHROPIC_API_KEY`, never a real NIM key.
-  4. Variables: leave `EVAL_ENABLED` unset until the exam is done.
-  5. Settings → Actions → General: workflow permissions read-only; Actions may not create or approve pull requests. Actions pinned to full-length SHAs and approval for outside contributors' pull requests are already set.
-  6. Commit the step 7 work on a branch, push it, and open the test PR to main; it must be green.
-  7. After its first green run: branch protection on main requiring the `ci-result` check. Then merge; `publish.yml` pushes the four images.
-  8. Packages: set each `triage-copilot-*` package's visibility.
 - [ ] (manual) pre-commit's cache, with its gitleaks build, is on C: (`PRE_COMMIT_HOME` unset), against the AGENTS.md disk rule. Set `PRE_COMMIT_HOME` to a folder under `H:\.cache` and run `make install` again.
 - [ ] (manual, before step 10) Vercel and Tailscale accounts created.
 - [ ] Contract the unused `queued_budget` status: once no investigation holds it, rebuild `agent.investigation_status` without it in a maintenance window (docs/migrations.md, 2026-10-15 parking entry).
@@ -46,7 +37,7 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [ ] Before step 10: the sim's admin port (`SIM_ADMIN_PORT`, 4231) is never published in `docker-compose.prod.yml`, and only the eval harness gets `SIM_ADMIN_URL`.
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
   - [x] Built locally (2026-10-17): `ci.yml`, `publish.yml`, `eval.yml`, the setup action, `scripts/ci_env.sh`, `infra/docker/` images and `.dockerignore`. actionlint passes; all four images build; lint, typecheck, unit tests, build, contracts and scenario checks pass; gitleaks finds nothing.
-  - [ ] The GitHub steps under Pending, then the test PR green on `ci-result` and the images in GHCR.
+  - [x] The GitHub steps (now under Completed), then the test PR green on `ci-result` and the images in GHCR: done, the user confirmed on 2026-10-18 (PR #1 is `0779d77` on origin/main).
   - [ ] After the exam: `make test-int` locally (skipped during the exam: its scratch databases and queues share the exam's Postgres, ElasticMQ and volumes; the test PR runs it); set `EVAL_ENABLED=true` once the Gemini split and the local Haiku comparison are done; optionally ask for a role's key only when the router can call it, which drops the NIM placeholder.
   - [ ] After the exam: a manual eval run on a spent quota must end red with the quota message.
 - [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved. Include an alert on executions stuck in claimed (the sweeper only logs them now) and a count of payload fingerprints that differ from the computed ones.
@@ -70,15 +61,30 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - [x] Change 2's dev pass (2026-10-17) and the choice: change 2 lost (top-1 0.53 against 0.73, 2 forbidden proposals against none), so the prompt is frozen at change 1, `2b91d4523fb028a6`; `test_the_prompt_is_frozen` pins it. No further prompt changes.
   - [x] Claude Haiku 5.5 as the first fallback (2026-10-17): `LLM_CLAUDE_FALLBACK` (off by default), credits-gone stop until the month ends, no call from 2026-11-10, cost in credits, agent 0009; unit and integration tests for each case.
   - [x] The dev split once on Haiku, frozen prompt, no tuning (2026-10-17): no model-specific breakage; top-1 0.80, 0 forbidden, $0.0971 of credits; 11 of 15 runs reached the token reserve. The ci subset scored on the frozen prompt from cached runs.
-  - [ ] The test split 3 times on Gemini; set the floors. Started 2026-10-17: 9 of 75 runs done, then exit 2 when the day's token budget ran out (3,050,302 of 3,000,000 tokens, UTC day; Gemini at 230 of its 260 requests). dns-partition-2 run 1 is parked with no steps: `evals/reports/runs/dns-partition-2-run1-76feff33928e48b8.state.json`. The other 66 runs need about 700 requests, about 3 more quota days.
-    Resume after midnight Pacific (00:00 PDT, 07:00 UTC, 15:00 Taipei), when both the Gemini quota and the UTC token budget have reset. Run these from the repo root, in this order:
+  - [ ] The test split 3 times on Gemini; set the floors. Started 2026-10-17: 9 of 75 runs done, then exit 2 when the day's token budget ran out (3,050,302 of 3,000,000 tokens, UTC day; Gemini at 230 of its 260 requests). Day 2 (2026-10-18): 32 of 75 done (every first run and 7 second runs), then exit 2 at the agent's own limit of 260 Gemini requests, all answered (1,803,303 tokens, UTC day).
+    Next resume, day 3: after 15:00 Taipei on 2026-10-19 (00:00 PDT, 07:00 UTC), when both the Gemini quota and the UTC token budget have reset. Parked: db-pool-exhaustion-4 run 2 (16 steps), state file `evals/reports/runs/db-pool-exhaustion-4-run2-b8fdb20f568b7e4d.state.json`. Left: 43 runs, about 470 requests (11 per run on day 2), about 2 quota days. Run these from the repo root, in this order:
     1. `make infra-up`
     2. Terminal 1: `make dev-sim`. Wait until `curl.exe -s http://127.0.0.1:4231/admin/state` answers.
-    3. Load the parked run's world before the agent starts, since the gateway's sweeper re-queues it within 15 s: `uv run python -c "import glob, json, sys; sys.path.insert(0, 'evals/harness'); import run; [run.resume(json.load(open(p))) for p in glob.glob('evals/reports/runs/*.state.json')]"`. Then `curl.exe -s http://127.0.0.1:4231/admin/state` must name the parked scenario (dns-partition-2 the first time).
+    3. Load the parked run's world before the agent starts, since the gateway's sweeper re-queues it within 15 s: `uv run python -c "import glob, json, sys; sys.path.insert(0, 'evals/harness'); import run; [run.resume(json.load(open(p))) for p in glob.glob('evals/reports/runs/*.state.json')]"`. Then `curl.exe -s http://127.0.0.1:4231/admin/state` must name the parked scenario (db-pool-exhaustion-4 on day 3).
     4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers.
     5. Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=3000000`
-    6. Terminal 4: `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. It resumes the parked run first, then runs about 24 more before Gemini's 260 requests run out (a Gemini-only day uses about 1.6 million tokens, under the budget).
-    7. On exit 2: stop each server's process tree with `taskkill /PID <pid of its make process> /T /F` (agent, `dev-ts`, sim), check that ports 4200, 4210 and 4230 are free, then `make infra-down`. Repeat from step 1 after the next midnight Pacific.
+    6. Terminal 4: `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. It resumes the parked run first, then runs about 22 more before Gemini's 260 requests run out (day 2: 23 runs in 40 minutes and 1.8 million tokens, under the budget).
+    7. On exit 2, stop the servers by process tree, agent first:
+       - List the make PIDs: `Get-CimInstance Win32_Process -Filter "Name='make.exe'" | Select-Object ProcessId, CommandLine`.
+       - Put each PID in `$make` as a quoted string and run the block below in PowerShell. It stops a tree only when the PID is a `make.exe` whose command line names that target, and prints "not stopped" for anything else; then list the PIDs again and correct that one. Quote the keys: an int index on an `[ordered]` table picks by position, so the lookup misses and the block stops nothing (docs/memory.md, 2026-10-18).
+
+         ```powershell
+         $make = [ordered]@{ '<agent PID>' = 'dev-agent'; '<dev-ts PID>' = 'dev-ts'; '<sim PID>' = 'dev-sim' }
+         foreach ($id in $make.Keys) {
+           $want = $make[$id]
+           $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
+           if ($want -and $p -and "$($p.ProcessId)" -eq $id -and $p.Name -eq 'make.exe' -and ($p.CommandLine -split '\s+') -contains $want) {
+             taskkill /PID $id /T /F
+           } else { "PID $id is not make $want; not stopped" }
+         }
+         ```
+
+       - Check that ports 4200, 4210 and 4230 are free, then `make infra-down`. Repeat from step 1 after the next midnight Pacific.
     8. On exit 0 or 1 (all 75 runs done; report `evals/reports/<date>.md` and the README table): `make eval SPLIT=test SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`, then `make eval SUBSET=ci SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. Both rescore cached runs and make no model calls.
   - [ ] The Claude comparison: the test split pinned to `claude-haiku-5-5` (evals/README.md, Running), before the credits expire on 2026-11-10. Run it only once the Gemini test split is complete: a Haiku agent would resume a parked Gemini run, and that run would not count. Give its agent `DAILY_AI_TOKEN_BUDGET=10000000` (about 8 million tokens).
 - [x] A parked investigation that hit the provider's "daily quota spent" stays parked until midnight Pacific, and `make eval` exits 2 on it (2026-10-16): `Limiter.spent()` reads the provider's `quota_exhausted` answers; `test_workers_int.py` and `test_eval_score.py` cover both.
@@ -106,6 +112,16 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [x] 6a. AI core (2026-10-15): provider layer (Gemini primary, NIM fallback, small model, RPM and RPD limiter), tools, scenario engine with bad-deploy and db-pool-exhaustion, agent loop with a hard 150,000-token cap and a forced final report, ReportRecorded v1 delivery through the agent outbox into the gateway's mirror tables. `make test` (Turbo forced) and `make test-int` passed three runs in a row; the hard-cap, degraded-tool and pagination tests pass; a live run on bad-deploy found bad_deploy on checkout, proposed the rollback, and the gateway received the report.
 
 - [x] 5. Tests (2026-10-15): unit tests in both languages run in about 12 s, and three consecutive `make test-int` runs are green. Scratch databases with guards; fingerprint port and fast-check properties; the real decision store with its outbox queue; X-API-Key and keyset `GET /v1/investigations`; agent caps with a partial report; executor safety checks with the gateway's claim route on a separate listener; agent 0001 `lock_timeout`. Degraded-tool and `query_logs` tests moved to step 6.
+
+- [x] (manual) GitHub, in this order (step 7). Done by the user, confirmed on 2026-10-18: PR #1 is `0779d77` on origin/main.
+  1. Create an empty public repo (no README, license or .gitignore).
+  2. `git remote add origin https://github.com/<you>/<repo>.git`, then `git push -u origin main`. Run gitleaks over the full history right before; it was clean on 2026-10-17.
+  3. Settings → Secrets and variables → Actions → Secrets: `GEMINI_API_KEY` only. Never `ANTHROPIC_API_KEY`, never a real NIM key.
+  4. Variables: leave `EVAL_ENABLED` unset until the exam is done.
+  5. Settings → Actions → General: workflow permissions read-only; Actions may not create or approve pull requests. Actions pinned to full-length SHAs and approval for outside contributors' pull requests are already set.
+  6. Commit the step 7 work on a branch, push it, and open the test PR to main; it must be green.
+  7. After its first green run: branch protection on main requiring the `ci-result` check. Then merge; `publish.yml` pushes the four images.
+  8. Packages: set each `triage-copilot-*` package's visibility.
 
 ## Blocked
 

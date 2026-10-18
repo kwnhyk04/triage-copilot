@@ -1,19 +1,145 @@
 # Activity Log
 
-Chronological record of significant development activity, newest first. Skip trivial changes. Do not auto-commit this file.
+Chronological record of significant development activity and small events (AGENTS.md, Documentation Rules), newest first. Skip only trivial modifications such as typo or formatting fixes. Never rewrite a past entry; a later entry corrects it. Do not auto-commit this file.
 
 ## Entry Format
 
 ```
-### YYYY-MM-DD: <task performed>
+### YYYY-MM-DD: <task or event>
 
-- Changes: <important changes>
-- Files: <relevant files>
-- Validation: <tests or checks run and results>
+- What happened: <the work, event or mistake>
+- Why: <the cause or reason; "not confirmed" when it is a guess>
+- What we did: <the exact steps in order (commands, buttons, where each setting lives), and why that was the best option>
+- Files: <relevant files, if any>
+- Validation: <checks run and their results, failed and skipped ones included>
 - Outstanding: <open issues, or "None">
 ```
 
+Entries before 2026-10-18 use the older Changes, Files, Validation and Outstanding fields and stay as written.
+
 ## Entries
+
+### 2026-10-18: Stop step's PID check fixed, and the day-3 resume facts
+
+- What happened: The user asked for a stop step whose PID check can fail, comparing the PIDs as the same type, shown failing on a made-up PID with taskkill left out, and for the resume steps in docs/todo.md to name the parked run, the earliest start and what is left.
+- Why: today's check looked PIDs up in an `[ordered]` table with int keys, which PowerShell indexes by position, so the target came back empty and the command-line test (`-like "**"`) passed any make.exe. Correction to the day-2 entry below and to the chat report, which said the check could not fail: only that test could not; by its code, a missing PID or a process not named make.exe still failed it.
+- What we did:
+  1. Wrote the fixed block. PIDs are quoted string keys and the target must be found. The process must exist, its PID as a string must equal the key, its name must be make.exe, and its command line, split on whitespace, must hold the target as a whole token.
+  2. Dry run in one PowerShell call, with the taskkill line replaced by a message. Cases B to D used a stub `Get-CimInstance`, defined in that shell only, that returned made-up make.exe processes:
+     - 0: `[ordered]@{ 10 = 'ten'; 20 = 'twenty' }` gives `$t[1]` = 'twenty' and `$t[10]` = '', so the index is positional (confirms the memory entry's guess).
+     - A: made-up PID 999996, no such process, the real `Get-CimInstance`: "not stopped".
+     - B: made-up PID 999992, a stub make.exe running dev-ts, listed as dev-agent: the fixed block said "not stopped"; the old check would have stopped it, with an empty label.
+     - C, the control: made-up PID 999988, a stub make.exe running dev-agent: the fixed block would stop it.
+     - D: C with an int key by mistake: "not stopped", so a wrong key stops nothing.
+  3. docs/todo.md, 6b step 7: how to list the make PIDs, the block, and what to do on "not stopped". The block parsed from the file with PowerShell's parser: 1 block, 0 errors.
+  4. docs/todo.md, the resume line: next resume after 15:00 Taipei on 2026-10-19; parked, db-pool-exhaustion-4 run 2 with its state file; left, 43 runs, about 2 quota days. The progress line above it keeps the history only.
+  5. docs/memory.md: a new entry confirms the positional index; the earlier one stays as written.
+  - Why this was the best option: the stub tested the broken part against a make.exe without starting or stopping any process. String keys are the fix the user asked for, and the guard on the target makes a wrong key stop nothing.
+- Files: docs/todo.md, docs/memory.md
+- Validation: the dry run and the parser check above. Nothing was started or stopped.
+- Outstanding: None.
+
+### 2026-10-18: Shipping rule replaced, and step 7's GitHub steps completed
+
+- What happened: The user replaced this morning's ship bullet in AGENTS.md (Git) with a "Shipping:" rule. Claude Code never commits, pushes, opens or merges pull requests, never runs gh for anything (read-only commands included), and asks the user for CI or pull request results; the user ships with `H:\Projects\projects\_tools\ship.ps1`. The same rule goes into docs/memory.md, Preferences. The user also confirmed that step 7's GitHub steps are done: PR #1 is `0779d77` on origin/main (the user checked read-only).
+- Why: the rule is the user's, with no reason given. The GitHub steps answer the Outstanding item of this morning's Git rule entry.
+- What we did:
+  1. AGENTS.md: replaced the last bullet under "## Git" with the user's text, word for word, and changed nothing else. GateGuard asked for facts first.
+  2. docs/memory.md, Preferences and Instructions: the same text as a dated entry.
+  3. docs/todo.md: moved "(manual) GitHub, in this order (step 7)" with its 8 steps from Pending to Completed, with the user's confirmation, and ticked the matching sub-item of 7. CI/CD; its two after-exam sub-items stay open.
+  4. docs/context.md, Current Development Status: the GitHub steps are done.
+  - Why this was the best option: the user's words in both places, and moving the todo item keeps its steps on record.
+- Files: AGENTS.md, docs/memory.md, docs/todo.md, docs/context.md
+- Validation: `git diff AGENTS.md` shows the Shipping bullet as the last one under Git and, besides it, only the earlier uncommitted Documentation Rules change.
+- Outstanding: None.
+
+### 2026-10-18: freightaudit-prod was the user's pnpm demo:down
+
+- What happened: The user explained the freightaudit-prod removal recorded in the entry below: they ran `pnpm demo:down` at 08:32 UTC for FreightAudit's offline check.
+- Why: FreightAudit's offline check. The entry below guessed another session ("perhaps from the FreightAudit session"); it was the user.
+- What we did: nothing, as the user asked; recorded it here and left the entry below as written. Why: the logging rule corrects a past entry with a new one.
+- Outstanding: None; this answers the entry below.
+
+### 2026-10-18: freightaudit-prod containers removed, not by this session
+
+- What happened: After step 7, `docker ps` no longer listed the seven freightaudit-prod containers (worker, api, egress-proxy, tailscale, postgres, redis, minio) that ran when the session started. `docker events` shows each one killed, stopped and destroyed between 08:32:55 and 08:32:59 UTC. Their volumes remain (`freightaudit-prod_postgres-data`, `freightaudit-prod_minio-data`, `freightaudit-prod-tailscale-state`), and the freightaudit dev containers (postgres, redis, minio) still run.
+- Why: not confirmed. This session's `make infra-down` (compose project `triagecopilot`) returned at 08:32:17 UTC by the session transcript and listed only this project's three containers and network; the next command ran after 08:33. Kill, stop and destroy in dependency order fit a `docker compose down` of that project, perhaps from the FreightAudit session.
+- What we did, all read-only:
+  1. `docker ps -a --filter name=freightaudit-prod`: no container left.
+  2. `docker events --since 60m --until 0s --filter type=container --filter event=kill --filter event=stop --filter event=destroy`: the times above. It did not list this project's own down events from 08:32:13; the daemon keeps only its latest events, which health-check execs fill (not confirmed).
+  3. `docker volume ls --filter name=freightaudit`, and this session's transcript timestamps.
+  - Nothing of theirs was started, stopped or removed. Why: AGENTS.md and the user forbid touching another project's containers, and whether the demo runs is the user's call.
+- Outstanding: the user decides whether freightaudit-prod should run again.
+
+### 2026-10-18: Test split on Gemini, day 2
+
+- What happened: Resumed the test split with the steps in docs/todo.md (step 6b). 23 runs finished between 07:49 and 08:29 UTC: dns-partition-2 run 1 (parked on day 1), the other 15 first runs left, and 7 second runs (bad-config-3 to db-pool-exhaustion-2); 17 ended resolved and 6 awaiting approval. Then exit 2, a quota stop, at db-pool-exhaustion-4 run 2: 32 of 75 runs are done. Gemini (`gemini-3.5-flash-lite`, primary) answered all 260 requests, with no 429, 503 or error; the small model got no request. The UTC day used 1,803,303 of the 3,000,000-token budget.
+- Why: the agent's own `LLM_PRIMARY_RPD` (260) stopped it: the parked run waits for budget and stays unresumable until midnight Pacific. Google never answered 429.
+- What we did:
+  1. Checked that this project's ports were free with `Get-NetTCPConnection -State Listen`: 4200, 4201, 4210, 4230, 4231, 3200, 5434, 4566, 8476 and 15500-15509. `docker ps` showed only freightaudit containers, none on those ports.
+  2. Steps 1 to 6 from PowerShell, the servers as background tasks:
+     - `make infra-up` (all three containers healthy).
+     - `make dev-sim`, until `curl.exe -s http://127.0.0.1:4231/admin/state` answered.
+     - The `run.resume` one-liner; the sim then named dns-partition-2 (seed 60433, anchor 2026-10-17T08:47:52Z).
+     - `make dev-ts`, until `/readyz` on 4200 answered `{"status":"ok"}`.
+     - `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=3000000`.
+     - `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false` at 07:49 UTC. It printed `[1/66]`, so 9 runs were done before.
+  3. Not in the steps, read-only: before the eval, waited for the agent's `/readyz` on 4210, since the eval polls the agent's state API as soon as it starts. The gateway's sweeper had already re-queued the parked run (first Gemini call at 07:48:52 UTC), and the eval's `run.resume` activated the same world again.
+  4. The eval printed `quota stop:` and make `Error 2`, so the harness's own exit code was 2 (make exits 2 for any failed recipe; docs/memory.md, 2026-10-17).
+  5. Step 7: `taskkill /PID <make PID> /T /F` for the agent (29116), `dev-ts` (37028) and the sim (40840). Ports 4200, 4201, 4210, 4230, 4231 and 3200 were then free.
+  6. Not in the steps, read-only, before `make infra-down` stops Postgres: the day's usage, for the report the user asked for. `docker compose -f infra/docker-compose.yml --env-file .env exec -T postgres psql -U postgres -d triage -c ...` over `agent.ai_usage`, `agent.model_calls` since midnight Pacific by model, role and outcome, and the parked row of `agent.investigations`.
+  7. `make infra-down`; the `pgdata` and `elasticmq-data` volumes remain.
+  - Why this was the best option: the steps as written; the two read-only additions guarded the eval's start and produced the requested figures without changing any state.
+- Small events:
+  - GateGuard gated the first Bash command, the first edit of each file, and again the first Bash command after the eval's completion notice, which it also called the first of the session. Why: not confirmed. What we did: stated the facts and sent the same calls again; they ran.
+  - `grep -nE '^(infra-up|...)\b' -A 14 Makefile` in Bash printed nothing and exited 1, though the targets exist; the Grep tool found them. Why: not confirmed. In the same command `TZ=Asia/Taipei date` printed GMT (Git Bash's time zone data, not confirmed).
+  - `docker ps --format` and `docker events --format` with `{{.Label "com.docker.compose.project"}}` failed in PowerShell: `failed to parse template: template: :1: function "com" not defined`. Why: Windows PowerShell 5.1 drops inner double quotes from arguments to native programs (not confirmed). What we did: dropped the label from the template.
+  - Mistake: the stop script's PID check could not fail (an `[ordered]` dictionary with an int key; docs/memory.md, 2026-10-18). The parent PIDs taskkill printed (22280, 29624, 32400) equal those of the make processes listed at the start, so the right trees were stopped.
+  - taskkill printed `ERROR: The process with PID 43800 (child process of PID 39364) could not be terminated. Reason: There is no running instance of the task.` in the `dev-ts` tree. Why: not confirmed; it had likely exited when a parent or child was killed. The ports were free afterwards.
+  - The three server tasks ended with exit code 1, from `taskkill /F`.
+  - The resumed dns-partition-2 run shows 82,924 s, timed from its alert group's intake on 2026-10-17; reports leave resumed runs out of the timing figures.
+- Files: evals/reports/runs/ (23 results and one state file, ignored by git), docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation: 23 result files written this session; one state file left, `db-pool-exhaustion-4-run2-b8fdb20f568b7e4d.state.json`, whose investigation `70ef1946-24bb-4c94-b663-3a4789ec25a6` is `queued`, waiting for budget since 08:29:26 UTC, with 16 steps and 36,613 tokens. `make test-int` not run (skipped during the exam). No scores yet: the report comes after all 75 runs.
+- Outstanding: 43 runs, about 470 requests and about 2 more quota days, from the steps in docs/todo.md; then step 8's floor commands and the Claude comparison. Nothing is committed.
+
+### 2026-10-18: Git rule: the user ships with ship.ps1
+
+- What happened: The user added a rule to AGENTS.md, "## Git": they commit, push and merge with ship (`H:\Projects\projects\_tools\ship.ps1`), which merges only when every check passes; agents never push, open or merge a pull request, with `gh` or otherwise.
+- Why: the user asked for it and gave no reason.
+- What we did: added the user's line verbatim as the last bullet under "## Git" and changed nothing else. GateGuard asked for facts first; only CLAUDE.md imports AGENTS.md (`@AGENTS.md`). Why: the user's exact words and place.
+- Files: AGENTS.md
+- Validation: `git diff AGENTS.md` shows the one new line beside the earlier uncommitted Documentation Rules change.
+- Outstanding: docs/todo.md still lists the GitHub steps (step 7) as pending, while the last commit, `0779d77`, is "Step 7: CI, image publishing, eval workflow (off), Dockerfiles (#1)" and `origin` points at GitHub; which of those steps are done is the user's to confirm. Nothing is committed.
+
+### 2026-10-18: Mistake: the GateGuard entry named a hook location before checking it
+
+- What happened: The GateGuard entry below says both hooks come from `%USERPROFILE%\.claude\plugins\cache\ecc\ecc\2.2.3\hooks\hooks.json`. Only `pre:edit-write:gateguard-fact-force` is named there (line 86). For Bash, that file runs `scripts/hooks/pre-bash-dispatcher.js`, and `pre:bash:gateguard-fact-force` is defined in `scripts/hooks/bash-hook-dispatcher.js` (line 48); the gate's code, `scripts/hooks/gateguard-fact-force.js`, names that id too (line 45). The entry also leaves out a fourth switch the Bash gate offered, `GATEGUARD_BASH_ROUTINE_DISABLED=1`.
+- Why: the entry was written after a case-insensitive search for "gateguard" in `%USERPROFILE%\.claude` matched that hooks.json, before each hook id was searched for, and it stated the location as confirmed instead of "not confirmed".
+- What we did: searched that hooks.json for each full id, then the plugin's `scripts` folder for the Bash one, and added this entry. The entry below stays as written. Why: the logging rule keeps mistakes in the log and corrects them with a later entry.
+- Outstanding: None.
+
+### 2026-10-18: Logging rule for small events
+
+- What happened: The user added a rule to AGENTS.md (Documentation Rules). Activity log entries, and memory entries that record a problem or a decision, include small events: a failed command, a skipped check, a tool or prompt that behaved unexpectedly, a setting changed. Each entry states what happened, why it happened ("not confirmed" for a guess), and what we did, step by step, with why that was the best option. Mistakes stay in, and past entries are not rewritten.
+- Why: the user asked for it and gave no reason.
+- What we did:
+  1. Read AGENTS.md, docs/context.md, docs/memory.md, docs/todo.md and docs/activity-log.md. The activity log was read to line 487 of 607: the file is over the Read tool's 25,000-token cap, and the rest holds entries from 2026-10-14 and older, which this change does not touch.
+  2. Checked what reads the edited files. CLAUDE.md imports AGENTS.md (`@AGENTS.md`). `evals/harness/eval.py` (`set_floors`) reads docs/memory.md and takes a line that contains "floor" and a metric key as the reason for a looser floor. The new memory text has no such line, so floors read the same.
+  3. AGENTS.md, Documentation Rules: added the rule in the user's words as the last two bullets, its three parts as a numbered list.
+  4. Narrowed the bullet above it, "Do not log trivial modifications.", to typo and formatting fixes, and stated that the small events are never trivial. Reason: unchanged, it contradicted the new rule, since a changed setting could pass for trivial.
+  5. docs/activity-log.md: the header said "Skip trivial changes" (the same contradiction); it now names small events and the same exception. The entry format replaces Changes with What happened, Why and What we did, and keeps Files, Validation and Outstanding. Earlier entries keep the old fields and stay as written.
+  6. docs/memory.md: a second entry format, for problems and decisions, with the three parts; a new entry corrects or supersedes an old one, which stays as written.
+  - Why this was the best option: AGENTS.md is read first in every session, and new entries get copied from the two formats, so the rule, the headers and the formats now agree, and no past entry was touched.
+- Files: AGENTS.md, docs/activity-log.md, docs/memory.md
+- Validation: re-read the edited sections. No Prettier check applies: `.prettierignore` skips `*.md`. No tests ran: only Markdown changed, and none of the lines `set_floors` reads.
+- Outstanding: None. Nothing is committed.
+
+### 2026-10-18: GateGuard hook stopped the first Bash command and the first edit of each file
+
+- What happened: The session's first Bash command (print `.prettierignore`, grep the Prettier wiring, `git status --short`) did not run. Later the first edits of AGENTS.md, docs/memory.md and docs/activity-log.md, sent together, were all refused, and none was applied. Each time a PreToolUse hook answered "[Fact-Forcing Gate]" and asked for facts first: for Bash, the current request and what the command does; for an edit, the files that import the file, the functions affected, the structure of any data files it reads or writes, and the user's instruction verbatim.
+- Why: the ecc plugin's GateGuard hooks, `pre:bash:gateguard-fact-force` and `pre:edit-write:gateguard-fact-force`, from `%USERPROFILE%\.claude\plugins\cache\ecc\ecc\2.2.3\hooks\hooks.json`. They gate the first Bash command of a session and the first edit of each file. They belong to the user's global Claude Code setup; this repo has no `.claude` folder.
+- What we did: stated the facts in the reply, then sent the same calls again, and they ran. Answering the edit gate turned up a real reader of docs/memory.md, `evals/harness/eval.py` (the entry above, step 2). Nothing was disabled, though the hooks offer `ECC_GATEGUARD=off`, `ECC_DISABLED_HOOKS` and `GATEGUARD_EXEMPT_GLOBS`. Why: the gate costs one reply per file, it caught a dependency worth checking, and the setting belongs to the user's global setup, not this project.
+- Outstanding: None.
 
 ### 2026-10-17: Step 7, CI/CD built locally
 
