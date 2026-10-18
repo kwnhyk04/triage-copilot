@@ -2,7 +2,9 @@
 
 Persistent project knowledge for future sessions. Keep entries concise and accurate. Never invent history or decisions. Do not duplicate what is already in `context.md`.
 
-Entry format: `- YYYY-MM-DD: <fact or decision>. Reason: <why>.`
+Entry format: `- YYYY-MM-DD: <fact>. Reason: <why>.`
+
+An entry that records a problem or a decision follows the logging rule in AGENTS.md (Documentation Rules), small events included: `- YYYY-MM-DD: <what happened>. Why: <the cause or reason, or "not confirmed" when it is a guess>. What we did: <the exact steps in order: commands, buttons, where each setting lives>, and why that was the best option.` Mistakes are recorded the same way. Never rewrite a past entry; a new entry corrects or supersedes it.
 
 ## Decisions and Reasoning
 
@@ -131,6 +133,7 @@ From the approved design doc:
 - 2026-10-14: The three portfolio projects run in parallel Claude Code sessions on one PC, sharing Docker. Each project has its own port range and compose project name; never prune or remove another project's Docker resources (user setup).
 - 2026-10-13: General coding rules live in `AGENTS.md`. `CLAUDE.md` imports it so Claude Code loads the rules.
 - 2026-10-13: Markdown filenames use kebab-case (for example `docs/migrations.md`).
+- 2026-10-18: Shipping: Claude Code never commits, pushes, opens or merges pull requests, and never runs gh (the GitHub CLI) for anything, read-only commands included. The user ships with the ship command (H:\Projects\projects\_tools\ship.ps1): it commits, pushes, opens the pull request, waits for every check and merges only when all pass. When you need a CI or pull request result, ask the user. Reason: the user's rule, also in AGENTS.md (Git).
 
 ## Solved Problems
 
@@ -186,6 +189,8 @@ From the approved design doc:
 - 2026-10-17: Prettier reads the patterns of an `--ignore-path` file relative to that file's folder, so a test copy outside the repo ignores nothing. The config-protection hook still blocks agent edits of `.prettierignore`; the user adds the lines.
 - 2026-10-17: The token budget counts every model's tokens per UTC day, while Gemini's quota resets at midnight Pacific. After a day that also ran a Claude pass (1.59 million tokens), `DAILY_AI_TOKEN_BUDGET=3000000` stopped the test split at 3,050,302 tokens with Gemini at 230 of its 260 requests; the parked run had no steps. Raise the budget for the agent on such a day, or expect the earlier stop.
 - 2026-10-17: The anthropic SDK reads `ANTHROPIC_BASE_URL` when no `base_url` is passed, even with an explicit key, and `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` would put prompts in its spans; the provider passes both options in code, which override the variables.
+- 2026-10-18: Mistake: a PowerShell stop script looked each PID up in an `[ordered]` dictionary with an int key (`$targets[$id]`). The lookup returned nothing, so the label printed empty and the command-line test became `-like "**"`, which matches any process; only its `make.exe` name test held. Why: an int index on an `OrderedDictionary` selects by position, not by key (not confirmed by a separate test; the empty labels show the miss). What we did: compared the parent PIDs that taskkill printed with the make processes listed before the eval; they matched, so the right trees were stopped. That proved it after the fact without touching another process. Before a `taskkill`, compare each PID's `CommandLine` from `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>"` directly, or key the table by strings: a check that cannot fail protects nothing.
+- 2026-10-18: Confirmed: `$t = [ordered]@{ 10 = 'ten'; 20 = 'twenty' }` gives `$t[1]` = twenty and `$t[10]` = nothing, so an int index on an `[ordered]` table picks by position (the entry above left this unconfirmed). Why it mattered: only the old check's command-line test was empty; a missing PID or a process not named make.exe still failed it. What we did: the stop step in docs/todo.md (6b, step 7) keys PIDs as quoted strings and stops a tree only when the PID is a `make.exe` whose command-line tokens include the target. A dry run with made-up PIDs and no taskkill refused a missing PID, a make.exe of another target (which the old check let through) and an int key, and passed the matching control. Why that was best: it tested the broken part against a make.exe without starting or stopping any process.
 
 ## Rejected Approaches
 

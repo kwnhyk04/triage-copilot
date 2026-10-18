@@ -111,9 +111,15 @@ For small, clearly authorized changes, proceed without unnecessary confirmation.
 
 - Document only confirmed information. Never invent history or decisions.
 - Do not rewrite all documentation after every interaction.
-- Do not log trivial modifications.
+- Do not log trivial modifications such as typo or formatting fixes; the small events in the next rule are never trivial.
+- Every entry in `docs/activity-log.md`, and in `docs/memory.md` when it records a problem or a decision, includes small events too: a failed command, a skipped check, a tool or prompt that behaved unexpectedly, a setting changed. Each entry states three things:
+  1. What happened.
+  2. Why it happened (write "not confirmed" when it's a guess).
+  3. What we did: the exact steps in order (commands, buttons, where each setting lives) and why that was the best option.
+- Mistakes are logged the same way and never edited out later. Don't rewrite past entries.
 
 ## Git
 
 - Do not initialize Git or create commits unless requested.
 - Do not automatically stage or commit documentation or activity logs.
+- Shipping: Claude Code never commits, pushes, opens or merges pull requests, and never runs gh (the GitHub CLI) for anything, read-only commands included. The user ships with the ship command (H:\Projects\projects\_tools\ship.ps1): it commits, pushes, opens the pull request, waits for every check and merges only when all pass. When you need a CI or pull request result, ask the user.

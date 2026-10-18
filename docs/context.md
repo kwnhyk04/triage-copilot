@@ -286,14 +286,14 @@ Step 6b is in progress: the scenario set (frozen, manifest sha256 `b81c80f4ba442
 - The prompt is frozen at change 1 (2026-10-17); a test pins its sha. The ci subset on it, from cached runs: top-1 0.62, action correctness 0.75 against a do-nothing baseline of 0.50, no forbidden proposal.
 - Claude Haiku 5.5 is built in as the first fallback (off by default) and ran the dev split once on the frozen prompt (2026-10-17): top-1 0.80, action correctness 0.80, no forbidden proposal, validity 1.00, $0.0971 of credits for 15 investigations. No model-specific breakage; 11 of 15 runs reached the token reserve, since Haiku counts about 1.5 times Gemini's tokens per turn.
 - Python unit tests: 400 passed; `make test-int`: Jest 33 and pytest 41 passed; ruff and pyright clean. The dev database is at agent 0009.
-- The test split on Gemini started on 2026-10-17: 9 of 75 runs done, then exit 2 when the UTC day's token budget ran out (3,050,302 of 3,000,000; Gemini at 230 of 260 requests). dns-partition-2 run 1 is parked with no steps.
+- The test split on Gemini started on 2026-10-17: 9 of 75 runs done, then exit 2 when the UTC day's token budget ran out (3,050,302 of 3,000,000; Gemini at 230 of 260 requests). Day 2, 2026-10-18: 32 of 75 done, then exit 2 at the agent's limit of 260 Gemini requests, all answered (1,803,303 tokens). db-pool-exhaustion-4 run 2 is parked with 16 steps.
 - Gateway, web, agent and sim are stopped, with no process left on their ports, and the compose infra is down (volumes kept).
 - `make lint` passes (2026-10-17): `.prettierignore` skips the frozen scenario YAMLs and the eval reports, which are generated, instead of reformatting them.
-- Step 7 (CI/CD) is built locally and verified (2026-10-17): actionlint, the four image builds, lint, typecheck, unit tests, build, contracts and scenario checks, gitleaks. Waiting on the GitHub steps in docs/todo.md; `make test-int` runs locally again after the exam.
+- Step 7 (CI/CD) is built locally and verified (2026-10-17): actionlint, the four image builds, lint, typecheck, unit tests, build, contracts and scenario checks, gitleaks. The GitHub steps are done (the user confirmed on 2026-10-18): PR #1 is `0779d77` on origin/main. `make test-int` runs locally again after the exam.
 
 Next, in this order:
 
-1. Resume the test split after midnight Pacific with the exact steps in docs/todo.md (step 6b): infra, sim, the parked run's world, gateway, agent, eval. The other 66 runs need about 700 requests, about 3 more quota days.
+1. Resume the test split after midnight Pacific with the exact steps in docs/todo.md (step 6b): infra, sim, the parked run's world, gateway, agent, eval. The other 43 runs need about 470 requests, about 2 more quota days.
 2. Set the floors: `make eval SPLIT=test SET_FLOORS=1 ...` and `make eval SUBSET=ci SET_FLOORS=1 ...`. Both rescore cached runs and make no model calls.
 3. The Claude comparison on the test split (evals/README.md, Running), once the Gemini split is complete and before the credits expire on 2026-11-10: about 846 calls, 1.7 hours, and about $0.49 of credits at the dev pass's $0.0065 per investigation.
 
