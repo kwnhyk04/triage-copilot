@@ -19,6 +19,27 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-18: Partition test flake in CI after #2
+
+- What happened: After #2 (docs only) merged, CI's integration job failed `test_partition_swap_while_a_writer_runs` (1 failed, 40 passed), as the user reported. The log: writes after each phase {'dual-write on': 0, 'backfill': 5505, 'swap': 5826, 'dual-write off': 5906, 'contract': 6599, 'partition job': 6679}, slowest 0.552 s. The same code had passed on the pull request.
+- Why: confirmed from `services/agent/tests/test_partitioning_int.py`. `phase_done` slept a fixed 0.3 s and then read `writer.written`. Its first call comes right after `writer.start()`, so a first write slower than 0.3 s leaves the first phase at 0, and `all(after > before ...)` over `[0, 0, 5505, ...]` fails. The first write took over 0.3 s and at most 0.552 s; the log does not say which write was the slowest. Why it was slow is not confirmed; no migration or job runs in that phase, so it was not a lock wait. This reading assumes the counts assertion failed: had the writer logged errors, `writer.errors == []` would have failed first.
+- What we did:
+  1. `git switch -c fix/partition-test-flake main`, with main at `57e712d` (#2), the same as origin/main.
+  2. `phase_done` now waits until `writer.written` passes the previous phase's count, polling every 10 ms for up to 10 s. Past that it fails through `pytest.fail`, naming the phase, the count before it and the writer's last three errors. Every assertion stays: no errors, `slowest < 3`, and a count that rises in every phase.
+  3. Checked every fixed sleep in the integration tests, Python and TypeScript. None waits for progress and then asserts it, so none changed:
+     - `test_workers_int.py:278`: the tool sleeps 0.5 s so it is still running when the stop arrives, and the stop is event-driven.
+     - `test_workers_int.py:412`: the tool sleeps 5 s to outlast the 2 s visibility timeout; the test then polls with `eventually`.
+     - `test_parking_int.py:60` (`Slow`), as `Slow(2)` in the storm test: it holds each slot for 2 s, a margin over message delivery, not a wait for progress.
+     - `test_parking_int.py:275`: 3 s for three sweeps, then it asserts that nothing changed.
+     - `test_elasticmq_int.py:96`: 1.5 s past a 1 s visibility timeout, then it asserts the message is still hidden.
+     - `investigations.int.test.ts:122`: 1 ms of pacing in the writer; `written > 0` always holds, since the first insert starts before the walk and `await writer` lets it finish.
+     - Already polls with a deadline: `eventually` in `test_workers_int.py`, the start-up waits in `test_parking_int.py`, and `drained` in `events.int.test.ts`.
+  - Why this was the best option: it is the fix the user asked for; the wait ends on the write itself, and lock waits still show in `slowest` and in the writer's 5 s `statement_timeout`.
+- Small events: the edit tool noted that docs/todo.md had changed on disk since it was read: #2's commit by ship, with the content written earlier today. `make test-int` and containers were not run, as the user asked; CI verifies.
+- Files: services/agent/tests/test_partitioning_int.py, docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation: `uv run ruff check` and `uv run ruff format --check` on the test pass, and `uv run pyright` on it reports 0 errors. Not run: the test itself, which needs Postgres; CI runs it.
+- Outstanding: the user ships the branch, and CI's integration job must pass. Nothing is committed.
+
 ### 2026-10-18: Stop step's PID check fixed, and the day-3 resume facts
 
 - What happened: The user asked for a stop step whose PID check can fail, comparing the PIDs as the same type, shown failing on a made-up PID with taskkill left out, and for the resume steps in docs/todo.md to name the parked run, the earliest start and what is left.
