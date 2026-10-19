@@ -19,6 +19,52 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-19: Partition flake item completed, and the day-3 docs moved to a branch
+
+- What happened: The user confirmed that #3 is merged on main as `26f70cf`, which answers the day-3 entry's open item about the partition flake. They also asked to move the uncommitted day-3 docs changes off main to a new branch, `docs/exam-day-3`, and for a one-line commit message to ship it with.
+- Why: the shipping rule (AGENTS.md, Git): the user commits and ships, and the day-3 changes sat uncommitted on main.
+- What we did:
+  1. `git switch -c docs/exam-day-3` on main at `26f70cf`. The four modified docs came along uncommitted.
+  2. docs/todo.md: moved the partition flake item from In Progress to Completed, ticked, naming the merge and the user's confirmation.
+  3. Gave the commit message in chat: "Docs: exam day 3 (58 of 75 runs), day-4 resume steps with a quota-stop check, partition flake done".
+  - Why this was the best option: `git switch -c` keeps the working tree as it is, so nothing was stashed or copied, and the user's words decide the item.
+- Files: docs/todo.md, docs/activity-log.md
+- Validation: `git status` on `docs/exam-day-3` shows the same four modified docs and nothing else.
+- Outstanding: the user commits and ships the branch. Nothing is committed.
+
+### 2026-10-19: Test split on Gemini, day 3
+
+- What happened: The user ran day 3 of the test split with the resume steps in docs/todo.md (6b). They reported exit 2 with "quota stop: the model's quota or credits are spent", then stopped the servers and ran `make infra-down`. The result files show 26 runs finished between 08:43 and 09:25 UTC (16:43 to 17:25 Taipei), all on `gemini-3.5-flash-lite`:
+  - db-pool-exhaustion-4 run 2, parked on day 2;
+  - the other 17 second runs;
+  - 8 third runs (bad-config-3 to db-pool-exhaustion-4).
+  22 ended resolved and 4 awaiting approval. 58 of 75 runs are done and 17 are left. Parked: db-pool-exhaustion-5 run 3, state file `evals/reports/runs/db-pool-exhaustion-5-run3-a254b47335b02e97.state.json` (investigation `a0c316e6-4db8-4a34-86ad-369d16e7466e`, seed 40190, anchor 2026-10-19T09:25:46Z). Before it started, Gemini had answered 248 requests since midnight Pacific, all `ok`, with no 429, 503 or error; the small model got no request. Those requests used 1,653,530 tokens. The 26 runs total 1,690,143 tokens, but 36,613 of them are the resumed run's day-2 calls; the eval prints that run as 56,060 tokens.
+- Why: not confirmed. The eval prints the same quota-stop lines for two causes; day 2's saved eval output shows them for the first:
+  - The agent's own limit of 260 requests a Pacific day: it parks before the next turn and records no call.
+  - Google's 429 "daily quota spent": the agent records a `quota_exhausted` call whose error is `QuotaExhausted: gemini 429: daily quota spent` (`agent/providers.py`, `agent/llm.py`, `agent/job.py`).
+  The 248 requests left the parked run 12 under the limit, and db-pool-exhaustion-5 made exactly 12 in runs 1 and 2, so either cause fits. Only `agent.model_calls` in Postgres, down since `make infra-down`, and the agent's terminal output, which no file keeps, can tell. The token budget did not stop it: the agent checks it only for an investigation with no steps, and the UTC day stood at 1.65 million of 3 million when the parked run started.
+- What we did, all read-only (no eval, model call, container or `make test-int`, as the user asked):
+  1. Listed `evals/reports/runs/` by write time with `find -printf`, since RTK's condensed `ls -la` showed no times: 26 result files from 2026-10-19 and one state file; day 2's state file was gone.
+  2. Counted each day-3 result file's model calls by role, model and outcome, and its tokens, with a script in this session's scratchpad run by `.venv/Scripts/python.exe -I`. The resumed run's steps split by `recorded_at`: 8 calls on 2026-10-18 (steps 1 to 16, 36,613 tokens, the figures day 2's psql query gave) and 3 on 2026-10-19 (steps 17, 19 and 21, 19,447 tokens). 256 calls in the 26 files minus those 8 gives 248.
+  3. Checked that no run was started twice, since a second attempt's calls would be missing from the result files: each run's first step comes 60 to 67 s after the previous result file, the eval's 60 s gap.
+  4. Read the stop path: `evals/harness/eval.py` (`execute`), `run.py` (`wait`), and the agent's `job.py`, `llm.py` and `providers.py` for how each limit parks.
+  5. Looked for saved day-3 output. The Makefile writes no log file. The only Claude Code session of this project started on day 3 (08:39 UTC) ran `/effort` and nothing else. Day 2's saved agent output (`H:\.tmp\claude\H--Projects-projects-triage-copilot\503914ee-4139-4213-bfc1-c351d9541335\tasks\b52che61c.output`) shows what day 3's terminal held: one `httpx2` line per Gemini POST with its HTTP status (260 lines, all `200 OK`, on day 2), then `investigation parked`.
+  6. Looked for other users of the quota. In this project, `ci.yml` has no Gemini key; `eval.yml` runs only with `EVAL_ENABLED` true (unset by docs/todo.md; not checked, since gh is off limits) and on Mondays at 18:00 UTC, after the stop; tests use the scripted model; and the Makefile gives `GEMINI_API_KEY` only to `make dev-agent`. File times under `H:\.tmp\claude` show Claude Code sessions of freight-audit and filing-lens writing test and e2e logs during the eval. Their files were not opened (AGENTS.md, Context Isolation), so whether they called Gemini on a key of the same Google project is not known.
+  7. Estimated day 4 from each remaining scenario's earlier runs: about 181 requests, 199 if each run repeats its scenario's highest count, and about 1.2 million tokens.
+  8. docs/todo.md: day 3 on the progress line, and the day-4 resume steps. Step 1 now ends with a read-only query of day 3's counters, and step 7 runs the same query before `make infra-down`. docs/context.md (status, next steps) and docs/memory.md (Known Issues) updated.
+  - Why this was the best option: the files answer everything except the parked run's calls, and the user ruled out containers today. One query on day 4, before anything starts, settles it from the agent's own counters.
+- Small events:
+  - GateGuard gated the first Bash command, the first Write of each of three scratchpad scripts, and the first edit of docs/todo.md, docs/context.md, docs/memory.md and this file. In a parallel batch it refused only the first call, and the batch's other edits applied. What we did: stated the facts and sent the refused call again.
+  - `python` in Git Bash exited 49: "Python was not found; run without arguments to install from the Microsoft Store". Why: Windows' app execution alias, and no Python on PATH. What we did: ran the venv's interpreter with `-I` instead.
+  - A grep of day 2's agent output for `429` matched timestamps such as `.942984`; a search for `HTTP/1.1 429` found no line.
+- Files: docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation: each result file's `tokens` equals the sum of its calls' input and output tokens; 58 test-split result files, none for the same scenario and run twice. The stop message and both park paths were read from the code. No tests ran, since only Markdown changed. Step 1's query was not run (no containers today).
+- Outstanding:
+  - Which limit stopped day 3, the parked run's steps and the day's full tokens: day-4 step 1.
+  - 17 runs on day 4, then step 8's commands and the Claude comparison.
+  - docs/todo.md still lists the partition test flake as In Progress, while main has #3 (`26f70cf`), and ship merges only after every check passes. The user confirms before the item moves.
+  - Nothing is committed.
+
 ### 2026-10-18: Partition test flake in CI after #2
 
 - What happened: After #2 (docs only) merged, CI's integration job failed `test_partition_swap_while_a_writer_runs` (1 failed, 40 passed), as the user reported. The log: writes after each phase {'dual-write on': 0, 'backfill': 5505, 'swap': 5826, 'dual-write off': 5906, 'contract': 6599, 'partition job': 6679}, slowest 0.552 s. The same code had passed on the pull request.
