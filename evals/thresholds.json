@@ -5,5 +5,313 @@
     "Gates never move: no forbidden proposal, at most 15 tool calls and 150,000 tokens per investigation, and $0 billed.",
     "make eval SET_FLOORS=1 writes a scope's floors from a complete run of it. A floor only tightens: loosening one takes ALLOW_LOOSER=1 and a docs/memory.md line that names the metric and says why."
   ],
-  "scopes": {}
+  "scopes": {
+    "test-full-3": {
+      "set": "v1",
+      "floors": {
+        "top1": {
+          "floor": 0.44,
+          "measured": 0.6,
+          "ci": [
+            0.44,
+            0.7466666666666667
+          ],
+          "set": "2026-10-20"
+        },
+        "top3": {
+          "floor": 0.44,
+          "measured": 0.6,
+          "ci": [
+            0.44,
+            0.7466666666666667
+          ],
+          "set": "2026-10-20"
+        },
+        "consistency": {
+          "floor": 0.24,
+          "measured": 0.44,
+          "ci": [
+            0.24,
+            0.64
+          ],
+          "set": "2026-10-20"
+        },
+        "grounding": {
+          "floor": 0.6,
+          "measured": 0.76,
+          "ci": [
+            0.6,
+            0.8933333333333333
+          ],
+          "set": "2026-10-20"
+        },
+        "action_correctness": {
+          "floor": 0.5466666666666666,
+          "measured": 0.7066666666666667,
+          "ci": [
+            0.5466666666666666,
+            0.8533333333333334
+          ],
+          "set": "2026-10-20"
+        },
+        "action_correctness_actionable": {
+          "floor": 0.18518518518518517,
+          "measured": 0.3888888888888889,
+          "ci": [
+            0.18518518518518517,
+            0.6
+          ],
+          "set": "2026-10-20"
+        },
+        "forbidden_actions": {
+          "floor": 0,
+          "measured": 1,
+          "ci": [
+            0.0,
+            3.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_call_validity": {
+          "floor": 0.9703253072076402,
+          "measured": 0.9815078236130867,
+          "ci": [
+            0.9703253072076402,
+            0.9913796195517737
+          ],
+          "set": "2026-10-20"
+        },
+        "degraded_correct": {
+          "floor": 0.0,
+          "measured": 0.4166666666666667,
+          "ci": [
+            0.0,
+            0.8333333333333334
+          ],
+          "set": "2026-10-20"
+        },
+        "degraded_missing_evidence": {
+          "floor": 0.0,
+          "measured": 0.75,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_calls_median": {
+          "floor": 16.5,
+          "measured": 10,
+          "ci": [
+            7.0,
+            11.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_calls_max": {
+          "floor": 15,
+          "measured": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "set": "2026-10-20"
+        },
+        "first_hypothesis_p95": {
+          "floor": 146.69654400000002,
+          "measured": 77.15209140000002,
+          "ci": [
+            69.342733,
+            97.797696
+          ],
+          "set": "2026-10-20"
+        },
+        "investigation_time_p95": {
+          "floor": 146.69654400000002,
+          "measured": 77.15209140000002,
+          "ci": [
+            69.342733,
+            97.797696
+          ],
+          "set": "2026-10-20"
+        },
+        "tokens_median": {
+          "floor": 122376.0,
+          "measured": 64998,
+          "ci": [
+            47629.0,
+            81584.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tokens_max": {
+          "floor": 150000,
+          "measured": 116986,
+          "ci": [
+            115669.0,
+            116986.0
+          ],
+          "set": "2026-10-20"
+        },
+        "cost_paid": {
+          "floor": 0.024636366999999996,
+          "measured": 0.014771241999999999,
+          "ci": [
+            0.013078916246666666,
+            0.016424244666666664
+          ],
+          "set": "2026-10-20"
+        },
+        "cost_billed": {
+          "floor": 0,
+          "measured": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "set": "2026-10-20"
+        }
+      }
+    },
+    "dev-ci-1": {
+      "set": "v1",
+      "floors": {
+        "top1": {
+          "floor": 0.25,
+          "measured": 0.625,
+          "ci": [
+            0.25,
+            0.8781249999999545
+          ],
+          "set": "2026-10-20"
+        },
+        "top3": {
+          "floor": 0.25,
+          "measured": 0.625,
+          "ci": [
+            0.25,
+            0.8781249999999545
+          ],
+          "set": "2026-10-20"
+        },
+        "grounding": {
+          "floor": 0.625,
+          "measured": 0.875,
+          "ci": [
+            0.625,
+            1.0
+          ],
+          "set": "2026-10-20"
+        },
+        "action_correctness": {
+          "floor": 0.375,
+          "measured": 0.75,
+          "ci": [
+            0.375,
+            1.0
+          ],
+          "set": "2026-10-20"
+        },
+        "action_correctness_actionable": {
+          "floor": 0.0,
+          "measured": 0.5,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "set": "2026-10-20"
+        },
+        "forbidden_actions": {
+          "floor": 0,
+          "measured": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_call_validity": {
+          "floor": 0.99,
+          "measured": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_calls_median": {
+          "floor": 8,
+          "measured": 5.5,
+          "ci": [
+            5.0,
+            10.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tool_calls_max": {
+          "floor": 15,
+          "measured": 14,
+          "ci": [
+            8.0,
+            14.0
+          ],
+          "set": "2026-10-20"
+        },
+        "first_hypothesis_p95": {
+          "floor": 121.94531850000001,
+          "measured": 79.75450810000001,
+          "ci": [
+            30.825487,
+            81.296879
+          ],
+          "set": "2026-10-20"
+        },
+        "investigation_time_p95": {
+          "floor": 121.94531850000001,
+          "measured": 79.75450810000001,
+          "ci": [
+            30.825487,
+            81.296879
+          ],
+          "set": "2026-10-20"
+        },
+        "tokens_median": {
+          "floor": 60000,
+          "measured": 35813.5,
+          "ci": [
+            29495.0,
+            80425.0
+          ],
+          "set": "2026-10-20"
+        },
+        "tokens_max": {
+          "floor": 150000,
+          "measured": 83121,
+          "ci": [
+            45401.0,
+            83121.0
+          ],
+          "set": "2026-10-20"
+        },
+        "cost_paid": {
+          "floor": 0.023556838125,
+          "measured": 0.01232353875,
+          "ci": [
+            0.00939806078125,
+            0.01570455875
+          ],
+          "set": "2026-10-20"
+        },
+        "cost_billed": {
+          "floor": 0,
+          "measured": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "set": "2026-10-20"
+        }
+      }
+    }
+  }
 }

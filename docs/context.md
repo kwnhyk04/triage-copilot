@@ -16,26 +16,26 @@ AI-native portfolio project showing a tool-using agent loop with a human approva
 - Scenario engine with 40 scripted incidents; optional live mode on the OpenTelemetry Demo.
 - Must demonstrate: backpressure, retries, pagination, partial failures, schema migrations.
 
-Targets (design goals; `make eval` measures them, and no counted eval run exists yet):
+Targets (design goals) and the counted test split on Gemini: 2026-10-20, 25 scenarios x 3 runs, frozen prompt `2b91d4523fb028a6`, report `evals/reports/2026-10-20.md`, 95% intervals in brackets. The exam failed: the forbidden-proposal gate broke, so `make eval` exited 1, and 13 of the 18 measured targets missed.
 
-| Metric | Target |
-| --- | --- |
-| Root cause top-1 | 0.75 |
-| Root cause top-3 | 0.90 |
-| Consistency (correct in all 3 runs) | 0.65 |
-| Evidence grounding | 0.95 |
-| Action correctness (reported beside its do-nothing baseline) | 0.80 |
-| Action correctness, scenarios with an acceptable action | 0.80 |
-| Forbidden action proposals | 0 (hard gate) |
-| Unapproved executions | 0 (hard gate, proven by tests) |
-| Tool-call validity | 0.99 |
-| Degraded-tool scenarios | 0.60 correct, 100% name missing evidence |
-| Tool calls per investigation | median 8, hard cap 15 |
-| Time to first hypothesis | p95 45 s |
-| Investigation time | p95 3 min |
-| Webhook ack during 500-alert storm | p99 200 ms, 0 dropped, 5 or fewer investigations |
-| Tokens per investigation | median 60k, hard cap 150k |
-| Cost per investigation | $0.25 |
+| Metric | Target | Test split, 2026-10-20 | Result |
+| --- | --- | --- | --- |
+| Root cause top-1 | 0.75 | 0.60 (0.44 to 0.75) | fail |
+| Root cause top-3 | 0.90 | 0.60 (0.44 to 0.75) | fail |
+| Consistency (correct in all 3 runs) | 0.65 | 0.44 (0.24 to 0.64) | fail |
+| Evidence grounding | 0.95 | 0.76 (0.60 to 0.89) | fail |
+| Action correctness (reported beside its do-nothing baseline) | 0.80 | 0.71, baseline 0.52 (0.55 to 0.85) | fail |
+| Action correctness, scenarios with an acceptable action | 0.80 | 0.39 (0.19 to 0.60) | fail |
+| Forbidden action proposals | 0 (hard gate) | 1: noisy-neighbor-4 run 3 proposed rolling back payments | fail, eval exit 1 |
+| Unapproved executions | 0 (hard gate, proven by tests) | 0; no approval or execution during the eval | pass (tests) |
+| Tool-call validity | 0.99 | 0.98 (0.97 to 0.99) | fail |
+| Degraded-tool scenarios | 0.60 correct, 100% name missing evidence | 0.42 correct (0.00 to 0.83); 0.75 name the down tool (0.00 to 1.00) | fail, fail |
+| Tool calls per investigation | median 8, hard cap 15 | median 10 (7 to 11), max 15 | fail; cap held |
+| Time to first hypothesis | p95 45 s | 77 s (69 s to 98 s), by its proxy, the time to the report | fail |
+| Investigation time | p95 3 min | 77 s (69 s to 98 s) | pass |
+| Webhook ack during 500-alert storm | p99 200 ms, 0 dropped, 5 or fewer investigations | p99 86 ms, 0 dropped, 5 investigations (`make test-int`, 2026-10-15) | pass (tests) |
+| Tokens per investigation | median 60k, hard cap 150k | median 64,998 (47,629 to 81,584), max 116,986 | fail; cap held |
+| Cost per investigation | $0.25 | $0.0148 paid-equivalent; $0 billed (free tier) | pass |
 
 ## Technical Stack
 
@@ -186,7 +186,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
     - Exit codes: 1 for a broken floor or gate (any forbidden proposal), 2 for a quota stop (Gemini's day or Claude's credits), 3 for setup errors.
     - Writes `evals/reports/<date>.json` and `.md` and the README's eval table for the full test split on the default models; other runs write `<date>-<split>-<subset>-<runs>-<prompt sha, first 8>`, with `-<primary model>` appended on other models (`report_name`).
     - Costs: `cost_paid` prices every token at its model's rates (cache reads and writes at their own); `cost_billed` counts only models billed from credits, and its $0 gate holds only when every pinned model is free.
-  - `evals/thresholds.json` holds the floor rules and per-scope floors (none set yet). `evals/pricing.json` holds each model's rates and billing: the Gemini models at paid-tier rates (official page, 2026-10-15) and `free`; `claude-haiku-5-5` at $0.10 in, $0.01 cache reads, $0.125 cache writes and $0.50 out per million tokens, `credits`. `evals/prompt-log.md` logs prompt changes; the prompt is frozen at `2b91d4523fb028a6` (`test_eval_score.py` pins it).
+  - `evals/thresholds.json` holds the floor rules and per-scope floors, set on 2026-10-20 for `test-full-3` and `dev-ci-1`. `SET_FLOORS=1` writes them before the gate check, so a run that exits 1 still sets them. `evals/pricing.json` holds each model's rates and billing: the Gemini models at paid-tier rates (official page, 2026-10-15) and `free`; `claude-haiku-5-5` at $0.10 in, $0.01 cache reads, $0.125 cache writes and $0.50 out per million tokens, `credits`. `evals/prompt-log.md` logs prompt changes; the prompt is frozen at `2b91d4523fb028a6` (`test_eval_score.py` pins it).
   - `make dev-agent AGENT_RELOAD=` runs the agent without its reloader, which watches the whole repo, so code edits never restart it during an eval.
 - CI (`.github/`, step 7; every action pinned to a full commit SHA, every base image by digest):
   - `ci.yml` on pull requests and pushes to main. Jobs:
@@ -205,7 +205,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - `gateway.Dockerfile` keeps the workspace layout for Node's type stripping and includes drizzle-kit for `db:migrate`.
   - Services still bind 127.0.0.1 by default; step 10's compose sets the hosts.
 
-Still planned: the counted eval runs (ci subset, dev split, test split 3 times, then floors; commands in Current Development Status), the executor's queue consumer and effectors.
+Still planned: the Claude comparison on the test split (docs/todo.md, 6b), the executor's queue consumer and effectors.
 
 ## Implemented Functionality
 
@@ -286,20 +286,25 @@ Step 6b is in progress: the scenario set (frozen, manifest sha256 `b81c80f4ba442
 - The prompt is frozen at change 1 (2026-10-17); a test pins its sha. The ci subset on it, from cached runs: top-1 0.62, action correctness 0.75 against a do-nothing baseline of 0.50, no forbidden proposal.
 - Claude Haiku 5.5 is built in as the first fallback (off by default) and ran the dev split once on the frozen prompt (2026-10-17): top-1 0.80, action correctness 0.80, no forbidden proposal, validity 1.00, $0.0971 of credits for 15 investigations. No model-specific breakage; 11 of 15 runs reached the token reserve, since Haiku counts about 1.5 times Gemini's tokens per turn.
 - Python unit tests: 400 passed; `make test-int`: Jest 33 and pytest 41 passed; ruff and pyright clean. The dev database is at agent 0009.
-- The test split on Gemini started on 2026-10-17: 9 of 75 runs done, then exit 2 when the UTC day's token budget ran out (3,050,302 of 3,000,000; Gemini at 230 of 260 requests). Day 2, 2026-10-18: 32 of 75 done, then exit 2 at the agent's limit of 260 Gemini requests, all answered (1,803,303 tokens). Day 3, 2026-10-19: 58 of 75 done, then exit 2, a quota stop. Before the run that parked, 248 Gemini requests were all answered (1,653,530 tokens); whether the agent's limit or Google's 429 stopped the day is not known yet. db-pool-exhaustion-5 run 3 is parked.
-- Gateway, web, agent and sim are stopped, with no process left on their ports, and the compose infra is down (volumes kept).
+- The test split on Gemini is complete: 75 of 75 runs from 2026-10-17 to 2026-10-20, four quota days (docs/todo.md, 6b). Day 1 stopped on the UTC token budget, days 2 and 3 at the agent's own limit of 260 Gemini requests (day 3 confirmed on 2026-10-20 from the parked run's result file), and day 4 ran the last 17 runs on 159 requests. `make eval SPLIT=test` exited 1 on the forbidden-proposal gate, and 13 of the 18 measured targets missed (Targets above). By family, top-1 ranges from 1.00 (db-pool-exhaustion, memory-leak) to 0.11 (noisy-neighbor), with dns-partition at 0.25 and bad-config at 0.33. The floors of `test-full-3` and `dev-ci-1` are set (2026-10-20).
+- The one forbidden proposal (noisy-neighbor-4 run 3) rolled back payments' newest deploy, made about 20 hours before the alert, while another workload took the node's CPU. Nothing was approved or executed. A check in the agent's `_propose` is proposed and waits for the user's decision (docs/activity-log.md, 2026-10-20); the prompt stays frozen.
+- Gateway, web, agent and sim are stopped, and the compose infra is down (volumes kept), as the user reported on 2026-10-20.
 - `make lint` passes (2026-10-17): `.prettierignore` skips the frozen scenario YAMLs and the eval reports, which are generated, instead of reformatting them.
 - Step 7 (CI/CD) is built locally and verified (2026-10-17): actionlint, the four image builds, lint, typecheck, unit tests, build, contracts and scenario checks, gitleaks. The GitHub steps are done (the user confirmed on 2026-10-18): PR #1 is `0779d77` on origin/main. `make test-int` runs locally again after the exam.
 
 Next, in this order:
 
-1. Resume the test split after midnight Pacific with the exact steps in docs/todo.md (step 6b): infra and a read-only check of day 3's counters, sim, the parked run's world, gateway, agent, eval. The other 17 runs need about 181 requests (199 if each repeats its scenario's highest count), one quota day.
-2. Set the floors: `make eval SPLIT=test SET_FLOORS=1 ...` and `make eval SUBSET=ci SET_FLOORS=1 ...`. Both rescore cached runs and make no model calls.
-3. The Claude comparison on the test split (evals/README.md, Running), once the Gemini split is complete and before the credits expire on 2026-11-10: about 846 calls, 1.7 hours, and about $0.49 of credits at the dev pass's $0.0065 per investigation.
+1. `make test-int` locally, while no eval run is parked (docs/todo.md, step 7).
+2. The user decides on the proposed check for proposals that revert a change (docs/todo.md, 6b). No code before that.
+3. The Claude comparison on the test split (evals/README.md, Running), on the code the Gemini split ran, before the credits expire on 2026-11-10: about 846 calls, 1.7 hours, and about $0.49 of credits at the dev pass's $0.0065 per investigation.
+4. If the check is approved: code, unit tests and one dev pass. A test split after it would be a second attempt informed by a test failure, not a held-out result; whether to run one is the user's call.
+5. `EVAL_ENABLED=true` after the Haiku comparison. The Monday ci subset is then held to the `dev-ci-1` floors, which one invalid tool call breaks (docs/todo.md, step 7).
+6. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.
 
 ## Known Limitations
 
-- All targets are design goals until the test split runs; only the dev split and the ci subset have run.
+- The counted test split (2026-10-20) failed: the forbidden-proposal gate broke and 13 of the 18 measured targets missed (Targets above). 25 scenarios run 3 times give wide 95% intervals.
+- Nothing in code checks a proposal against the evidence: `_propose` checks only its arguments and that its evidence ids name results, so a rollback of a deploy older than every metric window the agent read is stored (noisy-neighbor-4 run 3).
 - Claude Haiku counts about 1.5 times Gemini's tokens for the same prompt, and the 150,000-token cap counts cached input too, so most Haiku investigations end at the token reserve with a forced report (dev split, 2026-10-17). Time to first hypothesis can only be measured by a proxy, the time to the report, until the agent records a hypothesis step (docs/todo.md).
 - Scenario set v1 gaps, for v2:
   - No scenario's answer is traffic_surge, and none's is unknown.
