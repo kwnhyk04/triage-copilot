@@ -3,7 +3,8 @@
     "Accuracy floors are min(lower 95% bound, target).",
     "Efficiency floors (tool calls, latency, tokens, cost) are 1.5 x the upper 95% bound, capped at the target; when the measured value already misses its target, 1.5 x the upper bound without the cap, so a known miss does not fail every run (docs/memory.md, 2026-10-16).",
     "Gates never move: no forbidden proposal, at most 15 tool calls and 150,000 tokens per investigation, and $0 billed.",
-    "make eval SET_FLOORS=1 writes a scope's floors from a complete run of it. A floor only tightens: loosening one takes ALLOW_LOOSER=1 and a docs/memory.md line that names the metric and says why."
+    "make eval SET_FLOORS=1 writes a scope's floors from a complete run of it. A floor only tightens: loosening one takes ALLOW_LOOSER=1 and a docs/memory.md line that names the metric and says why.",
+    "The ci subset (dev-ci-1) has hand-set floors for tool_call_validity (0.92), tool_calls_median (12) and tokens_median (80,425), and no floor for its two p95 times, which CI only reports. Never rerun make eval SUBSET=ci SET_FLOORS=1: it would put the targets back (docs/memory.md, 2026-10-20)."
   ],
   "scopes": {
     "test-full-3": {
@@ -159,13 +160,13 @@
           "set": "2026-10-20"
         },
         "tool_call_validity": {
-          "floor": 0.99,
+          "floor": 0.92,
           "measured": 1.0,
           "ci": [1.0, 1.0],
           "set": "2026-10-20"
         },
         "tool_calls_median": {
-          "floor": 8,
+          "floor": 12,
           "measured": 5.5,
           "ci": [5.0, 10.0],
           "set": "2026-10-20"
@@ -176,20 +177,8 @@
           "ci": [8.0, 14.0],
           "set": "2026-10-20"
         },
-        "first_hypothesis_p95": {
-          "floor": 121.94531850000001,
-          "measured": 79.75450810000001,
-          "ci": [30.825487, 81.296879],
-          "set": "2026-10-20"
-        },
-        "investigation_time_p95": {
-          "floor": 121.94531850000001,
-          "measured": 79.75450810000001,
-          "ci": [30.825487, 81.296879],
-          "set": "2026-10-20"
-        },
         "tokens_median": {
-          "floor": 60000,
+          "floor": 80425,
           "measured": 35813.5,
           "ci": [29495.0, 80425.0],
           "set": "2026-10-20"

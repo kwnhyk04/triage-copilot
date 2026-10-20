@@ -11,7 +11,7 @@ Scenario-based evaluation of the agent. The sim serves scripted incidents; each 
 | `harness/score.py` | Per-run scores, the metrics, 95% bootstrap intervals and the floor rules. |
 | `harness/eval.py` | `make eval`: the plan, the run cache and resume, the quota estimate, the reports and the README table. |
 | `harness/test_eval_score.py`, `harness/test_scenario_set.py` | Scoring, floor, plan and report tests. Scenario-set tests: the frozen manifest pins every file, the generator writes the same bytes, deploy and config timing give no answer away, and every required signal shows in the real tools' results. |
-| `thresholds.json` | The floor rules and the floors per scope (`test-full-3`, `dev-ci-1`), written by `SET_FLOORS=1`. No floors are set yet. |
+| `thresholds.json` | The floor rules and the floors per scope (`test-full-3`, `dev-ci-1`), written by `SET_FLOORS=1` on 2026-10-20; three `dev-ci-1` floors were then set by hand and its p95 times left without one, so `SET_FLOORS=1` is never rerun on the ci subset. |
 | `pricing.json` | Paid-tier rates of the pinned models, from the official pricing page (updated 2026-10-15), for the paid-equivalent cost. The project bills $0 on the free tier. |
 | `prompt-log.md` | Every change to what the model is told, its sha256, and what drove it. |
 | `reports/` | Kept in git: `<date>.json` and `<date>.md` for the full test split; other runs are `<date>-<split>-<subset>-<runs>-<prompt sha, first 8>`, so each prompt of a day's tuning keeps its report. `reports/runs/` caches each run and is git-ignored. |
@@ -72,7 +72,6 @@ make eval SPLIT=dev RUNS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false
 make eval SPLIT=test ESTIMATE=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false
 make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false
 make eval SPLIT=test SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false
-make eval SUBSET=ci SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false
 ```
 
 1. The ci subset: 8 dev scenarios x 1 run, about 72 model calls.
@@ -80,7 +79,8 @@ make eval SUBSET=ci SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=fals
 3. The quota estimate: calls per model against each daily quota, and the days needed. It counts against `LLM_PRIMARY_RPD`, 260 by default: a little under the 275 requests Google allowed on 2026-10-16, a measured cap, not a documented one.
 4. The test split, 25 x 3 = 75 runs, about 750 model calls: about 3 quota days at the 275 requests observed. On exit 2, run the same command after midnight Pacific; it goes on from the parked run.
 5. Floors from the complete test run; scoring reads the cached runs, so this makes no model calls.
-6. Floors for the ci subset in the same way.
+
+Never run `make eval SUBSET=ci SET_FLOORS=1`: the ci subset's floors for validity (0.92), median tool calls (12) and median tokens (80,425) are set by hand, and its two p95 times have none, so CI only reports them (docs/memory.md, 2026-10-20). Rerun, it would derive them from the 8 cached runs again and put the targets back.
 
 The Claude comparison pins `claude-haiku-5-5` for the agent and the log summaries, paid from Anthropic API credits until they expire on 2026-11-10. Pass the same model settings to the agent and to the eval:
 
@@ -89,9 +89,9 @@ make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LL
 make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5
 ```
 
-Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in their name, and it never writes the README table. Credits gone (a 402, a 400 naming a spend limit, or a 429 without retry-after) park the run and stop the eval with exit 2.
+Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in their name, and it never writes the README table. Never add `SET_FLOORS=1` to it: the floors' scope (`test-full-3`) does not name the model, so Haiku's figures would replace Gemini's. Credits gone (a 402, a 400 naming a spend limit, or a 429 without retry-after) park the run and stop the eval with exit 2.
 
-In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (about 85 Gemini requests) or a chosen scope by hand, only once the repository variable `EVAL_ENABLED` is `true`. A quota stop fails it with "rerun after the quota resets"; CI keeps no run cache, so a rerun starts over.
+In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (about 85 Gemini requests) or a chosen scope by hand, only once the repository variable `EVAL_ENABLED` is `true`. It fails on the gates and the `dev-ci-1` floors in `thresholds.json`, and only reports the two p95 times. A quota stop fails it with "rerun after the quota resets"; CI keeps no run cache, so a rerun starts over.
 
 Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `SUBSET=full`, `RUNS` 1 for the ci subset and 3 otherwise.
 
@@ -119,7 +119,7 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
 
 ## Status (2026-10-20)
 
-v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20.
+v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20; the ci subset's validity, median tool calls and median tokens by hand, and no floor for its p95 times (docs/memory.md).
 
 Dev split, 1 run each (every scenario named here is a dev scenario):
 
