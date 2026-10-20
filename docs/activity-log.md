@@ -19,6 +19,32 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-20: CI lint failed on thresholds.json; set_floors now writes Prettier's layout
+
+- What happened: CI failed at lint on the docs/exam-day-4 pull request, as the user reported: `pnpm prettier --check .` flagged `evals/thresholds.json` ("Code style issues found"). `make eval ... SET_FLOORS=1` wrote that file.
+- Why, confirmed: `set_floors` wrote `json.dumps(thresholds, indent=2)`, which puts each number of every `ci` pair on its own line; Prettier 3.9.10 with `.prettierrc.json` (`printWidth` 100) prints an array on one line when it fits. `pnpm prettier evals/thresholds.json` differed from the file only there. The working-tree copy also had CRLF line ends (`git ls-files --eol`: `i/lf w/crlf`): `Path.write_text` turns "\n" into CRLF on Windows. Git stores LF (`.gitattributes`: `* text=auto eol=lf`), so CI saw only the layout; a local `make lint` would have flagged both.
+- Mistake: the day-4 entry below says "No tests ran, since only Markdown changed", but the branch also carried `evals/thresholds.json`, which lint checks, and `make lint` was not run before the commit message was given. Why: the eval's generated files were treated as outside the change (not confirmed beyond that).
+- What we did:
+  1. Read `set_floors`, `.prettierrc.json`, `.prettierignore` (it skips `*.md` and `evals/reports/`, not this file), `.gitattributes` and the Makefile's `lint` and `test` targets.
+  2. Piped samples through the repo's Prettier (`pnpm prettier --stdin-filepath evals/thresholds.json`) for the rules that matter here: an array goes on one line when it fits 100 columns; a number array too long for one line is filled several per line; exponents lose "+" and leading zeros (`1e-05` to `1e-5`, `1e+16` to `1e16`); `3.0` and string escapes stay; objects stay expanded when the source breaks after "{".
+  3. Test first: `test_set_floors_writes_thresholds_as_prettier_prints_them` in `evals/harness/test_eval_score.py` runs `set_floors` on a temp file and wants `PRETTIER_THRESHOLDS` byte for byte: a rules array too long for one line, `ci` pairs, exponent floats, LF. `cmp` showed that text is byte-identical to Prettier's own output for it. Against the old writer it failed: `b'{\r\n  "rul...' == b'{\n  "rules...'`.
+  4. `evals/harness/eval.py`: `prettier_json` (with `_json_lines`, `_json_scalar` and `PRINT_WIDTH = 100`), and `set_floors` writes it with `newline="\n"`. A `ponytail:` comment names the ceiling: only arrays of scalars go on one line; Prettier also inlines nested arrays and fills long number arrays, which thresholds.json never holds.
+  5. Rewrote `evals/thresholds.json` with the same writer: load, `prettier_json`, write with LF.
+  - Why this was the best option: plain Python, so the harness needs no Node call (pnpm is a `.cmd` shim on Windows, and a subprocess would need a timeout and the JS toolchain), and `make lint` stays the judge of the committed file.
+- Small events:
+  - pyright strict flagged the first version: `_json_scalar(value)` received "object | dict[Unknown, Unknown] | list[Unknown] | tuple[Unknown, ...]" (reportUnknownArgumentType), because an empty container fell through the `isinstance(...) and value` checks. Scalars and empty containers now return first.
+  - A word diff with `--word-diff-regex='[^[:space:]]+'` reported 165 changed words, since `[0.44,` is one word after the join and three before. With punctuation as words of its own (`'[][{},:]|[^][{},:[:space:]]+'`) it reports 0.
+  - RTK replaced the output of `git diff --word-diff=porcelain` with its condensed diff; `rtk proxy git diff ...` gave the raw output.
+  - GateGuard gated the first Bash command and the first edit of each file; stated the facts and sent the call again.
+- Files: evals/harness/eval.py, evals/harness/test_eval_score.py, evals/thresholds.json, docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation:
+  - The new test failed first and passes now; `evals/harness/test_eval_score.py`: 20 passed.
+  - `evals/thresholds.json`: `pnpm prettier --check` passes; parsed, it equals `HEAD`'s; with every whitespace character removed the two texts are identical; the punctuation-aware word diff shows 0 changed words; 317 lines became 218; line ends LF (`i/lf w/lf`).
+  - `make lint`: exit 0 (eslint; Prettier "All matched files use Prettier code style!"; ruff check; ruff format, 120 files).
+  - `make test`: exit 0. Python 401 passed, 41 integration tests deselected; TypeScript 4 of 4 tasks passed, replayed from Turbo's cache since no TypeScript input changed (2, 36, 3 and 43 tests).
+  - `uv run pyright`: 0 errors. Not run: `make test-int`, evals and containers, as the user asked.
+- Outstanding: the user ships the branch, and CI's lint must pass. Nothing is committed.
+
 ### 2026-10-20: Forbidden proposal at noisy-neighbor-4 run 3: diagnosis and a proposed check (no code)
 
 - What happened: The test split's only forbidden proposal, read from its saved run file `evals/reports/runs/noisy-neighbor-4-run3-7c7a4704bc11e026.json` (investigation `dac2fc6a-7bee-469c-bf12-84e7bf516753`, alert at 13:39:41 UTC, 13 tool calls, 14 model calls all ok, 85,271 tokens, 98 s, awaiting approval):
