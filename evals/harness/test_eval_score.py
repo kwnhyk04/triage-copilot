@@ -140,6 +140,26 @@ def test_action_correctness_shows_the_do_nothing_baseline_and_the_actionable_sha
     assert "| Action correctness, scenarios with an acceptable action | 0.80 | 0.50 |" in block
 
 
+def test_eval_runs_rewrite_only_the_readme_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    readme, history = tmp_path / "README.md", "## Exam history\n\nKept by hand.\n"
+    readme.write_text(f"# T\n\n{harness.START}\nOLD BLOCK\n{harness.END}\n\n{history}", "utf-8")
+    monkeypatch.setattr(harness, "README", readme)
+    report: dict[str, Any] = {
+        "metrics": {},
+        "proven_elsewhere": [],
+        "scope": {"scenarios": 25, "runs": 3},
+        "date": "2026-10-21",
+        "models_text": "m",
+    }
+    harness.update_readme(report)
+    text = readme.read_text(encoding="utf-8")
+    assert "OLD BLOCK" not in text
+    assert text.startswith(f"# T\n\n{harness.START}\n## Eval results")
+    assert text.endswith(f"{harness.END}\n\n{history}")
+
+
 def test_forbidden_proposals_are_counted_with_any_parameters() -> None:
     both = [rollback("frontend", to_version="v2.3.0"), rollback("frontend")]
     assert scored(proposals=both).forbidden == 2

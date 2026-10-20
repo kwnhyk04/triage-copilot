@@ -19,6 +19,71 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-20: dev-ci-1 floors set by hand; both p95 times report-only in CI
+
+- What happened: The user approved the three proposed `dev-ci-1` floors as a hand edit (validity 0.92, median tool calls 12, median tokens 80,425), with a docs/memory.md line per metric giving the reason and a note that `SET_FLOORS=1` must not be rerun on the ci subset. For the two p95-time floors they asked for the same kind of fix, either a floor that fails normal runs about 1 to 3% of the time or report-only in CI, with the choice explained. `EVAL_ENABLED` stays off.
+- Why: the floors `SET_FLOORS=1` wrote sat at the targets (validity 0.99, median 8 tool calls, median 60,000 tokens) and failed resampled normal runs 83%, 47% and 33% of the time; the p95-time floors (121.9 s) failed 9.6% (entry below).
+- What we did:
+  1. `evals/thresholds.json`, by hand: `dev-ci-1` `tool_call_validity` 0.99 to 0.92, `tool_calls_median` 8 to 12, `tokens_median` 60000 to 80425; removed `first_hypothesis_p95` and `investigation_time_p95`; a fifth rule names the hand-set floors and says never to rerun `make eval SUBSET=ci SET_FLOORS=1`. The `measured`, `ci` and `set` fields stay; `test-full-3` is unchanged (compared with `HEAD`).
+  2. Chose report-only in CI for both p95 times, not a floor:
+     - Resampled 8-run checks from the dev pass exceed 121.9 s 9.6% of the time.
+     - A floor at 1 to 3% cannot be backed by the data: the resampled 97.5% point is the dev pass's slowest run (125 s), the most a resample can show, while stalls already seen lie beyond it (a 504 waits 60 s, twice on 2026-10-19; 503 bursts cost up to 3 minutes a run on 2026-10-16). A 125 s floor would read 2.5% on paper and fail more often in practice.
+     - The time mostly measures the provider and the runner, not the agent; the agent's own 300 s stop holds in code, and the report still shows both times and their result against the targets.
+     - No code: `check` skips an efficiency metric without a floor.
+  3. docs/memory.md: one line per metric (5), each naming its key, which `set_floors` reads as the written reason for a looser floor under `ALLOW_LOOSER=1`; and a warning line that names no metric key, so it grants nothing.
+  4. The warning also in evals/README.md (Running, the Layout table, the CI paragraph, Status), docs/todo.md (step 7) and docs/context.md; evals/README.md (Claude comparison) now warns against `SET_FLOORS=1` with Haiku settings too.
+  - Why this was the best option: the hand edit is what the user asked for, and the harness already treats an efficiency metric without a floor as report-only, so no code changed.
+- Small events:
+  - GateGuard refused the first edit of `evals/thresholds.json` and of evals/README.md; in the README batch the other four edits applied. What we did: stated the facts and sent the refused edit again.
+  - `set_floors` reads loosening reasons without telling scopes apart, so `ALLOW_LOOSER=1` on `test-full-3` would accept these lines too; memory.md's warning line says so.
+- Files: evals/thresholds.json, evals/README.md, docs/ (memory.md, todo.md, context.md, activity-log.md)
+- Validation:
+  - `pnpm prettier --check evals/thresholds.json` passes; line ends LF; `prettier_json` reproduces the edited file byte for byte, so a later `set_floors` on another scope keeps the layout.
+  - `check` with the new floors: the cached ci runs break nothing; a summary at the edges (validity 0.93, 12 tool calls, 80,425 tokens, p95 250 s) breaks nothing; validity 0.90, 13 tool calls and 90,000 tokens break all three.
+  - docs/memory.md's loosening reasons now name `cost_billed`, `cost_paid`, `first_hypothesis_p95`, `investigation_time_p95`, `tokens_median`, `tool_call_validity` and `tool_calls_median`.
+  - `make lint`: exit 0. `make test`: exit 0, Python 402 passed (41 integration tests deselected), TypeScript 4 of 4 tasks replayed from Turbo's cache.
+- Outstanding: `EVAL_ENABLED` stays off until the Haiku comparison is done. Skipped: a `set_floors` guard that keeps hand-set floors on a rerun; the user asked for a note, and the guard is worth adding if `SET_FLOORS=1` on the ci subset is ever needed again. Nothing is committed.
+
+### 2026-10-20: After the exam: README exam history, proposed dev-ci-1 floors, Haiku comparison steps; the proposal check approved
+
+- What happened: The user merged the exam docs and the lint fix, approved the proposal check (build it only after the Claude Haiku comparison is recorded, so both models are compared on the same agent), and asked, on a new branch `after-exam`, for a permanent exam history in the README, `dev-ci-1` floors that do not fail on normal noise and are never above what was measured (validity, median tool calls, median tokens), each explained, with `EVAL_ENABLED` left off, and exact steps for the Haiku comparison with a token and cost estimate from the 2026-10-17 Haiku dev pass. No live model calls.
+- Why: the eval rewrites the README's results block on every official run; the `dev-ci-1` floors sit at the targets (docs/memory.md, 2026-10-20); the credits expire on 2026-11-10.
+- What we did:
+  1. README.md: "## Exam history" after the intro paragraph, outside the eval markers, with the 2026-10-20 result (failed, the forbidden-proposal gate, 13 of 18 targets missed) and a table of the main figures. `update_readme` replaces only the text between `<!-- eval:start -->` and `<!-- eval:end -->`; a new test, `test_eval_runs_rewrite_only_the_readme_block`, pins that a section after the end marker survives an update unchanged.
+  2. `dev-ci-1` floors, proposed only; `evals/thresholds.json` is unchanged:
+     - "Never above what was measured" read as: no floor stricter than a measured value, and no limit beyond the measured spread.
+     - Data, dev split only: the frozen prompt's full dev pass (`evals/reports/2026-10-16-dev-full-1-2b91d452.json`, 15 runs, 129 tool calls, 3 invalid, validity 0.977); its 8 ci runs made 57 calls, none invalid. `ci_floors.py` in this session's scratchpad drew 8 of the 15 runs with replacement 20,000 times, as one weekly ci run sees them, and computed the binomial chance at the dev invalid rate of 2.33%.
+     - `tool_call_validity` 0.92, now 0.99. Measured: 0.977 dev, 0.98 test split, 1.00 on the ci runs. In about 57 calls one invalid call costs 1.75 points, so 8 dev-like runs fall under 0.99 83% of the time, under 0.95 5% (run bootstrap) to 15% (binomial at 57 calls), and under 0.92 0.1% to 1.0%. 0.92 allows 4 invalid calls in 57; a broken tool schema still fails it.
+     - `tool_calls_median` 12, now 8 (the target). Measured medians: 5.5 ci, 8 dev, 10 test split; 12 is the dev pass's upper 95% bound. 8 dev-like runs exceed 8 47% of the time, 10 19% and 12 1.1%. The 15-call cap stays a gate.
+     - `tokens_median` 80,425, now 60,000 (the target). Measured medians: 35,814 ci, 53,465 dev, 64,998 test split; 80,425 is the upper 95% bound of both the ci subset and the dev pass. 8 dev-like runs exceed 60,000 33% of the time and 80,425 2.8%. The 150,000-token cap stays a gate.
+     - Applying them: `set_floors` derives floors from its rules (0.99, 8 and 60,000 for these runs) and tightens without permission, so a later `make eval SUBSET=ci SET_FLOORS=1` would undo hand-set values. They would go into `evals/thresholds.json` by hand, in Prettier's layout, with a docs/memory.md line naming each metric key and why (the loosening record), or come from a rule change. The user decides.
+     - Not asked, noted: both p95-time floors (121.9 s) are exceeded by 9.6% of 8-run samples; one slow Gemini call (a 504 waits 60 s) can do it.
+  3. The Haiku comparison: exact steps in docs/todo.md (6b), with the commands of evals/README.md (Running) plus `DAILY_AI_TOKEN_BUDGET=10000000`, a wait for the agent's `/readyz`, what each exit code means, the stop block, and a warning against `SET_FLOORS=1` with Haiku settings, since the scope `test-full-3` does not name the model. `git diff 689fe6f HEAD -- services/agent/src sim/src` is empty, so the comparison runs the agent and sim the Gemini split ran (689fe6f is from 2026-10-17, before that split began). Estimate from `evals/reports/2026-10-17-dev-full-1-2b91d452-claude-haiku-5-5.json`: 15 runs, 1,587,454 tokens (mean 105,830, highest 128,029), $0.0971 of credits ($0.00648 a run), 19.3 s a run, 169 model calls. For 75 runs: about 7.9 million tokens (9.6 million if every run reaches the highest), $0.49 of credits ($0.59), about 845 model calls and 1 h 40 min with the 60 s gaps, within the 10,000,000-token budget.
+  4. The approval: docs/todo.md (the check moved after the comparison) and docs/memory.md (Decisions). docs/context.md: status and next steps.
+  - Why this was the best option: the floors loosen limits, which needs the user's decision and a written reason, and the Haiku run is the user's to start.
+- Small events: a `grep -E` on output containing parentheses failed (`grep: Unmatched ( or \(`), and Python then raised `OSError: [Errno 22] Invalid argument` writing to the closed pipe; `grep -F` worked.
+- Files: README.md, evals/harness/test_eval_score.py, docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation: `make test-int` in the entry below. `evals/harness/test_eval_score.py`: 21 passed; pyright clean on it. `make lint`: exit 0. `make test`: exit 0, Python 402 passed (41 integration tests deselected), TypeScript 4 of 4 tasks replayed from Turbo's cache. docs/memory.md's lines that `set_floors` reads as loosening reasons still name only `cost_billed` and `cost_paid`.
+- Outstanding: the user runs the Haiku comparison and sends the exit code and the eval's last lines; then the check; the user decides on the `dev-ci-1` floors before `EVAL_ENABLED=true`. Nothing is committed.
+
+### 2026-10-20: make test-int after the exam
+
+- What happened: The user asked for `make test-int` now that the exam is over, touching containers only by exact name. It passed: Jest 7 suites and 33 tests, pytest 41 passed (401 deselected) in 140.58 s, make exit 0, from 15:25:14 to 15:27:58 UTC.
+- Why: it was skipped during the exam, since its scratch databases and queues share the eval's Postgres, ElasticMQ and volumes (docs/memory.md, 2026-10-17).
+- What we did:
+  1. `git fetch origin`: local main equaled origin/main at `5c4498c`, which holds the exam docs and the lint fix. `git switch -c after-exam`.
+  2. Read-only checks: no `*.state.json` in `evals/reports/runs/`; `docker ps -a` listed no `triagecopilot` container (freightaudit-prod and freightaudit's postgres, redis and minio were up, filinglens's containers exited); `netstat -ano -p tcp` showed nothing listening on 5434, 4566, 8476, 15500-15599, 4200, 4201, 4210, 4220, 4230, 4231 or 3200.
+  3. `make test-int`; its `infra-up` created the network `triagecopilot_default` and the containers `triagecopilot-postgres-1`, `triagecopilot-elasticmq-1` and `triagecopilot-toxiproxy-1`. The log is `test-int.log` in this session's scratchpad.
+  4. `docker inspect` by those three exact names: running. `make infra-down` removed them and the network; `docker inspect` by the same names answered "no such object"; the volumes `triagecopilot_pgdata` and `triagecopilot_elasticmq-data` stay.
+  - Why this was the best option: the project's make targets act only on compose project `triagecopilot`, and every direct docker command named a container exactly.
+- Small events:
+  - Right after `make infra-down`, `docker ps -a` listed four unnamed containers, all up: agitated_hypatia, exciting_mcnulty, loving_dijkstra and silly_kapitsa. They were not in the list taken before the run, and `docker inspect` by those names a few seconds later answered "no such object". Why: not confirmed; `make test-int` had already exited, and this project's tests use the compose containers only, so another program started and removed them. What we did: nothing; they were not this project's.
+  - The first `docker inspect` template read `.State.Health.Status`, which two of the three containers lack ("map has no entry for key "Health""); without it the template worked.
+  - GateGuard gated the first Bash command; we stated the facts and sent it again.
+- Files: none in the repo.
+- Validation: the counts above; make exit 0.
+- Outstanding: None.
+
 ### 2026-10-20: CI lint failed on thresholds.json; set_floors now writes Prettier's layout
 
 - What happened: CI failed at lint on the docs/exam-day-4 pull request, as the user reported: `pnpm prettier --check .` flagged `evals/thresholds.json` ("Code style issues found"). `make eval ... SET_FLOORS=1` wrote that file.
