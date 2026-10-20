@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -272,6 +273,54 @@ def test_floors_only_tighten_unless_loosening_is_allowed_and_written(
     assert harness.set_floors("test-full-3", summary, allow_looser=True)["top1"] == 0.6
     memory.write_text("- 2026-10-17: lowered the top1 floor for a harder set\n", encoding="utf-8")
     assert harness.set_floors("test-full-3", summary, allow_looser=True)["top1"] == 0.5
+
+
+# What the repo's Prettier prints for the file set_floors writes below (printWidth 100, LF); lint
+# runs Prettier over evals/thresholds.json, so set_floors must write exactly this.
+PRETTIER_THRESHOLDS = """\
+{
+  "rules": [
+    "Short rule.",
+    "A rule long enough that the rules array no longer fits on one line of one hundred characters."
+  ],
+  "scopes": {
+    "test-full-3": {
+      "set": "v1",
+      "floors": {
+        "top1": {
+          "floor": 0.44,
+          "measured": 0.6,
+          "ci": [0.44, 0.7466666666666667],
+          "set": "2026-10-20"
+        },
+        "cost_paid": {
+          "floor": 7.500000000000001e-5,
+          "measured": 4e-5,
+          "ci": [3e-5, 5e-5],
+          "set": "2026-10-20"
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def test_set_floors_writes_thresholds_as_prettier_prints_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thresholds, memory = tmp_path / "thresholds.json", tmp_path / "memory.md"
+    rules = json.loads(PRETTIER_THRESHOLDS)["rules"]
+    thresholds.write_text(json.dumps({"rules": rules, "scopes": {}}), encoding="utf-8")
+    memory.write_text("", encoding="utf-8")
+    monkeypatch.setattr(harness, "THRESHOLDS", thresholds)
+    monkeypatch.setattr(harness, "MEMORY", memory)
+    summary: dict[str, Any] = {m.key: {"value": None, "ci": None} for m in score.METRICS}
+    summary["top1"] = {"value": 0.6, "ci": (0.44, 0.7466666666666667)}
+    summary["cost_paid"] = {"value": 4e-05, "ci": (3e-05, 5e-05)}
+    harness.set_floors("test-full-3", summary, allow_looser=False)
+    expected = PRETTIER_THRESHOLDS.replace("2026-10-20", str(date.today()))
+    assert thresholds.read_bytes() == expected.encode()
 
 
 def test_the_plan_runs_every_scenario_once_before_any_second_run() -> None:

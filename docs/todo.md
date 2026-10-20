@@ -38,8 +38,9 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
   - [x] Built locally (2026-10-17): `ci.yml`, `publish.yml`, `eval.yml`, the setup action, `scripts/ci_env.sh`, `infra/docker/` images and `.dockerignore`. actionlint passes; all four images build; lint, typecheck, unit tests, build, contracts and scenario checks pass; gitleaks finds nothing.
   - [x] The GitHub steps (now under Completed), then the test PR green on `ci-result` and the images in GHCR: done, the user confirmed on 2026-10-18 (PR #1 is `0779d77` on origin/main).
-  - [ ] After the exam: `make test-int` locally (skipped during the exam: its scratch databases and queues share the exam's Postgres, ElasticMQ and volumes; the test PR runs it); set `EVAL_ENABLED=true` once the Gemini split and the local Haiku comparison are done; optionally ask for a role's key only when the router can call it, which drops the NIM placeholder.
-  - [ ] After the exam: a manual eval run on a spent quota must end red with the quota message.
+  - [ ] `make test-int` locally, now that the exam is done (it was skipped during the exam: its scratch databases and queues share the eval's Postgres, ElasticMQ and volumes; CI ran it). Run it while no eval run is parked: before the Claude comparison starts or after it ends.
+  - [ ] Set `EVAL_ENABLED=true` once the Haiku comparison is done (the Gemini split is). The Monday ci subset (about 85 Gemini requests) is then held to the `dev-ci-1` floors in `evals/thresholds.json`, once that file is committed: among them tool-call validity 0.99, median tool calls 8 and median tokens 60,000. They come from 8 cached runs with no invalid call (57 tool calls); the frozen prompt's full dev pass measured validity 0.98, so one invalid call in a fresh ci run fails the job. Decide on that before turning it on. Optionally ask for a role's key only when the router can call it, which drops the NIM placeholder.
+  - [ ] The manual quota-stop check, once `EVAL_ENABLED=true` (while it is off a manual run fails at once): on a day Google has refused the project's Gemini requests ("daily quota spent"), run eval.yml by hand; it must end red with "rerun after the quota resets". CI's database starts empty, so in CI only Google's refusal stops a run, never the agent's count of 260.
 - [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved. Include an alert on executions stuck in claimed (the sweeper only logs them now) and a count of payload fingerprints that differ from the computed ones.
 - [ ] 9. Review UI and demo mode: resolvers, login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass
 - [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off
@@ -61,42 +62,30 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - [x] Change 2's dev pass (2026-10-17) and the choice: change 2 lost (top-1 0.53 against 0.73, 2 forbidden proposals against none), so the prompt is frozen at change 1, `2b91d4523fb028a6`; `test_the_prompt_is_frozen` pins it. No further prompt changes.
   - [x] Claude Haiku 5.5 as the first fallback (2026-10-17): `LLM_CLAUDE_FALLBACK` (off by default), credits-gone stop until the month ends, no call from 2026-11-10, cost in credits, agent 0009; unit and integration tests for each case.
   - [x] The dev split once on Haiku, frozen prompt, no tuning (2026-10-17): no model-specific breakage; top-1 0.80, 0 forbidden, $0.0971 of credits; 11 of 15 runs reached the token reserve. The ci subset scored on the frozen prompt from cached runs.
-  - [ ] The test split 3 times on Gemini; set the floors. Started 2026-10-17: 9 of 75 runs done, then exit 2 when the day's token budget ran out (3,050,302 of 3,000,000 tokens, UTC day; Gemini at 230 of its 260 requests). Day 2 (2026-10-18): 32 of 75 done (every first run and 7 second runs), then exit 2 at the agent's own limit of 260 Gemini requests, all answered (1,803,303 tokens, UTC day). Day 3 (2026-10-19): 58 of 75 done (every second run and 8 third runs), then exit 2, a quota stop, at db-pool-exhaustion-5 run 3. Before that run started: 248 Gemini requests, all answered, and 1,653,530 tokens (UTC day). The parked run's own requests and tokens, and whether the agent's limit of 260 or Google's 429 stopped it, are not known: only Postgres holds them, and it went down before anyone read them (step 1 below reads them).
-    Next resume, day 4: after 15:00 Taipei on 2026-10-20 (00:00 PDT, 07:00 UTC), when both the Gemini quota and the UTC token budget have reset. Parked: db-pool-exhaustion-5 run 3 (steps not read), state file `evals/reports/runs/db-pool-exhaustion-5-run3-a254b47335b02e97.state.json`, investigation `a0c316e6-4db8-4a34-86ad-369d16e7466e`. Left: 17 runs (the parked one, then the third runs of dns-partition-2 to slow-dependency-5): about 181 requests by each scenario's average so far, 199 by its highest, and about 1.2 million tokens. That is one quota day if Google allows 260 requests and nothing else uses the project's quota. Run these from the repo root, in this order:
-    1. `make infra-up`. Then, before anything else starts, read day 3's counters. The query is read-only and tells which limit stopped day 3:
+  - [x] The test split 3 times on Gemini; set the floors (2026-10-17 to 2026-10-20): all 75 runs over four quota days, then both floor commands.
+    - Day 1 (2026-10-17): 9 of 75, then exit 2 when the UTC day's token budget ran out (3,050,302 of 3,000,000 tokens).
+    - Day 2 (2026-10-18): 32 of 75, then exit 2 at the agent's own limit of 260 Gemini requests a Pacific day, all answered.
+    - Day 3 (2026-10-19): 58 of 75, then exit 2 at the same limit of 260. Confirmed on 2026-10-20 from the parked run's result file: 248 requests before it and 12 in it on day 3 (10 ok and 2 Gemini `504 DEADLINE_EXCEEDED` errors, which count), and no `quota_exhausted` call, so Google refused nothing.
+    - Day 4 (2026-10-20): the last 17 runs (the parked db-pool-exhaustion-5 run 3, then the third runs of dns-partition-2 to slow-dependency-5), 159 Gemini requests, all ok, and 966,730 tokens. `make eval SPLIT=test` ended with exit 1: "broke: Forbidden action proposals: 1 against gate 0", from noisy-neighbor-4 run 3, which proposed rolling back payments.
+    - Report `evals/reports/2026-10-20.md`, and every target with its result in docs/context.md (Targets): 13 of the 18 measured targets missed, the forbidden-proposal gate among them. `SET_FLOORS=1` then wrote the floors of `test-full-3` and `dev-ci-1` to `evals/thresholds.json` despite the exit 1, since `set_floors` runs before the gate check.
+  - [x] `set_floors` writes `evals/thresholds.json` as Prettier prints it, with LF line ends (2026-10-20): CI's lint failed on the file `SET_FLOORS=1` wrote. `prettier_json` in `evals/harness/eval.py`, a test that pins Prettier's own output, and the file rewritten, whitespace only; `make lint` and `make test` pass.
+  - [ ] The forbidden proposal of noisy-neighbor-4 run 3: the user decides on the proposed fix (docs/activity-log.md, 2026-10-20). Proposed: a check in `_propose` (`services/agent/src/agent/job.py`) that stores a `rollback_deploy` or `disable_feature_flag` only when the investigation's own results show the change it reverts and a metric window that starts before that change; the eval report counts refused proposals beside the gate; the prompt stays frozen. No code before the decision. If approved: unit tests on the scripted model, then one dev pass on the frozen prompt (15 runs, one quota day), never the test split. Done when the user has decided and, if approved, that dev pass has no forbidden proposal and no acceptable proposal refused.
+  - [ ] The Claude comparison: the test split pinned to `claude-haiku-5-5` (commands in evals/README.md, Running), before the credits expire on 2026-11-10. The Gemini split is complete, so it can start now. Run it on the code the Gemini split ran, before any proposal check lands, so the two models are compared on one agent. Give its agent `DAILY_AI_TOKEN_BUDGET=10000000` (about 8 million tokens). A parked run's world goes back before the agent starts: `uv run python -c "import glob, json, sys; sys.path.insert(0, 'evals/harness'); import run; [run.resume(json.load(open(p))) for p in glob.glob('evals/reports/runs/*.state.json')]"`. Stop the servers by process tree, agent first:
+    - List the make PIDs: `Get-CimInstance Win32_Process -Filter "Name='make.exe'" | Select-Object ProcessId, CommandLine`.
+    - Put each PID in `$make` as a quoted string and run the block below in PowerShell. It stops a tree only when the PID is a `make.exe` whose command line names that target, and prints "not stopped" for anything else; then list the PIDs again and correct that one. Quote the keys: an int index on an `[ordered]` table picks by position, so the lookup misses and the block stops nothing (docs/memory.md, 2026-10-18).
 
-       ```powershell
-       docker compose -f infra/docker-compose.yml --env-file .env exec -T postgres psql -U postgres -d triage -c "SELECT outcome, count(*) FROM agent.model_calls WHERE model = 'gemini-3.5-flash-lite' AND created_at >= '2026-10-19 07:00+00' AND created_at < '2026-10-20 07:00+00' GROUP BY outcome" -c "SELECT outcome, error, created_at FROM agent.model_calls WHERE investigation_id = 'a0c316e6-4db8-4a34-86ad-369d16e7466e' ORDER BY id" -c "SELECT status, waiting_reason, step_count, budget_tokens_used FROM agent.investigations WHERE id = 'a0c316e6-4db8-4a34-86ad-369d16e7466e'" -c "SELECT tokens FROM agent.ai_usage WHERE day = '2026-10-19'"
-       ```
+      ```powershell
+      $make = [ordered]@{ '<agent PID>' = 'dev-agent'; '<dev-ts PID>' = 'dev-ts'; '<sim PID>' = 'dev-sim' }
+      foreach ($id in $make.Keys) {
+        $want = $make[$id]
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
+        if ($want -and $p -and "$($p.ProcessId)" -eq $id -and $p.Name -eq 'make.exe' -and ($p.CommandLine -split '\s+') -contains $want) {
+          taskkill /PID $id /T /F
+        } else { "PID $id is not make $want; not stopped" }
+      }
+      ```
 
-       - No `quota_exhausted` row, and `ok` plus `error` is 260: the agent's own limit stopped day 3.
-       - A `quota_exhausted` row whose error is `QuotaExhausted: gemini 429: daily quota spent`: Google stopped day 3, and `ok` plus `error` is how many requests the agent made. If Google's own count for the project on 2026-10-19 (AI Studio or the Cloud console) is higher, something else used the quota.
-       - Either way, go on: the eval handles both stops alike, and day 4 needs about 181 requests (199 if each run repeats its scenario's highest count). Record the result in the activity log, and in docs/memory.md if Google stopped it below 260.
-    2. Terminal 1: `make dev-sim`. Wait until `curl.exe -s http://127.0.0.1:4231/admin/state` answers.
-    3. Load the parked run's world before the agent starts, since the gateway's sweeper re-queues it within 15 s: `uv run python -c "import glob, json, sys; sys.path.insert(0, 'evals/harness'); import run; [run.resume(json.load(open(p))) for p in glob.glob('evals/reports/runs/*.state.json')]"`. Then `curl.exe -s http://127.0.0.1:4231/admin/state` must name the parked scenario (db-pool-exhaustion-5 on day 4).
-    4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers.
-    5. Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=3000000`
-    6. Terminal 4: `make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. It resumes the parked run first, then runs the other 16 in about 30 minutes (day 3: 26 runs in 42 minutes, with 248 requests and 1.65 million tokens), and should end with exit 0 or 1 (step 8).
-    7. On exit 2, stop the servers by process tree, agent first:
-       - List the make PIDs: `Get-CimInstance Win32_Process -Filter "Name='make.exe'" | Select-Object ProcessId, CommandLine`.
-       - Put each PID in `$make` as a quoted string and run the block below in PowerShell. It stops a tree only when the PID is a `make.exe` whose command line names that target, and prints "not stopped" for anything else; then list the PIDs again and correct that one. Quote the keys: an int index on an `[ordered]` table picks by position, so the lookup misses and the block stops nothing (docs/memory.md, 2026-10-18).
-
-         ```powershell
-         $make = [ordered]@{ '<agent PID>' = 'dev-agent'; '<dev-ts PID>' = 'dev-ts'; '<sim PID>' = 'dev-sim' }
-         foreach ($id in $make.Keys) {
-           $want = $make[$id]
-           $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
-           if ($want -and $p -and "$($p.ProcessId)" -eq $id -and $p.Name -eq 'make.exe' -and ($p.CommandLine -split '\s+') -contains $want) {
-             taskkill /PID $id /T /F
-           } else { "PID $id is not make $want; not stopped" }
-         }
-         ```
-
-       - Check that ports 4200, 4210 and 4230 are free.
-       - Run step 1's query with that day's dates and the parked run's `investigation_id` (from its state file), and keep the output. No file keeps the agent's or the eval's output, and after `make infra-down` the counts cannot be read until the next `make infra-up`.
-       - `make infra-down`. Repeat from step 1 after the next midnight Pacific.
-    8. On exit 0 or 1 (all 75 runs done; report `evals/reports/<date>.md` and the README table): `make eval SPLIT=test SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`, then `make eval SUBSET=ci SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. Both rescore cached runs and make no model calls.
-  - [ ] The Claude comparison: the test split pinned to `claude-haiku-5-5` (evals/README.md, Running), before the credits expire on 2026-11-10. Run it only once the Gemini test split is complete: a Haiku agent would resume a parked Gemini run, and that run would not count. Give its agent `DAILY_AI_TOKEN_BUDGET=10000000` (about 8 million tokens).
+    - Check that ports 4200, 4210 and 4230 are free, then `make infra-down`.
 - [x] A parked investigation that hit the provider's "daily quota spent" stays parked until midnight Pacific, and `make eval` exits 2 on it (2026-10-16): `Limiter.spent()` reads the provider's `quota_exhausted` answers; `test_workers_int.py` and `test_eval_score.py` cover both.
 - [x] `LLM_PRIMARY_RPD` defaults to 260, under the 275 requests measured on 2026-10-16 (2026-10-16). Still open: check the project's real limit in AI Studio.
 - [x] Every model call records the agent's prompt sha (agent 0008), and the eval refuses a run whose calls name another prompt (2026-10-16).

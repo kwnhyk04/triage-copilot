@@ -22,13 +22,14 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import run
@@ -45,6 +46,8 @@ SET = REPO / "evals" / "scenarios" / "v1"
 REPORTS = REPO / "evals" / "reports"
 CACHE = REPORTS / "runs"
 THRESHOLDS = REPO / "evals" / "thresholds.json"
+# .prettierrc.json's printWidth: lint runs Prettier over thresholds.json.
+PRINT_WIDTH = 100
 PRICING = REPO / "evals" / "pricing.json"
 MEMORY = REPO / "docs" / "memory.md"
 README = REPO / "README.md"
@@ -351,8 +354,49 @@ def set_floors(scope: str, summary: dict[str, Json], allow_looser: bool) -> dict
                 continue
         floors[metric.key] = {"floor": new, "measured": value, "ci": ci, "set": str(date.today())}
     thresholds["scopes"][scope] = {"set": "v1", "floors": floors}
-    THRESHOLDS.write_text(json.dumps(thresholds, indent=2) + "\n", encoding="utf-8")
+    THRESHOLDS.write_text(prettier_json(thresholds), encoding="utf-8", newline="\n")
     return {k: v["floor"] for k, v in floors.items()}
+
+
+def prettier_json(value: object) -> str:
+    """JSON as the repo's Prettier prints it, so lint passes on the thresholds.json set_floors
+    writes (with LF line ends): an object one key per line, an array on one line when that line
+    fits PRINT_WIDTH and one item per line otherwise, exponents as 1e-5 rather than 1e-05."""
+    return "\n".join(_json_lines(value, "", "", "")) + "\n"
+
+
+def _json_lines(value: object, indent: str, head: str, tail: str) -> list[str]:
+    if not value or not isinstance(value, dict | list | tuple):
+        return [f"{head}{_json_scalar(value)}{tail}"]
+    inner = indent + "  "
+    if isinstance(value, dict):
+        pairs = list(cast("dict[str, object]", value).items())
+        body = [
+            line
+            for i, (key, item) in enumerate(pairs, start=1)
+            for line in _json_lines(
+                item, inner, f"{inner}{json.dumps(key)}: ", "," if i < len(pairs) else ""
+            )
+        ]
+        return [f"{head}{{", *body, f"{indent}}}{tail}"]
+    items = list(cast("Sequence[object]", value))
+    # ponytail: scalar arrays only; Prettier also inlines [[1, 2]] and fills long number arrays.
+    if not any(isinstance(item, dict | list | tuple) for item in items):
+        flat = f"{head}[{', '.join(map(_json_scalar, items))}]{tail}"
+        if len(flat) <= PRINT_WIDTH:
+            return [flat]
+    body = [
+        line
+        for i, item in enumerate(items, start=1)
+        for line in _json_lines(item, inner, inner, "," if i < len(items) else "")
+    ]
+    return [f"{head}[", *body, f"{indent}]{tail}"]
+
+
+def _json_scalar(value: object) -> str:
+    text = json.dumps(value)
+    # Python writes 1e-05 and 1e+16 where Prettier prints 1e-5 and 1e16.
+    return re.sub(r"e\+?(-?)0*(?=\d)", r"e\1", text) if isinstance(value, float) else text
 
 
 def fmt(metric: score.Metric, value: float | None) -> str:

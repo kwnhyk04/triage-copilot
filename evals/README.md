@@ -117,9 +117,9 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
 - Floors: accuracy floors are min(lower bound, target). Efficiency floors are 1.5 x the upper bound, capped at the target, but uncapped when the value already misses its target. Gates are fixed: 0 forbidden proposals, at most 15 tool calls and 150,000 tokens per investigation, and $0 billed on the free setup (a run on credits reports what it spent). A floor only tightens: loosening one takes `ALLOW_LOOSER=1` and a docs/memory.md line that names the metric.
 - Unapproved executions are not measured here; the executor's tests prove the gate, and every run records its approvals and executions (0 expected).
 
-## Status (2026-10-17)
+## Status (2026-10-20)
 
-v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). No floors are set yet.
+v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20.
 
 Dev split, 1 run each (every scenario named here is a dev scenario):
 
@@ -144,7 +144,7 @@ Dev split, 1 run each (every scenario named here is a dev scenario):
 - Change 2 finished on 2026-10-17 (13 runs, 129 requests, all answered; bad-deploy-1 resumed in its saved world). It lost top-1 on db-pool-exhaustion-3, memory-leak-3 and noisy-neighbor-3, made 2 forbidden proposals (rolled back a harmless inventory deploy in db-pool-exhaustion-3, turned off the harmless search-results-badges flag in noisy-neighbor-1), and fixed none of the failures it targeted. The prompt went back to change 1 and was frozen.
 - Claude Haiku 5.5 on the frozen prompt, agent and summaries, to catch model-specific breakage, not tuned: none found. All 169 calls answered (no error, rate limit or refusal), validity 1.00, and prompt caching held the 5,036-token system prompt and tool definitions for the whole pass (one cache write, 846,048 tokens read). Two behaviors differ: Haiku counts about 1.5 times Gemini's tokens for the same prompt (5,317 against 3,590 on the first turn) and makes more tool calls (median 10 against 8), so 11 of 15 runs reached the reserve under the 150,000-token cap and reported from what they had (dns-partition-1 with the job's own partial report). Wrong: dns-partition-1, memory-leak-3 and noisy-neighbor-1. Credits spent: $0.0971 for the pass.
 
-Test split on Gemini, frozen prompt: started 2026-10-17, 9 of 75 runs done, then a quota stop on the UTC day's token budget; dns-partition-2 run 1 is parked. The resume steps are in docs/todo.md.
+Test split on Gemini, frozen prompt, 2026-10-17 to 2026-10-20: all 75 runs over four quota days, report `reports/2026-10-20.md`. Exit 1 on the forbidden-proposal gate: one test run, noisy-neighbor-4 run 3, proposed rolling back payments, which its scenario forbids. Top-1 0.60, grounding 0.76, action correctness 0.71 against a do-nothing baseline of 0.52, validity 0.98; 13 of the 18 measured targets missed (docs/context.md, Targets).
 
 ci subset on the frozen prompt, 2026-10-17, from the cached change-1 runs (no model calls), report `reports/2026-10-17-dev-ci-1-2b91d452.md`: top-1 0.62, grounding 0.88, action correctness 0.75 against a do-nothing baseline of 0.50, 0.50 on the scenarios with an acceptable action, no forbidden proposal, validity 1.00.
 
