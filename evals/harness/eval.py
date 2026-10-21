@@ -10,10 +10,11 @@ after midnight Pacific, Claude with new credits) and it goes on from the parked 
 or the setup is wrong.
 
 Each run is cached in evals/reports/runs/ under a key of the prompt hash, every pinned model id,
-the scenario file's sha256, the run index and the agent's PROPOSAL_CHECK version: a changed
-prompt, model, scenario or check runs again, and an eval stopped for any reason goes on where it
-stopped. Runs go one at a time, since the sim serves one scenario, all first runs before any
-second, GAP seconds apart so each starts with the per-minute quota free.
+the scenario file's sha256, the run index, the agent's PROPOSAL_CHECK version and, off its
+default, the agent's INVESTIGATION_TOKEN_CAP: a changed prompt, model, scenario, check or cap runs
+again, and an eval stopped for any reason goes on where it stopped. Runs go one at a time, since
+the sim serves one scenario, all first runs before any second, GAP seconds apart so each starts
+with the per-minute quota free.
 """
 
 import argparse
@@ -26,6 +27,7 @@ import re
 import statistics
 import sys
 import time
+from collections import Counter
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
@@ -56,6 +58,11 @@ WITHIN = 900.0
 FAILED, QUOTA, SETUP = 1, 2, 3
 ROLES = ("primary", "fallback", "small")
 DEFAULTS = {role: str(Settings.model_fields[f"llm_{role}_model"].default) for role in ROLES}
+# The agent's default token cap per investigation: the exam's. Runs under another are a second
+# configuration, with their own cache keys and report name.
+DEFAULT_CAP = int(Settings.model_fields["investigation_token_cap"].default)
+# How a stop note names the agent's token cap: "of its 150,000 tokens", "its 150,000 token cap".
+CAP_NAMED = re.compile(r"\bits ([\d,]+) token")
 # Calls an investigation makes per role before any run measured it (docs/memory.md, 6a).
 GUESS = {"primary": 9.0, "small": 0.5}
 RUNBOOKS = {
@@ -107,9 +114,15 @@ NOTES = [
 CAVEATS = (
     "What the numbers show, and what they do not: the incidents are simulated, and the same "
     "project wrote the scenarios, the tools and the labels. Prompts were tuned on the dev split "
-    "only (evals/prompt-log.md), never on the test scenarios. 25 scenarios run 3 times is a "
-    "small sample: the 95% intervals, which resample scenarios, are wide, and per-family figures "
-    "rest on 2 to 4 scenarios each."
+    "only (evals/prompt-log.md), never on the test scenarios. {scenarios} scenarios x {runs} runs "
+    "is a small sample: the 95% intervals, which resample scenarios, are wide, and per-family "
+    "figures rest on a few scenarios each."
+)
+SECOND = (
+    "Second configuration, not an exam: the agent ran with INVESTIGATION_TOKEN_CAP={cap:,} in "
+    "place of the exam's {default:,}, chosen after earlier runs of this split had been seen, so "
+    "these scores are not held out. The eval refuses SET_FLOORS=1 off the default models and "
+    "cap, so the floors shown were set on the default configuration."
 )
 FREE_COST = (
     "Costs are what the paid tier would charge for the same tokens; the free tier billed nothing."
@@ -139,26 +152,42 @@ def pinned() -> dict[str, str]:
     return {role: os.environ.get(f"LLM_{role.upper()}_MODEL") or DEFAULTS[role] for role in ROLES}
 
 
-def report_name(today: str, scope: str, prompt: str, models: dict[str, str]) -> tuple[str, bool]:
+def token_cap() -> int:
+    """The agent's token cap per investigation, from the variable the agent reads too."""
+    return int(os.environ.get("INVESTIGATION_TOKEN_CAP") or DEFAULT_CAP)
+
+
+def report_name(
+    today: str, scope: str, prompt: str, models: dict[str, str], cap: int = DEFAULT_CAP
+) -> tuple[str, bool]:
     """The report's name, and whether it is the official one: the full test split on the default
-    models, which also writes the README table. Tuning runs of one day keep a report per prompt,
-    and runs on other models their own."""
-    if scope.startswith("test-full-") and models == DEFAULTS:
+    models and token cap, which also writes the README table. Tuning runs of one day keep a report
+    per prompt, and runs on other models or another cap their own."""
+    if scope.startswith("test-full-") and models == DEFAULTS and cap == DEFAULT_CAP:
         return today, True
     name = f"{today}-{scope}-{prompt[:8]}"
-    return (name if models == DEFAULTS else f"{name}-{models['primary']}"), False
+    if models != DEFAULTS:
+        name += f"-{models['primary']}"
+    if cap != DEFAULT_CAP:
+        name += f"-cap{cap // 1000}k"
+    return name, False
 
 
-def key(prompt: str, models: dict[str, str], scenario_sha: str, index: int) -> str:
+def key(
+    prompt: str, models: dict[str, str], scenario_sha: str, index: int, cap: int = DEFAULT_CAP
+) -> str:
     # The agent's proposal check changes what a run stores, so a run made under another version
     # of it, or before it existed, never counts.
-    payload = {
+    payload: Json = {
         "prompt": prompt,
         "models": models,
         "scenario": scenario_sha,
         "run": index,
         "check": PROPOSAL_CHECK,
     }
+    # So does the token cap; runs under the default keep the keys they had before it was a setting.
+    if cap != DEFAULT_CAP:
+        payload["token_cap"] = cap
     return sha(json.dumps(payload, sort_keys=True))
 
 
@@ -178,7 +207,13 @@ class Job:
 
 
 def plan(
-    manifest: Json, split: str, subset: str, runs: int, prompt: str, models: dict[str, str]
+    manifest: Json,
+    split: str,
+    subset: str,
+    runs: int,
+    prompt: str,
+    models: dict[str, str],
+    cap: int = DEFAULT_CAP,
 ) -> list[Job]:
     """All first runs, then all second runs, and so on."""
     chosen = sorted(
@@ -188,7 +223,7 @@ def plan(
     )
     shas = {sid: manifest["scenarios"][sid]["sha256"] for sid in chosen}
     return [
-        Job(sid, index, key(prompt, models, shas[sid], index))
+        Job(sid, index, key(prompt, models, shas[sid], index, cap))
         for index in range(1, runs + 1)
         for sid in chosen
     ]
@@ -207,9 +242,11 @@ def say(line: str) -> None:
     print(line, flush=True)  # noqa: T201 - CLI output
 
 
-def problems(record: Json, models: dict[str, str], prompt: str) -> list[str]:
+def problems(
+    record: Json, models: dict[str, str], prompt: str, cap: int = DEFAULT_CAP
+) -> list[str]:
     """Why a finished run does not count: an unpinned model answered, the agent ran another
-    prompt than the source's, or the sim lost its world."""
+    prompt than the source's or another token cap than the eval's, or the sim lost its world."""
     found = [
         f"a {c['role']} call went to {c['model']}"
         for c in record["model_calls"]
@@ -220,12 +257,21 @@ def problems(record: Json, models: dict[str, str], prompt: str) -> list[str]:
     if shas - {prompt, None} or prompt not in shas:
         ran = ", ".join(sorted(s[:16] for s in shas - {prompt} if s)) or "no recorded prompt"
         found.append(f"the agent ran {ran}, not the source's prompt {prompt[:16]}: restart it")
+    # A stop note names the cap the agent ran under, and no run passes that cap.
+    notes = [m for m in record["report"]["missing_evidence"] if m.startswith(score.STOPPED)]
+    named = {int(n.replace(",", "")) for m in notes for n in CAP_NAMED.findall(m)}
+    if named - {cap} or record["tokens"] > cap:
+        found.append(
+            f"the agent ran with another token cap than INVESTIGATION_TOKEN_CAP={cap:,}: restart it"
+        )
     if any("no scenario is active" in (s["result"] or s["summary"]) for s in record["steps"]):
         found.append("the sim served no scenario during the run (restarted?)")
     return found
 
 
-def execute(jobs: Sequence[Job], models: dict[str, str], prompt: str) -> int | None:
+def execute(
+    jobs: Sequence[Job], models: dict[str, str], prompt: str, cap: int = DEFAULT_CAP
+) -> int | None:
     """Runs every job without a cached result, a parked one first; QUOTA on a quota stop."""
     pending = [j for j in jobs if not j.result.exists()]
     pending.sort(key=lambda j: not j.state.exists())
@@ -251,7 +297,7 @@ def execute(jobs: Sequence[Job], models: dict[str, str], prompt: str) -> int | N
                 return QUOTA
             run.mirrored(state["investigation_id"])
             record = run.collect(state)
-            found = problems(record, models, prompt)
+            found = problems(record, models, prompt, cap)
             job.state.unlink()
             if not found:
                 save(job.result, record)
@@ -474,6 +520,13 @@ def build_report(
         "refused": sum(r.refused for r in runs),
         "refused_acceptable": sum(r.refused_acceptable for r in runs),
     }
+    cap = meta["token_cap"]
+    second = [SECOND.format(cap=cap, default=DEFAULT_CAP)] if cap != DEFAULT_CAP else []
+    # Which cap cut each forced report off: the token reserve, the tool calls, the time limit.
+    forced = Counter(r.stopped for r in runs if r.stopped is not None).most_common()
+    shown = f" ({'; '.join(f'{n}: {why}' for why, n in forced)})" if forced else ""
+    cut = f"Reports a cap forced: {sum(n for _, n in forced)} of {len(runs)}{shown}."
+    caveats = CAVEATS.format(**meta["scope"])
     families: dict[str, Json] = {}
     for family in sorted({r.family for r in runs}):
         mine = [r for r in runs if r.family == family]
@@ -487,7 +540,8 @@ def build_report(
         **meta,
         "metrics": metrics,
         "proven_elsewhere": PROVEN,
-        "notes": [*NOTES, f"{CAVEATS} {FREE_COST if free else CREDITS_COST}"],
+        "notes": [*second, *NOTES, cut, f"{caveats} {FREE_COST if free else CREDITS_COST}"],
+        "forced": dict(forced),
         "approvals_during_eval": sum(r["approvals"] for r in records),
         "executions_during_eval": sum(r["executions"] for r in records),
         "resumed_runs": sum(bool(r["resumed"]) for r in records),
@@ -548,7 +602,8 @@ def markdown(report: Json) -> str:
         f"{scope['runs']} runs = {scope['investigations']} investigations, scenario set "
         f"{report['set']['name']} (manifest sha256 {report['set']['manifest_sha256'][:16]}).",
         f"Models, pinned: {report['models_text']}. Prompt sha256 {report['prompt_sha256'][:16]}. "
-        f"Embedding: {report['embedding']}.",
+        f"Embedding: {report['embedding']}. Token cap per investigation: {report['token_cap']:,}"
+        + ("." if report["token_cap"] == DEFAULT_CAP else f" (default {DEFAULT_CAP:,})."),
         "",
         "| Metric | Target | Measured | 95% CI | Floor | Result |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -621,7 +676,7 @@ def readme_block(report: Json) -> str:
             f"(tests) | {row['date'] or report['date']} | n/a |"
         )
     # Only the default models, all free, write this table.
-    lines += ["", f"{CAVEATS} {FREE_COST}", "", NOTES[0], END]
+    lines += ["", f"{CAVEATS.format(**scope)} {FREE_COST}", "", NOTES[0], END]
     return "\n".join(lines)
 
 
@@ -652,12 +707,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.subset == "ci" and args.split != "dev":
             raise Setup("the ci subset holds dev scenarios only")
         models = pinned()
+        cap = token_cap()
+        if args.set_floors and (models != DEFAULTS or cap != DEFAULT_CAP):
+            raise Setup(
+                "SET_FLOORS=1 only on the default models and token cap: floors come from the "
+                "exam's configuration, and a scope's floors serve every model"
+            )
         prompt = prompt_sha()
-        jobs = plan(manifest, args.split, args.subset, args.runs, prompt, models)
+        jobs = plan(manifest, args.split, args.subset, args.runs, prompt, models, cap)
         if args.estimate:
             estimate(jobs, models)
             return 0
-        stopped = execute(jobs, models, prompt)
+        stopped = execute(jobs, models, prompt, cap)
         if stopped is not None:
             return stopped
     except Exception as error:  # Exit code 3 is any failure to run, whatever raised it.
@@ -690,9 +751,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "billing": "free" if free else "credits",
         "prompt_sha256": prompt,
         "embedding": records[0]["embedding"] if records else None,
+        "token_cap": cap,
     }
     report = build_report(runs, records, floors, meta)
-    name, official = report_name(today, scope, prompt, models)
+    name, official = report_name(today, scope, prompt, models, cap)
     save(REPORTS / f"{name}.json", report)
     (REPORTS / f"{name}.md").write_text(markdown(report), encoding="utf-8")
     if official:

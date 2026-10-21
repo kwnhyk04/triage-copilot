@@ -19,6 +19,39 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-21: Token cap setting and 100,000-token prompt limit for the second Haiku run (branch haiku-token-cap)
+
+- What happened: The user reported `proposal-check` merged and asked for the token-cap change on a new branch `haiku-token-cap` from current main, as planned. The request covered `INVESTIGATION_TOKEN_CAP` (default 150,000), the run-cache key, the `-cap350k` report name, the second-configuration note, the `SET_FLOORS` refusal and the `problems()` guard. It also covered a prompt guard so no single prompt passes 100,000 tokens, even at the 350,000 cap. The 15-call cap stays for the run, and the report must say how many runs it cuts off. Tests first, then lint, typecheck, test and test-int. No live model call, no commit.
+- Why: run 1's token reserve forced 63 of Haiku's 75 reports (entry below), and the user's rule says no prompt may pass 100,000 tokens.
+- What we did:
+  1. `git fetch origin`: main and origin/main both at `177839d` (the merge of `proposal-check`), working tree clean. Then `git switch -c haiku-token-cap`.
+  2. Tests first:
+     - `test_llm.py`: a bound at `PROMPT_LIMIT` passes and one token over is refused, on both the whole-prompt and the same-model bound, before any request; a log page past the limit is not summarized.
+     - `test_ai_loop_int.py`: the 30-seed greedy test (fills every input bound and output allowance, one token per byte) runs at 150,000 and at 350,000. Every call's bound must stay under `PROMPT_LIMIT`, and at 350,000 one run must pass 150,000 and the stop notes must name 350,000. A new test runs every result at the 24,000-byte clip with a cap that never binds: no bound over 100,000, and the model's own forced report fits. `MAX_TOKENS` imports became the default `CAP` (150,000) from `test_workers_int.py`, whose `make_job` passes `token_cap`.
+     - `test_eval_score.py`: default keys unchanged and a raised cap keyed apart; `-cap350k` names that are never official; the second-configuration note and the header's cap; the forced-report count; the cap guard in `problems()`; `SET_FLOORS=1` refused off the default cap and off the default models.
+     - RED: the eval tests failed 5 of 28. With the setting plumbed in but no guard, the 350,000 case failed on a bound over the limit, and the new loop test on a bound of 405,350.
+  3. Code:
+     - `settings.py`: `investigation_token_cap` (`ge=60_000`, `multiple_of=1_000`, so report names can say it in thousands). `main.py` passes it to `Job`, and `job.py` carries it on `State` in place of `MAX_TOKENS`.
+     - `model.py`: `PROMPT_LIMIT = 100_000`, and `TurnBudget.limits` refuses a bound past it.
+     - `job.py`: `_stop_reason` stops when the forced report after one more tool turn could pass the limit (`_forced_prompt`, split out of `_forced_reserve`). The `BudgetRefused` reason now names both the cap and the prompt limit.
+     - `llm.py`: summaries skip a page past the limit.
+     - `score.py`: `Scored.stopped`, from the job's stop note, and "not named in the report" when a partial report's note fell past its 20 items.
+     - `eval.py`: `token_cap()`, `DEFAULT_CAP`; the cap in `key`, `plan`, `report_name`, `problems` and `execute`; the header line, the "Second configuration, not an exam" note, the "Reports a cap forced" note and `forced` in the JSON; the caveat now names the run's own scenario and run counts; `SET_FLOORS=1` raises `Setup` off the default models or cap.
+     - `.env.example`: `INVESTIGATION_TOKEN_CAP=150000`, with a comment.
+  4. Docs: docs/todo.md (6b moved to Completed, the second Haiku run under In Progress with its full steps), docs/context.md, docs/memory.md, evals/README.md and the README's `make eval` row.
+  - Why this was the best option: the cap is one setting both processes read, default runs and their cache keys are untouched, and the prompt limit is a hard check in `TurnBudget` plus a look-ahead, the same way the token cap already worked.
+- Small events:
+  - GateGuard gated the first Bash command and the first edit of each file. What we did: stated the facts and sent the call again. Once, a batch's first edit of docs/todo.md was refused, and the retry with a shorter match removed only part of the item it targeted. What we did: one more edit removed the rest, then the todo was checked in full.
+  - `make lint` failed first: two lines over 100 characters in `test_eval_score.py`. `make typecheck` failed on one partly unknown dict type there. What we did: wrapped the lines and annotated the dict.
+  - The integration tests needed the infra: ports 5434, 4566 and 8476 were checked free, `make infra-up` started `triagecopilot-postgres-1`, `triagecopilot-elasticmq-1` and `triagecopilot-toxiproxy-1`, and `make infra-down` removed them and the network afterwards. The volumes stay, and no other project's container was touched.
+- Files: services/agent/src/agent/settings.py, main.py, model.py, job.py, llm.py; evals/harness/eval.py, score.py; tests test_llm.py, test_ai_loop_int.py, test_workers_int.py, test_proposal_check.py, evals/harness/test_eval_score.py; .env.example; README.md, evals/README.md, docs/ (todo.md, context.md, memory.md, activity-log.md).
+- Validation:
+  - `make lint` and `make typecheck` (pyright 0 errors): exit 0.
+  - `make test`: exit 0, Python 415 passed (408 before), TypeScript 4 tasks.
+  - `make test-int`: exit 0, Jest 7 suites and 33 tests, pytest 44 passed (42 before) in 158 s.
+  - No model call and no eval ran.
+- Outstanding: the user ships `haiku-token-cap`; then the second Haiku run, before 2026-11-10. Nothing is committed.
+
 ### 2026-10-21: Proposal-check dev pass passed; the credit date stays 2026-11-10; Claude rules recorded
 
 - What happened:

@@ -122,6 +122,10 @@ class BrokenModel:
         return True
 
 
+# The default INVESTIGATION_TOKEN_CAP.
+CAP = 150_000
+
+
 class CountedJob(Job):
     runs = 0
 
@@ -150,6 +154,7 @@ def make_job(
         "ai_enabled": True,
         "daily_token_budget": 1_000_000,
         "tenant_cap": 5,
+        "token_cap": CAP,
     }
     return cls(engine, model or ScriptedModel(SCRIPT), tools, **(settings | options))
 

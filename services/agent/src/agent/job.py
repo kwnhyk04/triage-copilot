@@ -13,10 +13,12 @@ marked waiting and its message is deleted, so it holds no worker slot and uses u
 gateway's recovery sweeper re-queues it once `Job.resumable` says its slot or budget is free.
 
 The loop stops at the model's report, or at MAX_TOOL_CALLS tool calls, MAX_SECONDS since it
-started, or when the next turn could leave too few of MAX_TOKENS for a final report. Then a forced
-turn that may only call submit_report writes the report from what is known; if even that cannot
-fit or fails, the job writes a partial report itself. MAX_TOKENS is a hard cap: every call's
-output is limited to the tokens its input leaves (agent.model.TurnBudget).
+started, or when the next turn could leave too few of its token cap for a final report or take
+that report's prompt past PROMPT_LIMIT. Then a forced turn that may only call submit_report writes
+the report from what is known; if even that cannot fit or fails, the job writes a partial report
+itself. The token cap (INVESTIGATION_TOKEN_CAP) and PROMPT_LIMIT are hard limits: every call's
+output gets only the tokens its input leaves, and no call's prompt passes PROMPT_LIMIT
+(agent.model.TurnBudget).
 """
 
 import asyncio
@@ -41,6 +43,7 @@ from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ProposedActi
 from agent.llm import SUMMARY_SYSTEM
 from agent.model import (
     MESSAGE_OVERHEAD,
+    PROMPT_LIMIT,
     BudgetRefused,
     Message,
     Model,
@@ -108,9 +111,8 @@ TOOL_TIMEOUT = 10.0
 # Log pages after the first wait for the small model; the first search loads the embedding model.
 TOOL_TIMEOUTS = {"query_logs": 130.0, "search_runbooks": 60.0}
 TOOL_RETRIES = 3
-# Hard caps per investigation.
+# Hard caps per investigation; its token cap is the setting INVESTIGATION_TOKEN_CAP.
 MAX_TOOL_CALLS = 15
-MAX_TOKENS = 150_000
 MAX_SECONDS = 300
 # Output tokens a tool-call turn and the final report may use, and the least each needs.
 TURN_OUTPUT_CAP = 2_048
@@ -180,6 +182,8 @@ class State:
     last_model: str | None
     last_input: int
     last_output: int
+    # The token cap the job runs this investigation under.
+    cap: int
     started_at: datetime | None = None
 
 
@@ -209,6 +213,7 @@ class Job:
         ai_enabled: bool,
         daily_token_budget: int,
         tenant_cap: int,
+        token_cap: int,
         dual_write: bool = False,
         on_commit: Callable[[], None] | None = None,
     ) -> None:
@@ -218,6 +223,7 @@ class Job:
         self.ai_enabled = ai_enabled
         self.daily_token_budget = daily_token_budget
         self.tenant_cap = tenant_cap
+        self.token_cap = token_cap
         self.dual_write = dual_write
         # Wakes the event relay once a step or report has committed.
         self.on_commit = on_commit or (lambda: None)
@@ -239,7 +245,7 @@ class Job:
         inv = request.investigation_id
         if not await asyncio.to_thread(_try_lock, conn, LOCK_INVESTIGATION, key=str(inv)):
             return "busy"
-        status, state = await asyncio.to_thread(_load, conn, request)
+        status, state = await asyncio.to_thread(_load, conn, request, self.token_cap)
         if status in FINISHED:
             return "done"
         tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
@@ -272,7 +278,10 @@ class Job:
                 except QuotaExhausted:
                     return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
                 except BudgetRefused:
-                    reason = f"it is at its {MAX_TOKENS:,} token cap"
+                    reason = (
+                        f"its next turn would pass its {state.cap:,} token cap or the "
+                        f"{PROMPT_LIMIT:,}-token prompt limit"
+                    )
                     return await self._finish(conn, inv, state, messages, reason, stopping, tenant)
                 if await self._take_turn(conn, inv, state, turn):
                     return "done"
@@ -576,7 +585,7 @@ def _budget(
     last = assistant[-1] if assistant else None
     after = messages[last + 1 :] if last is not None else messages
     return TurnBudget(
-        remaining=MAX_TOKENS - state.used,
+        remaining=state.cap - state.used,
         prompt_bytes=prompt_bytes(SYSTEM, TOOL_SPECS, messages),
         delta_bytes=sum(map(message_bytes, after)),
         messages=len(messages),
@@ -589,10 +598,15 @@ def _budget(
     )
 
 
+def _forced_prompt(bound: int) -> int:
+    """A forced report's input bound after one more tool result."""
+    nudge = len(FORCED.encode()) + 200
+    return bound + RESULT_BYTES + nudge + 4 * MESSAGE_OVERHEAD
+
+
 def _forced_reserve(bound: int) -> int:
     """What a forced report needs after one more tool result: its input and least output."""
-    nudge = len(FORCED.encode()) + 200
-    return bound + RESULT_BYTES + nudge + 4 * MESSAGE_OVERHEAD + REPORT_MIN_OUTPUT
+    return _forced_prompt(bound) + REPORT_MIN_OUTPUT
 
 
 def _stop_reason(state: State, messages: Sequence[Message]) -> str | None:
@@ -609,7 +623,9 @@ def _stop_reason(state: State, messages: Sequence[Message]) -> str | None:
     bound = budget.bound(budget.last_model or "")
     after_turn = budget.remaining - bound - TURN_OUTPUT_CAP
     if after_turn < _forced_reserve(bound + TURN_OUTPUT_CAP):
-        return f"another turn would leave too few of its {MAX_TOKENS:,} tokens for the report"
+        return f"another turn would leave too few of its {state.cap:,} tokens for the report"
+    if _forced_prompt(bound + TURN_OUTPUT_CAP) > PROMPT_LIMIT:
+        return f"another turn could take the report's prompt past {PROMPT_LIMIT:,} tokens"
     return None
 
 
@@ -710,7 +726,7 @@ def partial_report(
     calls, _ = usage(state.steps)
     summary = (
         f"Stopped at the investigation budget after {calls} tool calls and {state.used} model "
-        f"tokens (caps: {MAX_TOOL_CALLS} tool calls, {MAX_TOKENS} tokens): {reason}. The "
+        f"tokens (caps: {MAX_TOOL_CALLS} tool calls, {state.cap} tokens): {reason}. The "
         "findings are incomplete."
     )
     missing = [f"The investigation stopped early: {reason}.", *_missing_tools(state)]
@@ -861,7 +877,7 @@ def _release(conn: Connection) -> None:
     conn.close()
 
 
-def _load(conn: Connection, request: Request) -> tuple[str, State]:
+def _load(conn: Connection, request: Request, cap: int) -> tuple[str, State]:
     """The checkpoint: the investigation's status and what the job knows; creates it when new."""
     inv = request.investigation_id
     with conn.begin():
@@ -888,6 +904,7 @@ def _load(conn: Connection, request: Request) -> tuple[str, State]:
         last_model=last.model if last else None,
         last_input=last.input_tokens if last else 0,
         last_output=last.output_tokens if last else 0,
+        cap=cap,
     )
     return status, state
 

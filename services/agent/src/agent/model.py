@@ -32,6 +32,8 @@ Outcome = Literal["ok", "rate_limited", "quota_exhausted", "credits_exhausted", 
 # Framing a provider adds around each message and tool definition, in tokens.
 MESSAGE_OVERHEAD = 16
 PROMPT_OVERHEAD = 256
+# No single prompt may pass this many tokens: Claude Haiku bills five times its rate above it.
+PROMPT_LIMIT = 100_000
 
 
 class ToolRequest(BaseModel):
@@ -182,7 +184,8 @@ class TurnBudget:
     `bound` is an upper bound on the input: the exact token count the same model reported for the
     last turn plus the UTF-8 bytes of what came after it (no tokenizer makes more tokens than
     bytes), or the bytes of the whole prompt when another model answered last. The output gets
-    what is left, up to `output_cap`; with less than `min_output` left the turn is refused.
+    what is left, up to `output_cap`; with less than `min_output` left, or a bound past
+    PROMPT_LIMIT, the turn is refused.
     """
 
     remaining: int
@@ -206,7 +209,9 @@ class TurnBudget:
         """(input bound, max output tokens), or None when the turn would not fit."""
         bound = self.bound(model)
         max_output = min(self.output_cap, self.remaining - bound)
-        return None if max_output < self.min_output else (bound, max_output)
+        if max_output < self.min_output or bound > PROMPT_LIMIT:
+            return None
+        return bound, max_output
 
 
 @dataclass(frozen=True)

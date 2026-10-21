@@ -79,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ai_enabled=settings.ai_enabled,
         daily_token_budget=settings.daily_ai_token_budget,
         tenant_cap=settings.agent_tenant_cap,
+        token_cap=settings.investigation_token_cap,
         dual_write=settings.steps_dual_write,
         on_commit=relay.nudge,
     )
