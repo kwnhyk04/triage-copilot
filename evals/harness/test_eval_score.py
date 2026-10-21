@@ -171,6 +171,25 @@ def test_validity_counts_only_the_models_own_mistakes() -> None:
     assert (run.tool_calls, run.invalid_calls) == (3, 1)
 
 
+def test_proposals_the_agent_refused_are_counted_beside_the_gate_not_as_invalid_calls() -> None:
+    def refused(to_version: str) -> dict[str, Any]:
+        args = {
+            "kind": "rollback_deploy",
+            "target": "checkout",
+            "params": {"to_version": to_version},
+        }
+        return {"error": "ProposalRefused: no result shows it", "args": args}
+
+    run = scored(tool_calls=[refused("v1.7.3"), refused("v1.7.2"), {"error": None}])
+    assert (run.tool_calls, run.invalid_calls, run.forbidden) == (3, 0, 0)
+    assert (run.refused, run.refused_acceptable) == (2, 1)
+    records = [{"approvals": 0, "executions": 0, "resumed": False}]
+    report = harness.build_report([run], records, {}, {"billing": "free"})
+    gate = {m.key: m for m in score.METRICS}["forbidden_actions"]
+    shown = harness.measured(gate, report["metrics"]["forbidden_actions"])
+    assert shown == "0 (the agent's check refused 2, 1 of them acceptable)"
+
+
 def test_a_degraded_run_must_name_the_down_tool() -> None:
     named = scored("deploys", missing=["list_deploys failed (tc_9): ToolUnavailable: x"])
     assert named.degraded and named.names_missing
@@ -360,6 +379,17 @@ def test_the_plan_runs_every_scenario_once_before_any_second_run() -> None:
     reprompted = harness.plan(manifest, "dev", "full", 2, "prompt 2", models)
     remodelled = harness.plan(manifest, "dev", "full", 2, "prompt", models | {"small": "t"})
     assert not keys & {j.key for j in reprompted + remodelled}
+
+
+def test_runs_cached_before_the_proposal_check_or_under_another_version_never_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    models = {"primary": "p", "fallback": "f", "small": "s"}
+    unchecked = {"prompt": "x", "models": models, "scenario": "1", "run": 1}
+    key = harness.key("x", models, "1", 1)
+    assert key != harness.sha(json.dumps(unchecked, sort_keys=True))
+    monkeypatch.setattr(harness, "PROPOSAL_CHECK", harness.PROPOSAL_CHECK + 1)
+    assert harness.key("x", models, "1", 1) != key
 
 
 def test_the_prompt_hash_covers_the_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

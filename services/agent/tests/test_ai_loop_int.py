@@ -382,7 +382,9 @@ def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(
             evidence_ids=ids(steps, "query_metrics"),
         )
 
+    # The deploy list shows the v1.7.3 -> v1.8.0 deploy the rollback reverts (the proposal check).
     plan: list[Plan] = [
+        ask("list_deploys"),
         ask("query_metrics", query='http_error_ratio{service="checkout"}'),
         propose,
         report(0.8, "query_metrics"),
@@ -429,6 +431,56 @@ def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(
     seqs = [StepRecordedV3.model_validate(body).seq for _, body in received[:-1]]
     assert seqs == sorted(seqs)
     assert ReportRecordedV1.model_validate(received[-1][1]).status.value == "awaiting_approval"
+
+
+def test_a_refused_proposal_is_not_stored_and_the_model_learns_why(engine: Engine) -> None:
+    fired = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=2)
+    request = new_request().model_copy(update={"requested_at": fired})
+    inv = request.investigation_id
+
+    def rollback(steps: Sequence[StepRecordedV2]) -> ToolRequest:
+        # bad-deploy-1 shipped notifications v6.2.2 -> v6.3.0 116 minutes before the alert.
+        return ask(
+            "propose_action",
+            kind="rollback_deploy",
+            target="notifications",
+            params={"to_version": "v6.2.2"},
+            rationale="Revert the notifications deploy.",
+            evidence_ids=ids(steps, "list_deploys"),
+        )
+
+    errors = 'http_error_ratio{service="checkout"}'
+    plan: list[Plan] = [
+        ask("list_deploys"),
+        ask("query_metrics", query=errors),
+        rollback,
+        ask("query_metrics", query=errors, minutes_before=120),
+        rollback,
+        report(0.8, "list_deploys"),
+    ]
+
+    async def main() -> None:
+        async with sim() as (client, admin):
+            await activate(admin, "bad-deploy-1", fired)
+            tools = Tools(client, alerts_client(), None, None).all()
+            outcome = await job_for(engine, Planned(plan), tools).run(request, asyncio.Event())
+            assert outcome == "done"
+
+    asyncio.run(main())
+
+    steps = [s for _, s in recorded(engine, inv)]
+    first, second = [s for s in steps if s.tool_name == "propose_action" and not is_model_turn(s)]
+    assert first.result is None
+    assert first.summary.startswith("propose_action failed: ProposalRefused: ")
+    assert "minutes_before of at least 116" in first.summary
+    assert second.result is not None
+    a = ProposedAction
+    with engine.connect() as conn:
+        stored = conn.scalars(select(a.idempotency_key).where(a.investigation_id == inv)).all()
+    assert stored == [second.tool_call_id]
+    status, done, _ = final(engine, inv)
+    assert (status, len(done.proposed_actions)) == ("awaiting_approval", 1)
+    assert not [m for m in done.missing_evidence if "propose_action" in m.root]
 
 
 def test_a_report_citing_unknown_results_goes_back_to_the_model(engine: Engine) -> None:

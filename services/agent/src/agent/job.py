@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -67,7 +68,15 @@ from agent.prompt import (
     prompt_bytes,
 )
 from agent.steps import StepRecordedV2, TokenUsage, record_step, replay
-from agent.tools import TOOL_SPECS, ProposeActionArgs, Tool, ToolContext, ToolInputError, ToolResult
+from agent.tools import (
+    TOOL_SPECS,
+    MetricsArgs,
+    ProposeActionArgs,
+    Tool,
+    ToolContext,
+    ToolInputError,
+    ToolResult,
+)
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
 from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
@@ -113,6 +122,16 @@ RESULT_BYTES = 24_000
 # Highest confidence a hypothesis may claim, and the lower ceiling once evidence is missing.
 CONFIDENCE_CEILING = 0.95
 DEGRADED_CEILING = 0.6
+# Version of the check on proposals that revert a change (refusal); the eval's run cache keys on
+# it, so bump it whenever the check changes.
+PROPOSAL_CHECK = 1
+# How far back a query_metrics window can start, in minutes (MetricsArgs.minutes_before).
+METRICS_REACH = 360
+# A result line's time from the alert ("-4m12s", "+30s") in a list_deploys line, with its service
+# and the version it replaced, and in a query_logs line, with its service.
+AT = r"([+-])(?:(\d+)m)?(\d+)s"
+DEPLOY_LINE = re.compile(rf"\S+ \({AT}\) (\S+) (\S+) -> ")
+LOG_LINE = re.compile(rf"{AT} ([^\s/]+)")
 # Not "failed": a failed investigation resumes when its message is replayed from the DLQ.
 FINISHED = ("awaiting_approval", "resolved", "cancelled")
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -719,6 +738,10 @@ def _propose(
     if unknown:
         error = f"evidence_ids name no successful tool result: {', '.join(unknown)}"
         return None, f"ToolInputError: {error}"[:500], None
+    # Not a ToolInputError: the arguments are valid, so tool-call validity does not count it.
+    refused = refusal(state, proposal)
+    if refused is not None:
+        return None, f"ProposalRefused: {refused}"[:500], None
     # Derived from the call, so a retried transaction proposes the same action.
     action_id = uuid5(PROPOSALS, call_id)
     result = (
@@ -726,6 +749,68 @@ def _propose(
         "human to approve it; nothing has run."
     )
     return result, None, (action_id, proposal)
+
+
+def refusal(state: State, proposal: ProposeActionArgs) -> str | None:
+    """Why a rollback or a flag-off must not be stored, or None. The investigation's own results
+    must show the change it reverts, and a metric window must reach back to that change, so the
+    evidence can show whether anything moved after it: prompt rule 6, enforced in code."""
+    key = {"rollback_deploy": "to_version", "disable_feature_flag": "flag"}.get(proposal.kind)
+    if key is None:
+        return None
+    value = proposal.params.get(key, "").strip()
+    if not value:
+        return f"params.{key} is missing, so no change can be checked"
+    rollback, target = key == "to_version", proposal.target.strip().lower()
+    results = [
+        (call.name, call.args, step.result)
+        for step in state.steps
+        if step.result is not None and (call := state.calls.get(step.tool_call_id or ""))
+    ]
+    # A rollback reverts the deploy that replaced to_version; with deploys down, a rollout log
+    # line of the target naming to_version shows it. A flag's first log line shows its change.
+    deploys: list[int] = []
+    logged: list[int] = []
+    for name, _, body in results:
+        for line in body.splitlines():
+            deploy = name == "list_deploys" and DEPLOY_LINE.match(line)
+            log = name == "query_logs" and value in line and LOG_LINE.match(line)
+            if deploy and deploy[4].lower() == target and deploy[5] == value:
+                deploys.append(_seconds(deploy))
+            elif log and (not rollback or log[4].lower() == target):
+                logged.append(_seconds(log))
+    change = max(deploys or logged, default=None) if rollback else min(logged, default=None)
+    what = f"the {proposal.target} deploy that replaced {value}" if rollback else f"flag {value}"
+    if change is None:
+        how = f"list_deploys, or {proposal.target}'s rollout logs" if rollback else "query_logs"
+        return (
+            f"no result of this investigation shows {what}: find it with {how}, or propose nothing"
+        )
+    starts = [
+        -MetricsArgs.model_validate(args).minutes_before * 60
+        for name, args, body in results
+        if name == "query_metrics" and not body.startswith("No series match")
+    ]
+    if starts and min(starts) <= change:
+        return None
+    need = max(5, -(change // 60))
+    if need > METRICS_REACH:
+        return (
+            f"{what} came more than {METRICS_REACH} minutes before the alert, earlier than any "
+            "metric window starts, so no result can show it moved the symptoms: propose nothing"
+        )
+    return (
+        f"no query_metrics result of this investigation reaches back to {what}: query the "
+        f"symptom's metrics with minutes_before of at least {need} to see whether anything moved "
+        "after it, or propose nothing"
+    )
+
+
+def _seconds(match: re.Match[str]) -> int:
+    """A result line's time from the alert, from AT's sign, minutes and seconds."""
+    sign, minutes, seconds = match.group(1, 2, 3)
+    value = int(minutes or 0) * 60 + int(seconds)
+    return -value if sign == "-" else value
 
 
 def _report_problems(args: dict[str, Any]) -> str:

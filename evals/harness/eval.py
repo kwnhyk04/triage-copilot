@@ -10,10 +10,10 @@ after midnight Pacific, Claude with new credits) and it goes on from the parked 
 or the setup is wrong.
 
 Each run is cached in evals/reports/runs/ under a key of the prompt hash, every pinned model id,
-the scenario file's sha256 and the run index: a changed prompt, model or scenario runs again, and
-an eval stopped for any reason goes on where it stopped. Runs go one at a time, since the sim
-serves one scenario, all first runs before any second, GAP seconds apart so each starts with the
-per-minute quota free.
+the scenario file's sha256, the run index and the agent's PROPOSAL_CHECK version: a changed
+prompt, model, scenario or check runs again, and an eval stopped for any reason goes on where it
+stopped. Runs go one at a time, since the sim serves one scenario, all first runs before any
+second, GAP seconds apart so each starts with the per-minute quota free.
 """
 
 import argparse
@@ -36,7 +36,7 @@ import run
 import score
 
 # The agent's own hash: the eval compares it with the one each model call recorded.
-from agent.job import prompt_sha
+from agent.job import PROPOSAL_CHECK, prompt_sha
 from agent.llm import CALLS_TODAY
 from agent.settings import Settings
 from sim.scenario import load_scenarios
@@ -96,6 +96,9 @@ NOTES = [
     "Any forbidden proposal fails the eval (exit 1) whatever the other scores are. Unapproved "
     "executions are not measured here: the executor's tests prove the gate, and no eval run had "
     "an approval or an execution.",
+    "The agent refuses a rollback or a flag-off unless its own results show the change and a "
+    "metric window reaching back to it; a refused proposal is never stored, so it is no forbidden "
+    "proposal, and the gate's row counts the refusals beside it, with how many were acceptable.",
     "Runs that waited out a quota stop are left out of the timing figures and counted below.",
     "Action correctness counts a run without a proposal as right when its scenario has no "
     "acceptable action, so an agent that never proposes scores the do-nothing baseline shown "
@@ -147,7 +150,15 @@ def report_name(today: str, scope: str, prompt: str, models: dict[str, str]) -> 
 
 
 def key(prompt: str, models: dict[str, str], scenario_sha: str, index: int) -> str:
-    payload = {"prompt": prompt, "models": models, "scenario": scenario_sha, "run": index}
+    # The agent's proposal check changes what a run stores, so a run made under another version
+    # of it, or before it existed, never counts.
+    payload = {
+        "prompt": prompt,
+        "models": models,
+        "scenario": scenario_sha,
+        "run": index,
+        "check": PROPOSAL_CHECK,
+    }
     return sha(json.dumps(payload, sort_keys=True))
 
 
@@ -426,8 +437,12 @@ def interval_text(metric: score.Metric, ci: Sequence[float] | None) -> str:
 
 
 def measured(metric: score.Metric, row: Json) -> str:
-    """The value, and beside it what an agent that never proposes would score, if it applies."""
+    """The value, and beside it what an agent that never proposes would score, if it applies, or
+    the proposals the agent's check refused."""
     found = fmt(metric, row["value"])
+    if "refused" in row:
+        refused, acceptable = row["refused"], row["refused_acceptable"]
+        return f"{found} (the agent's check refused {refused}, {acceptable} of them acceptable)"
     if row.get("do_nothing") is None:
         return found
     return f"{found} (do-nothing baseline {fmt(metric, row['do_nothing'])})"
@@ -454,6 +469,11 @@ def build_report(
             "floor": None if off else floor,
             "result": "n/a" if result is None else "pass" if result else "fail",
         }
+    # Beside the gate, what the agent's check refused, so the check cannot hide what was tried.
+    metrics["forbidden_actions"] |= {
+        "refused": sum(r.refused for r in runs),
+        "refused_acceptable": sum(r.refused_acceptable for r in runs),
+    }
     families: dict[str, Json] = {}
     for family in sorted({r.family for r in runs}):
         mine = [r for r in runs if r.family == family]
@@ -560,16 +580,16 @@ def markdown(report: Json) -> str:
         *family_tables(report),
         "## Runs",
         "",
-        "| Scenario | Run | Top-1 | Top-3 | Grounded | Action | Forbidden | Calls | Tokens "
-        "| Time |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Scenario | Run | Top-1 | Top-3 | Grounded | Action | Forbidden | Refused | Calls "
+        "| Tokens | Time |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report["runs"]:
         seconds = "resumed" if r["seconds"] is None else f"{r['seconds']:.0f} s"
         lines.append(
             f"| {r['scenario']} | {r['run']} | {r['top1']} | {r['top3']} | {r['grounded']} | "
-            f"{r['action_correct']} | {r['forbidden']} | {r['tool_calls']} | {r['tokens']:,} | "
-            f"{seconds} |"
+            f"{r['action_correct']} | {r['forbidden']} | {r['refused']} | {r['tool_calls']} | "
+            f"{r['tokens']:,} | {seconds} |"
         )
     return "\n".join(lines) + "\n"
 
