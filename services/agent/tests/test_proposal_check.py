@@ -37,7 +37,7 @@ def investigate(scenario: str, *calls: Call) -> State:
         f"/admin/scenarios/{scenario}/activate", json={"anchor": FIRED.isoformat()}
     )
     assert activated.status_code == 200, activated.text
-    state = State("", FIRED, [], {}, 0, None, 0, 0)
+    state = State("", FIRED, [], {}, 0, None, 0, 0, 150_000)
 
     async def run() -> None:
         transport = httpx2.ASGITransport(app=apps.data)

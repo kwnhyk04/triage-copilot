@@ -57,6 +57,9 @@ class Settings(EnvSettings):
     # while it is off.
     ai_enabled: bool = False
     daily_ai_token_budget: Annotated[int, Field(ge=0)] = 1_000_000
+    # Model tokens one investigation may use, cached input included, in thousands (report names
+    # carry it); below 60,000 the final report's reserve stops it before its first turn.
+    investigation_token_cap: Annotated[int, Field(ge=60_000, multiple_of=1_000)] = 150_000
     # Also write steps to investigation_steps_p while it is partitioned online (docs/migrations.md).
     steps_dual_write: bool = False
     log_level: LogLevel = "info"

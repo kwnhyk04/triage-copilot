@@ -17,6 +17,12 @@ import agent.job as agent_job
 from sim.scenario import Labels
 
 PRICES = {"m": {"billing": "free", "input": 0.3, "cached_input": 0.03, "output": 2.5}}
+# What build_report reads of the eval's meta.
+META: dict[str, Any] = {
+    "billing": "free",
+    "scope": {"scenarios": 25, "runs": 3},
+    "token_cap": 150_000,
+}
 LABELS = Labels.model_validate(
     {
         "root_cause_class": "bad_deploy",
@@ -60,6 +66,7 @@ def record(
             ],
             "proposed_actions": proposals or [],
             "missing_evidence": missing or [],
+            "partial": False,
         },
         "steps": [
             {"kind": "tool_call", "tool_name": tool, "tool_call_id": i, "result": text}
@@ -184,7 +191,7 @@ def test_proposals_the_agent_refused_are_counted_beside_the_gate_not_as_invalid_
     assert (run.tool_calls, run.invalid_calls, run.forbidden) == (3, 0, 0)
     assert (run.refused, run.refused_acceptable) == (2, 1)
     records = [{"approvals": 0, "executions": 0, "resumed": False}]
-    report = harness.build_report([run], records, {}, {"billing": "free"})
+    report = harness.build_report([run], records, {}, META)
     gate = {m.key: m for m in score.METRICS}["forbidden_actions"]
     shown = harness.measured(gate, report["metrics"]["forbidden_actions"])
     assert shown == "0 (the agent's check refused 2, 1 of them acceptable)"
@@ -247,6 +254,81 @@ def test_reports_on_other_models_never_take_the_official_name() -> None:
     assert harness.report_name(day, "dev-full-1", sha, gemini) == tuning
     other = (f"{day}-test-full-3-e0f86d4a-claude-haiku-5-5", False)
     assert harness.report_name(day, "test-full-3", sha, haiku) == other
+
+
+def test_a_token_cap_off_the_default_changes_the_key_and_the_report_name() -> None:
+    models = {"primary": "p", "fallback": "f", "small": "s"}
+    before = {"prompt": "x", "models": models, "scenario": "1", "run": 1}
+    before["check"] = harness.PROPOSAL_CHECK
+    # Runs cached under the default cap keep the keys they had.
+    default = harness.key("x", models, "1", 1)
+    assert default == harness.sha(json.dumps(before, sort_keys=True))
+    assert harness.key("x", models, "1", 1, 150_000) == default
+    assert harness.key("x", models, "1", 1, 350_000) != default
+    manifest = {"scenarios": {"a-1": {"split": "dev", "ci": True, "sha256": "1"}}}
+    raised = harness.plan(manifest, "dev", "full", 1, "x", models, 350_000)
+    assert [j.key for j in raised] == [harness.key("x", models, "1", 1, 350_000)]
+    haiku = harness.DEFAULTS | {"primary": "claude-haiku-5-5", "small": "claude-haiku-5-5"}
+    day, sha = "2026-10-22", "2b91d4523fb028a6"
+    name = f"{day}-test-full-3-2b91d452-claude-haiku-5-5-cap350k"
+    assert harness.report_name(day, "test-full-3", sha, haiku, 350_000) == (name, False)
+    gemini = harness.report_name(day, "test-full-3", sha, harness.DEFAULTS, 350_000)
+    assert gemini == (f"{day}-test-full-3-2b91d452-cap350k", False)
+
+
+def test_reports_name_the_cap_and_mark_a_second_configuration() -> None:
+    scope = {"split": "test", "subset": "full", "runs": 3, "scenarios": 25, "investigations": 75}
+    meta: dict[str, Any] = META | {
+        "date": "2026-10-22",
+        "scope": scope,
+        "set": {"name": "v1", "manifest_sha256": "0" * 64},
+        "models_text": "m (agent), m (log summaries), no fallback",
+        "prompt_sha256": "p" * 64,
+        "embedding": None,
+    }
+    records = [{"approvals": 0, "executions": 0, "resumed": False}]
+    raised = harness.build_report([scored()], records, {}, meta | {"token_cap": 350_000})
+    assert raised["notes"][0].startswith("Second configuration, not an exam:")
+    assert "Token cap per investigation: 350,000 (default 150,000)." in harness.markdown(raised)
+    default = harness.build_report([scored()], records, {}, meta)
+    assert not any(note.startswith("Second configuration") for note in default["notes"])
+    text = harness.markdown(default)
+    assert "Token cap per investigation: 150,000." in text
+    assert "25 scenarios x 3 runs is a small sample" in text
+
+
+def test_reports_count_what_forced_each_report() -> None:
+    stop = "The investigation stopped early: "
+
+    def forced(*missing: str) -> score.Scored:
+        run = record(missing=list(missing))
+        run["report"]["partial"] = True
+        return score.score(run, LABELS, "bad-deploy", None, PRICES)
+
+    calls = forced("checkout's logs were not read", f"{stop}it used all 15 tool calls.")
+    reserve = "another turn would leave too few of its 350,000 tokens for the report"
+    tokens = forced(f"{stop}{reserve}.")
+    # The job's note goes last, so 20 items of the model's own can push it out.
+    cut = forced("one of the model's 20 items")
+    assert (calls.stopped, tokens.stopped, scored().stopped) == (
+        "it used all 15 tool calls",
+        reserve,
+        None,
+    )
+    assert cut.stopped == "not named in the report"
+    runs = [replace(r, run=n) for n, r in enumerate([calls, tokens, calls, cut, scored()], 1)]
+    records = [{"approvals": 0, "executions": 0, "resumed": False}] * len(runs)
+    report = harness.build_report(runs, records, {}, META)
+    assert report["forced"] == {
+        "it used all 15 tool calls": 2,
+        reserve: 1,
+        "not named in the report": 1,
+    }
+    line = (
+        f"Reports a cap forced: 4 of 5 (2: it used all 15 tool calls; 1: {reserve}; "
+        "1: not named in the report)."
+    )
+    assert line in report["notes"]
 
 
 def runs(*results: tuple[str, bool]) -> list[score.Scored]:
@@ -411,7 +493,8 @@ def test_a_run_counts_only_under_the_prompt_its_calls_used() -> None:
 
     def ran(*shas: str | None) -> dict[str, Any]:
         calls = [{"role": "primary", "model": "m", "prompt_sha": s} for s in shas]
-        return {"model_calls": calls, "steps": []}
+        report: dict[str, Any] = {"summary": "s", "missing_evidence": []}
+        return {"model_calls": calls, "steps": [], "report": report, "tokens": 0}
 
     assert harness.problems(ran("p", "p"), models, "p") == []
     # Calls recorded before agent migration 0008 carry no sha.
@@ -420,6 +503,44 @@ def test_a_run_counts_only_under_the_prompt_its_calls_used() -> None:
     assert harness.problems(ran("old", "p"), models, "p") == stale
     unknown = ["the agent ran no recorded prompt, not the source's prompt p: restart it"]
     assert harness.problems(ran(None), models, "p") == unknown
+
+
+def test_a_run_counts_only_under_the_token_cap_the_eval_was_given() -> None:
+    models = {"primary": "m", "fallback": "f", "small": "s"}
+
+    def ran(stop: str, tokens: int = 120_000) -> dict[str, Any]:
+        calls = [{"role": "primary", "model": "m", "prompt_sha": "p"}]
+        report = {"summary": "s", "missing_evidence": [f"The investigation stopped early: {stop}."]}
+        return {"model_calls": calls, "steps": [], "report": report, "tokens": tokens}
+
+    reserve = "another turn would leave too few of its {:,} tokens for the report"
+    assert harness.problems(ran(reserve.format(350_000)), models, "p", 350_000) == []
+    other = "the agent ran with another token cap than INVESTIGATION_TOKEN_CAP={:,}: restart it"
+    stale = harness.problems(ran(reserve.format(150_000)), models, "p", 350_000)
+    assert stale == [other.format(350_000)]
+    over = ran("it used all 15 tool calls", tokens=200_000)
+    assert harness.problems(over, models, "p", 150_000) == [other.format(150_000)]
+
+
+def test_floors_are_set_only_on_the_default_models_and_token_cap(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def no_run(*args: Any) -> None:
+        raise AssertionError("an eval ran")
+
+    monkeypatch.setattr(harness, "execute", no_run)
+    for name in ("LLM_PRIMARY_MODEL", "LLM_FALLBACK_MODEL", "LLM_SMALL_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AI_ENABLED", "true")
+    monkeypatch.setenv("LLM_FALLBACK_ON_RATE_LIMIT", "false")
+    monkeypatch.setenv("INVESTIGATION_TOKEN_CAP", "350000")
+    assert harness.main(["--split", "test", "--set-floors"]) == harness.SETUP
+    monkeypatch.delenv("INVESTIGATION_TOKEN_CAP")
+    monkeypatch.setenv("LLM_PRIMARY_MODEL", "claude-haiku-5-5")
+    assert harness.main(["--split", "test", "--set-floors"]) == harness.SETUP
+    out = capsys.readouterr().out
+    assert out.count("SET_FLOORS=1") == 2
+    assert "an eval ran" not in out
 
 
 def test_a_quota_stop_keeps_the_run_parked_and_exits_2(

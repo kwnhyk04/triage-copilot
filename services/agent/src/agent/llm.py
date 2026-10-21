@@ -20,6 +20,7 @@ from sqlalchemy import Connection, text
 
 from agent.model import (
     NO_USAGE,
+    PROMPT_LIMIT,
     PROMPT_OVERHEAD,
     BudgetRefused,
     CreditsExhausted,
@@ -191,7 +192,7 @@ class Router:
         limited or spent; None when it cannot fit or fails."""
         bound = len(SUMMARY_SYSTEM.encode()) + len(page.encode()) + PROMPT_OVERHEAD
         max_output = min(SUMMARY_OUTPUT_CAP, remaining - bound)
-        if max_output < SUMMARY_MIN_OUTPUT:
+        if max_output < SUMMARY_MIN_OUTPUT or bound > PROMPT_LIMIT:
             return None, []
         calls: list[ModelCall] = []
         for binding in self._chain(self.small, self.claude):

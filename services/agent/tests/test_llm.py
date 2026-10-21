@@ -12,6 +12,7 @@ from sqlalchemy import Connection
 
 from agent.llm import Binding, Limiter, Router, spent
 from agent.model import (
+    PROMPT_LIMIT,
     BudgetRefused,
     CreditsExhausted,
     Message,
@@ -144,6 +145,21 @@ def test_the_bound_builds_on_the_same_models_exact_count() -> None:
     assert budget.bound("other") == 50_000 + 10 * 16 + 256
 
 
+def test_a_prompt_past_the_limit_is_refused_whatever_tokens_are_left() -> None:
+    at_limit = TurnBudget(10**6, PROMPT_LIMIT - 256, 0, 0, 0, 2_048, 256)
+    assert at_limit.limits("m") == (PROMPT_LIMIT, 2_048)
+    over = TurnBudget(10**6, PROMPT_LIMIT - 255, 0, 0, 0, 2_048, 256)
+    assert over.limits("m") is None
+    exact = TurnBudget(10**6, 0, 600, 1, 1, 2_048, 256, "m", PROMPT_LIMIT - 1_000, 500)
+    assert exact.limits("m") is None
+    primary = Fake("primary")
+
+    with pytest.raises(BudgetRefused):
+        asyncio.run(router(primary, Fake("fallback")).turn(TurnRequest([], "s", [], [], over)))
+
+    assert primary.max_outputs == []
+
+
 def test_an_invalid_report_comes_back_as_a_tool_call_to_fix() -> None:
     class Reporter(Fake):
         async def generate(self, *args: Any, **kwargs: Any) -> ProviderTurn:
@@ -186,6 +202,12 @@ def test_summaries_skip_when_the_page_would_not_fit() -> None:
     summary, calls = asyncio.run(small.summarize("x" * 500, remaining=10_000))
     assert summary == "- 40 timeouts"
     assert [(c.role, c.outcome, c.usage.input) for c in calls] == [("small", "ok", 500)]
+
+
+def test_summaries_skip_a_page_past_the_prompt_limit() -> None:
+    small = router(Fake("primary"), Fake("fallback"))
+
+    assert asyncio.run(small.summarize("x" * PROMPT_LIMIT, remaining=10**6)) == (None, [])
 
 
 def chain(

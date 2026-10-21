@@ -20,6 +20,8 @@ from sim.scenario import Action, Labels
 SEED = 20261016
 RESAMPLES = 10_000
 Json = dict[str, Any]
+# How the job's note on a report that a cap forced begins (agent.job).
+STOPPED = "The investigation stopped early: "
 # The agent tool that reads each sim backend a scenario can mark down.
 READERS = {
     "metrics": "query_metrics",
@@ -58,6 +60,8 @@ class Scored:
     # Whether the scenario marks a backend down, and whether missing_evidence names it.
     degraded: bool
     names_missing: bool
+    # What cut the investigation off, from the job's note; None when the model reported unforced.
+    stopped: str | None = None
 
     def json(self) -> Json:
         return {f.name: getattr(self, f.name) for f in fields(self)}
@@ -139,6 +143,9 @@ def score(
     calls: list[Json] = record["tool_calls"]
     refused = [c["args"] for c in calls if (c["error"] or "").startswith("ProposalRefused")]
     paid, billed = cost(record["model_calls"], prices)
+    # The job's note comes after the model's own items, so take the last one that matches.
+    notes = [m.removeprefix(STOPPED).removesuffix(".") for m in missing if m.startswith(STOPPED)]
+    stopped = notes[-1] if notes else "not named in the report" if report["partial"] else None
     return Scored(
         scenario=record["scenario"],
         family=family,
@@ -161,6 +168,7 @@ def score(
         billed=billed,
         degraded=down is not None,
         names_missing=bool(down) and any(reader in m or f"{down} backend" in m for m in missing),
+        stopped=stopped,
     )
 
 

@@ -1,7 +1,8 @@
 """The agent loop against a scratch database and the sim in-process, with fake models.
 
-The hard token cap, the degraded-tool report, log pagination, propose_action with report
-delivery through the outbox, a rejected report, and runbook search with task prefixes.
+The hard token cap at the default and a raised one, the prompt limit, the degraded-tool report,
+log pagination, propose_action with report delivery through the outbox, a rejected report, and
+runbook search with task prefixes.
 """
 
 import asyncio
@@ -22,13 +23,14 @@ import httpx2
 import pytest
 import yaml
 from sqlalchemy import Connection, Engine, create_engine, func, select, text
-from test_workers_int import new_request, recorded
+from test_workers_int import CAP, new_request, recorded
 from types_boto3_sqs import SQSClient
 
 import agent.job
 from agent.db import Investigation, ModelCall, Outbox, ProposedAction
-from agent.job import DEGRADED_CEILING, MAX_TOKENS, RESULT_BYTES, Job
+from agent.job import DEGRADED_CEILING, RESULT_BYTES, Job
 from agent.model import (
+    PROMPT_LIMIT,
     BudgetRefused,
     HypothesisDraft,
     ModelTurn,
@@ -165,8 +167,10 @@ async def activate(client: httpx2.AsyncClient, scenario: str, anchor: datetime) 
     assert response.status_code == 200, response.text
 
 
-def job_for(engine: Engine, model: Planned, tools: dict[str, Tool]) -> Job:
-    return Job(engine, model, tools, ai_enabled=True, daily_token_budget=10**9, tenant_cap=5)
+def job_for(engine: Engine, model: Planned, tools: dict[str, Tool], cap: int = CAP) -> Job:
+    return Job(
+        engine, model, tools, ai_enabled=True, daily_token_budget=10**9, tenant_cap=5, token_cap=cap
+    )
 
 
 def final(engine: Engine, inv: UUID) -> tuple[str, Report, int]:
@@ -178,45 +182,86 @@ def final(engine: Engine, inv: UUID) -> tuple[str, Report, int]:
     return status, Report.model_validate(body), used
 
 
-def test_no_investigation_records_more_than_the_token_cap(engine: Engine) -> None:
+class Greedy(Planned):
+    """Fills its input bound and its output allowance on every turn, one token per byte, and asks
+    for another result with the given chance until it must report."""
+
+    def __init__(self, seed: int, keep_going: float = 0.9) -> None:
+        super().__init__([])
+        self.random = random.Random(seed)  # noqa: S311 - test data
+        self.keep_going = keep_going
+
+    async def turn(self, request: TurnRequest) -> ModelTurn:
+        limits = request.budget.limits("greedy")
+        if limits is None:
+            raise BudgetRefused
+        bound, max_output = limits
+        more = request.allowed is None and self.random.random() > 1 - self.keep_going
+        action = ask("query_metrics", query="up") if more else report(0.5)(request.steps)
+        usage = Usage(input=bound, output=max_output)
+        call = Call("primary", "greedy", "greedy", "ok", usage, bound, max_output)
+        tokens = TokenUsage(input=bound, output=max_output)
+        return ModelTurn(action=action, tokens=tokens, calls=[call], model="greedy")
+
+
+def calls_of(engine: Engine, inv: UUID) -> list[tuple[int, int, int]]:
+    """Input tokens, output tokens and input bound of each model call."""
+    columns = (ModelCall.input_tokens, ModelCall.output_tokens, ModelCall.input_bound)
+    with engine.connect() as conn:
+        rows = conn.execute(select(*columns).where(ModelCall.investigation_id == inv))
+        return [(i, o, b or 0) for i, o, b in rows]
+
+
+def stop_notes(done: Report) -> list[str]:
+    return [m.root for m in done.missing_evidence if m.root.startswith("The investigation stopped")]
+
+
+@pytest.mark.parametrize("cap", [CAP, 350_000])
+def test_no_investigation_records_more_than_the_token_cap(engine: Engine, cap: int) -> None:
     """Models that always fill their input bound and their output allowance, with tool results
-    of random sizes, never take an investigation past MAX_TOKENS."""
-
-    class Greedy(Planned):
-        def __init__(self, seed: int) -> None:
-            super().__init__([])
-            self.random = random.Random(seed)  # noqa: S311 - test data
-
-        async def turn(self, request: TurnRequest) -> ModelTurn:
-            limits = request.budget.limits("greedy")
-            if limits is None:
-                raise BudgetRefused
-            bound, max_output = limits
-            more = request.allowed is None and self.random.random() > 0.1
-            action = ask("query_metrics", query="up") if more else report(0.5)(request.steps)
-            usage = Usage(input=bound, output=max_output)
-            call = Call("primary", "greedy", "greedy", "ok", usage, bound, max_output)
-            tokens = TokenUsage(input=bound, output=max_output)
-            return ModelTurn(action=action, tokens=tokens, calls=[call], model="greedy")
-
+    of random sizes, never take an investigation past its token cap, nor a prompt past
+    PROMPT_LIMIT."""
     sizes = random.Random(7)  # noqa: S311 - test data
 
     async def big(ctx: ToolContext, args: dict[str, Any]) -> str:
         return "x" * sizes.randint(100, 2 * RESULT_BYTES)
 
+    totals: list[int] = []
+    notes: list[str] = []
     for seed in range(30):
         request = new_request()
-        job = job_for(engine, Greedy(seed), {"query_metrics": big})
+        job = job_for(engine, Greedy(seed), {"query_metrics": big}, cap)
         assert asyncio.run(job.run(request, asyncio.Event())) == "done"
-        _, _, used = final(engine, request.investigation_id)
-        with engine.connect() as conn:
-            rows = conn.execute(
-                select(
-                    ModelCall.input_tokens, ModelCall.output_tokens, ModelCall.input_bound
-                ).where(ModelCall.investigation_id == request.investigation_id)
-            ).all()
-        assert used == sum(i + o for i, o, _ in rows) <= MAX_TOKENS, seed
-        assert all(i <= (b or 0) for i, _, b in rows), seed
+        _, done, used = final(engine, request.investigation_id)
+        rows = calls_of(engine, request.investigation_id)
+        assert used == sum(i + o for i, o, _ in rows) <= cap, seed
+        assert all(i <= b <= PROMPT_LIMIT for i, _, b in rows), seed
+        totals.append(used)
+        notes += stop_notes(done)
+    if cap != CAP:
+        # The setting, not the default, capped these runs, and their stop notes name it.
+        assert max(totals) > CAP
+        assert not any(f"{CAP:,}" in note for note in notes)
+        assert any(f"{cap:,}" in note for note in notes)
+
+
+def test_no_prompt_passes_the_limit_even_when_the_token_cap_would_allow_it(engine: Engine) -> None:
+    """Every result at the clip, read at one token per byte, and a cap that never binds: the
+    prompt limit stops the run early enough for the forced report to fit under it."""
+
+    async def full(ctx: ToolContext, args: dict[str, Any]) -> str:
+        return "x" * RESULT_BYTES
+
+    request = new_request()
+    job = job_for(engine, Greedy(0, keep_going=1.0), {"query_metrics": full}, 10**7)
+    assert asyncio.run(job.run(request, asyncio.Event())) == "done"
+
+    _, done, _ = final(engine, request.investigation_id)
+    rows = calls_of(engine, request.investigation_id)
+    assert max(b for _, _, b in rows) <= PROMPT_LIMIT
+    # The model's own forced report, not the job's partial one, which has no hypotheses.
+    assert done.partial and done.hypotheses
+    assert any(f"{PROMPT_LIMIT:,}" in note for note in stop_notes(done))
 
 
 def test_a_turn_that_cannot_fit_ends_with_the_jobs_partial_report(engine: Engine) -> None:
@@ -224,7 +269,7 @@ def test_a_turn_that_cannot_fit_ends_with_the_jobs_partial_report(engine: Engine
     with engine.begin() as conn:
         conn.execute(
             text("INSERT INTO agent.investigations (id, budget_tokens_used) VALUES (:id, :used)"),
-            {"id": request.investigation_id, "used": MAX_TOKENS - 2_000},
+            {"id": request.investigation_id, "used": CAP - 2_000},
         )
     model = Planned([ask("query_metrics", query="up")])
 
@@ -232,7 +277,7 @@ def test_a_turn_that_cannot_fit_ends_with_the_jobs_partial_report(engine: Engine
 
     status, done, used = final(engine, request.investigation_id)
     assert (status, done.partial, done.hypotheses) == ("resolved", True, [])
-    assert used == MAX_TOKENS - 2_000
+    assert used == CAP - 2_000
 
 
 def test_a_degraded_metrics_backend_is_missing_evidence_and_caps_confidence(
@@ -362,7 +407,7 @@ def test_paging_through_logs_keeps_the_context_within_budget(
         )
     _, done, used = final(engine, request.investigation_id)
     assert (small, done.partial) == (14, True)
-    assert used <= MAX_TOKENS
+    assert used <= CAP
 
 
 def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(
