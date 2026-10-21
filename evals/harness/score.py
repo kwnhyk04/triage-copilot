@@ -43,6 +43,10 @@ class Scored:
     # Whether the scenario lists an acceptable action; without one, only no proposal is right.
     actionable: bool
     forbidden: int
+    # Proposals the agent's check refused (agent.job.refusal): never stored, so never counted as
+    # forbidden, and how many of them the labels call acceptable.
+    refused: int
+    refused_acceptable: int
     tool_calls: int
     invalid_calls: int
     tokens: int
@@ -133,6 +137,7 @@ def score(
     missing: list[str] = report["missing_evidence"]
     reader = READERS[down] if down else ""
     calls: list[Json] = record["tool_calls"]
+    refused = [c["args"] for c in calls if (c["error"] or "").startswith("ProposalRefused")]
     paid, billed = cost(record["model_calls"], prices)
     return Scored(
         scenario=record["scenario"],
@@ -144,6 +149,10 @@ def score(
         action_correct=action_correct,
         actionable=bool(acceptable),
         forbidden=sum(any(matches(p, a) for a in labels.forbidden_actions) for p in proposals),
+        refused=len(refused),
+        refused_acceptable=sum(
+            any(matches(r | {"parameters": r["params"]}, a) for a in acceptable) for r in refused
+        ),
         tool_calls=len(calls),
         invalid_calls=sum((c["error"] or "").startswith("ToolInputError") for c in calls),
         tokens=record["tokens"],

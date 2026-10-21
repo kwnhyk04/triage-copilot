@@ -19,6 +19,169 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-21: Proposal-check dev pass passed; the credit date stays 2026-11-10; Claude rules recorded
+
+- What happened:
+  - The user ran the proposal check's dev pass with the steps in docs/todo.md (6b): Gemini with the default models and the frozen prompt, 15 runs, from 08:05 to 08:31 UTC (16:05 to 16:31 Taipei). `make eval` exited 0 with no `broke:` line. Its last lines were "resolved, 73,734 tokens, 65 s" and "report: evals/reports/2026-10-21-dev-full-1-2b91d452.md", and the forbidden row reads "0 (the agent's check refused 1, 0 of them acceptable)". Their message held the request twice, first with the placeholders unfilled, then filled in; the filled copy was used.
+  - The user corrected the credits' expiry: 2026-11-10, not the 2026-11-07 they had given earlier that day (entry below). Every 2026-11-10 in the docs and the code stays, and the second Haiku run must happen before that date.
+  - Rule change, for the record: Claude Haiku may be the primary model on the user's public demos, with the key only in `.env` and `.env.prod` on this PC, never on GitHub or Vercel, and CI stays free-only. The Anthropic monthly spend limit is $50, shared by all three projects. Triage Copilot has no public demo, so its code does not change.
+  - New rule for Claude runs: no per-task cap may cut Claude off mid-work; caps are sized from real data with about 10% headroom, and every single prompt stays under 100,000 tokens. The user asked whether the second Haiku run's plan already does this.
+- Why: the dev pass is the check's done-when (docs/todo.md, 6b); the correction and the rules are the user's.
+- What we did (no model call, no code changed):
+  1. Read the report and its 15 result files with inline Python (`uv run --no-sync python -I -`, from stdin), matching runs by scenario, run and tokens.
+  2. The pass meets the done-when:
+     - No forbidden proposal. Two proposals were stored, both acceptable: bad-deploy-1's rollback of checkout to v1.7.3 and memory-leak-1's scale of orders to 3 replicas.
+     - One refusal, not acceptable. bad-config-1 proposed rolling checkout back to v1.7.3, and the check answered "ProposalRefused: the checkout deploy that replaced v1.7.3 came more than 360 minutes before the alert, earlier than any metric window starts, so no result can show it moved the symptoms: propose nothing". The scenario accepts only turning off checkout's `new-tax-engine` flag and forbids rollbacks of payments and pricing, so the rollback was neither. The model then reported config_change on checkout, the right cause, with no further proposal. The refusal also shows that the agent ran with the check.
+  3. Compared it with the same prompt's 2026-10-16 pass, from both reports: top-1 0.53 against 0.73, grounding 0.73 against 0.93, action correctness 0.67 against 0.73 (do-nothing baseline 0.53), 0.29 against 0.43 on scenarios with an acceptable action, validity 0.99 against 0.98, median tool calls 9 against 8, median tokens 63,200 against 53,465, p95 117 s against 112 s. The three runs that lost top-1 (bad-config-2, db-pool-exhaustion-3, noisy-neighbor-3) made no proposal, so the check never ran in them; all three were forced reports, two by the token reserve and one by the 15-call cap. The drop lies inside the interval (0.27 to 0.80) and is read as Gemini's run-to-run variation (not confirmed).
+  4. Spent: 158 Gemini requests of the agent's 260 a Pacific day (156 answered, 2 `503 UNAVAILABLE` "high demand" in bad-config-1, retried), 1,044,203 tokens and no log summary. 5 reports were forced (4 by the reserve, 1 by the 15-call cap); no quota stop, no resumed run.
+  5. The date: removed the 2026-11-07 fix from the approved plan before any file changed for it, so the repo never held 2026-11-07.
+  6. Recorded the rule change and the spend limit in docs/memory.md (Preferences and Instructions, Constraints) and the spend limit in docs/context.md.
+  7. Checked the second Haiku run's plan against the new rule, from run 1's result files:
+     - The 350,000-token cap is sized from data: the projected need is at most 320,354, about 9% under it.
+     - Output caps hold: tool turns used at most 655 of 2,048 tokens, reports at most 1,441 (cap 2,048, or 4,096 when forced), and the only Haiku log summary so far used 352 of 400.
+     - The 300 s limit holds: run 1's longest run took 35 s.
+     - Prompts: run 1's largest was 21,855 tokens and the projected largest about 31,000, but at 350,000 the cap alone no longer guarantees 100,000. With every result at the 24,000-byte clip and one token per byte, a forced report would reach about 103,000. Change: a 100,000-token prompt limit in `_stop_reason`, added to the token cap item in docs/todo.md; it cannot fire at the default cap.
+     - The 15-call cap cannot be sized for Haiku yet: run 1's forced runs stopped at 8 to 14 calls, 24 of them at 12 to 14, before any reached 15. It stays at 15, the design's hard cap and an eval gate. The run's record counts the reports it forces, and sizing it would take another run.
+  8. Updated docs/todo.md (the check done and ready to ship, the second Haiku run as three items, thinking as a later item), docs/context.md, docs/memory.md, evals/README.md (a dev-split column and a paragraph on the pass) and the plan file outside the repo.
+  - Why this was the best option: the result files hold every call, so each figure is checked against the data rather than the report's summary, and the prompt limit enforces the user's rule in code instead of relying on typical result sizes.
+- Small events:
+  - GateGuard gated the first Bash command and the first edit of each file. What we did: stated the facts and sent the call again; in batches, the calls after the refused one applied.
+  - Two inline analysis runs failed: `load_scenarios` needs a `Path` (`'str' object has no attribute 'glob'`), and older result files have no `run` field (`KeyError: 'run'`). What we did: passed a `Path` and read the field with `.get`.
+  - One edit of docs/context.md missed: the Known Limitations line ends "cannot propose an action", not "cannot propose". What we did: found the line with Grep and edited it again.
+  - The dev report's notes say "25 scenarios run 3 times is a small sample" on a 15 x 1 pass: `CAVEATS` in `eval.py` is fixed text. What we did: added the fix to the token cap item in docs/todo.md.
+- Files: docs/todo.md, docs/context.md, docs/memory.md, docs/activity-log.md, evals/README.md.
+- Validation: `make lint` exit 0 after the other docs' edits (ESLint, Prettier, ruff check and format); Prettier checked this file afterwards.
+- Outstanding:
+  - The user ships `proposal-check`, including the untracked files: the four report files of 2026-10-21 and `services/agent/tests/test_proposal_check.py`.
+  - Then the token cap setting, then the second Haiku run before 2026-11-10.
+  - Nothing is committed.
+
+### 2026-10-21: Second Haiku run planned from run 1's result files
+
+- What happened: The user asked for a plan only, with no file changed, since `proposal-check` was uncommitted and its dev pass was still to run: a second Claude Haiku run on the test split after `proposal-check` merges, so the token budget no longer cuts Haiku off. They asked which budget forced run 1's reports and what values let Haiku finish, for the run steps with a token, cost and time estimate and the caps those values break, whether thinking should stay off, and how the report labels the run. They also said their credits (about $100) expire on 2026-11-07, not 2026-11-10, and asked for that date in the docs; they corrected it later that day (entry above). They approved the plan.
+- Why: the token budget forced 63 of run 1's 75 reports, and a forced report cannot propose, so run 1's action scores say little about Haiku.
+- What we did (read-only, no model call, no repo file changed):
+  1. Read run 1's 75 result files with inline Python, matched to the report by scenario, run and tokens.
+  2. Found:
+     - All 63 forced reports carry the reserve's note, "another turn would leave too few of its 150,000 tokens for the report" (`_stop_reason` in `job.py`): it stops when 150,000 minus the tokens used is less than twice the next prompt's bound plus 29,507. They stopped at a median of 98,842 tokens used, holding back a median of 51,158, after 8 to 14 tool calls. None came from the hard cap (largest run 125,936 tokens), the 15 tool calls (most 14), the 300 s (longest 35 s) or the daily budget (the UTC day counted 9,132,041 of 12,000,000).
+     - Cache reads were 4,341,032 of the 7,984,284 input tokens (54%): every call re-reads the 5,036-token cached system prompt and tools, and the cap counts them.
+     - Projected from each run's per-turn prompt growth, with every forced run going on to 15 tool calls, the cap at which the reserve never fires first has a median of 203,822, a p90 of 277,648 and a maximum of 320,354. The largest projected prompt is about 31,000 tokens (run 1: 21,855).
+  3. The plan, approved, is in docs/todo.md: a new setting, `INVESTIGATION_TOKEN_CAP`, at 350,000 for the run (the maximum need plus about 9%), and `DAILY_AI_TOKEN_BUDGET=30000000`; the reserve, the 15 calls and the 300 s unchanged; thinking off, so only the cap changes; a report named `-cap350k` and labeled a second configuration, not an exam, with `SET_FLOORS` refused. Estimate: 9.9 to 12.8 million tokens, $0.63 to $0.86 of credits, 979 to 1,121 model calls, about 1 h 50 min; exit 1 expected on the 150,000-token gate.
+  - Why this was the best option: the result files hold every turn's tokens, so the cap comes from measured growth rather than a guess, and a setting keeps 150,000 for every other run.
+- Small events:
+  - GateGuard gated the first Bash command, a scratch script and the plan file's first write. What we did: stated the facts; the scratch script was dropped for inline Python on stdin, so the analysis wrote no file.
+  - The first analysis matched no run: a result file's `models` field is a list, not a string. What we did: matched on the model of the primary calls instead.
+- Files: none in the repo; the plan is `C:\Users\kwonhyuk\.claude\plans\pasted-content-id-3fa0-plan-only-splendid-hippo.md`.
+- Validation: every figure recomputed from the result files.
+- Outstanding: the plan's date fix was dropped after the user's correction (entry above).
+
+### 2026-10-21: The forbidden-proposal check built on branch proposal-check; dev-pass steps
+
+- What happened: After the comparison below, the user asked for the approved check from docs/todo.md on a new branch, with tests first on the scripted model, the run cache keyed on the check and the prompt frozen. They also asked for written dev-pass steps: they run the dev pass themselves, never on the test split. No live model calls, no commit.
+- Why: the test split's one forbidden proposal (entry of 2026-10-20) rolled back a deploy older than every metric window the agent had read, and no code compared a proposal with its evidence.
+- What we did:
+  1. `git fetch origin`: main equals origin/main at `6c635d9`. Then `git switch -c proposal-check`.
+  2. Tests first:
+     - `services/agent/tests/test_proposal_check.py` (unit, no database): the real tools against the in-process sim, on the dev scenarios bad-deploy-1, bad-deploy-2 (deploys down) and bad-config-1. The cases:
+       - A rollback inside the metric window passes. One outside it is refused, with the `minutes_before` that would reach it, and passes once a window does.
+       - A window that matched no series refuses, and so does no metric result at all.
+       - A deploy older than 360 minutes is refused, with no `minutes_before` hint.
+       - With deploys down, rollout log lines show the deploy.
+       - A flag-off needs a log line that names the flag.
+       - A restart passes.
+     - `services/agent/tests/test_ai_loop_int.py`, `test_a_refused_proposal_is_not_stored_and_the_model_learns_why`, drives the job with the scripted model (`Planned`):
+       - A rollback of notifications' deploy from 116 minutes before the alert, with a 60-minute window, is refused: `propose_action failed: ProposalRefused: ...`, no `proposed_actions` row, nothing in missing evidence.
+       - After a 120-minute window, the same proposal is stored, and only it.
+       - The existing proposal test now calls `list_deploys` first, since a rollback needs its deploy in the results.
+     - `evals/harness/test_eval_score.py`: refused proposals count apart from invalid calls and beside the gate, with the acceptable ones among them. The cache key differs from the key without the check and changes with `PROPOSAL_CHECK`.
+     - RED, before the code:
+       - The harness tests failed on the missing `Scored.refused` and on equal keys.
+       - The unit tests failed on their refusal assertions against a no-op `refusal` stub.
+       - The loop test failed, storing the first rollback, with the check replaced by a no-op through a pytest plugin in this session's scratchpad (`-p noop_check`).
+  3. Code:
+     - `services/agent/src/agent/job.py`: `refusal(state, proposal)`, which `_propose` calls after its argument and evidence-id checks. It reads only the results recorded so far:
+       - `rollback_deploy`: the `list_deploys` line of the deploy that replaced `to_version`; with no such line, the newest log line of the target that names `to_version`.
+       - `disable_feature_flag`: the earliest log line that names the flag.
+       - It passes when a `query_metrics` result that matched a series has a window (`minutes_before`) starting at or before that change.
+       - A refusal returns `ProposalRefused: <why, and what would settle it>` and stores nothing. It is not a `ToolInputError`, so tool-call validity does not count it.
+       - New constants: `PROPOSAL_CHECK = 1` and `METRICS_REACH = 360`.
+     - `evals/harness/score.py`: `Scored.refused` and `refused_acceptable`, from tool-call errors that start with `ProposalRefused`.
+     - `evals/harness/eval.py`:
+       - The cache key includes `PROPOSAL_CHECK`.
+       - The forbidden-proposal row reads "(the agent's check refused N, M of them acceptable)".
+       - The runs table has a Refused column, and a note explains refusals.
+     - The prompt: `prompt.py` and `tools.py` unchanged, and `test_the_prompt_is_frozen` passes.
+  4. Offline check, dev split only (`dev_check.py` in this session's scratchpad). Every recorded dev proposal, 15 from 62 dev result files, went through the real `refusal`, each cut at the moment it was made:
+     - The 9 acceptable rollbacks and flag-offs pass, bad-deploy-2's Haiku rollback through its rollout lines.
+     - The 2 restart and scale proposals pass.
+     - memory-leak-3's rollback under change 2 is refused, its deploy older than 360 minutes.
+     - The 3 forbidden ones, reverts of harmless changes inside the window, pass.
+     - This is the same result as the 2026-10-20 replay.
+  5. Dev-pass steps in docs/todo.md (6b): Gemini with the default models, 15 runs, `DAILY_AI_TOKEN_BUDGET=2000000`, the agent started only after a branch check, never `SPLIT=test` or `SET_FLOORS=1`.
+  - Why this was the best option: it is the approved design, with one refinement: a metric result that matched no series is not counted as a window, since it shows nothing after the change. The offline check above holds with it.
+- Small events:
+  - GateGuard gated the first Bash command and the first edit of each file. What we did: stated the facts and sent the refused call again. In batches, the calls after the refused one applied.
+  - Integration tests need `.env`, which the Makefile includes. A subset ran with `make --eval='greenrun: ; uv run pytest -m integration <file>' greenrun`, which loads `.env` and unexports the provider keys as `make test-int` does.
+  - ruff flagged the first version: F402, a loop variable named `text` that shadowed sqlalchemy's `text`, and SIM102, nested ifs. What we did: renamed the variable and merged the conditions.
+  - The ports were checked free first. `make infra-up` started `triagecopilot-postgres-1`, `triagecopilot-elasticmq-1` and `triagecopilot-toxiproxy-1`, and `make infra-down` removed them and the network. The volumes stay, and other projects' containers were not touched.
+- Files: services/agent/src/agent/job.py, services/agent/tests/test_proposal_check.py (new), services/agent/tests/test_ai_loop_int.py, evals/harness/eval.py, evals/harness/score.py, evals/harness/test_eval_score.py, evals/README.md, docs/ (todo.md, context.md, memory.md, activity-log.md)
+- Validation:
+  - `make lint`: exit 0. `make typecheck`: exit 0, with pyright at 0 errors and tsc replayed from Turbo's cache.
+  - `make test`: exit 0. Python 408 passed (402 before), 42 deselected; TypeScript 4 of 4 tasks replayed from Turbo's cache.
+  - `make test-int`: exit 0. Jest 7 suites and 33 tests; pytest 42 passed (41 before) in 138.03 s.
+  - No live model call and no eval ran.
+- Outstanding:
+  - The dev pass is the user's to run.
+  - The eval cannot tell whether the running agent has the check (docs/memory.md).
+  - Nothing is committed.
+
+### 2026-10-21: Claude Haiku 5.5 on the test split: comparison recorded
+
+- What happened: The user ran the Claude comparison overnight with the steps in docs/todo.md (6b): the test split, the current code and the frozen prompt `2b91d4523fb028a6`, with `claude-haiku-5-5` for the agent and the log summaries.
+  - The 75 result files show runs from 17:07:22 to 18:51:34 UTC on 2026-10-20 (01:07 to 02:51 Taipei on 2026-10-21, hence the report's date). Every run ended resolved or awaiting approval, and none resumed.
+  - The user asked to record that `DAILY_AI_TOKEN_BUDGET` was 12,000,000, not the 10,000,000 of step 5, because the Gemini exam had already used about 0.97 million tokens on the same UTC day.
+  - The message's placeholders for the exit code and the eval's last lines were not filled in.
+  - The results are in the README (Model comparison), side by side with Gemini on every target, and summarized in docs/todo.md (6b).
+- Why: the comparison shows whether the frozen prompt's results hold on another model before the check changes the agent, and the credits expire on 2026-11-10.
+- What we did, read-only (no model call):
+  1. Read both reports, JSON and markdown, and the 150 test-split result files of the two models, for totals the reports do not show: model calls and outcomes, input, cached and output tokens, forced reports, proposals by kind, and actionable runs without a proposal. The script is `compare.py` in this session's scratchpad (`H:\.tmp\claude\H--Projects-projects-triage-copilot\e2a511ec-9ed2-4c24-9880-9e27c6bb7f21\scratchpad`), run with `.venv/Scripts/python.exe -I`.
+  2. Rebuilt the exit from the code: `check` over the report's values and the `test-full-3` limits in `evals/thresholds.json` gives one broken line. So the eval exited 1, printing "broke: Action correctness, scenarios with an acceptable action: 0.138889 against floor 0.185185" and "report: evals/reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5.md". This is not confirmed by output, which was not pasted. That limit came from Gemini's run, since the scope does not name the model.
+  3. Checked that both models ran the same agent: `git diff 689fe6f HEAD -- services/agent/src sim/src evals/scenarios` is empty. Before this session's edits, `git diff HEAD -- README.md evals/thresholds.json` was empty too, so the run wrote neither.
+  4. Recorded it in the README (a "Model comparison" section after the exam history, outside the eval markers), docs/todo.md, docs/memory.md, docs/context.md, evals/README.md and this entry.
+  - Why this was the best option: the run files hold every figure, and rebuilding the exit from the code avoids guessing it.
+- Findings, plainly:
+  - Haiku better:
+    - top-1 0.75 (0.747) against 0.60, and top-3 0.77 against 0.60
+    - degraded scenarios 0.75 against 0.42 top-1, and 1.00 against 0.75 naming the down tool
+    - validity 1.00 (2 invalid calls of 788) against 0.98 (13 of 703)
+    - p95 time 31 s against 77 s
+    - paid-equivalent $0.0066 a run against $0.0148
+    - 9 of the 18 measured targets met, against 5
+  - Haiku worse:
+    - action correctness 0.59 against 0.71, with a do-nothing baseline of 0.52
+    - 0.14 against 0.39 on scenarios with an acceptable action
+    - median tokens 112,178 against 64,998, and 8,165,311 tokens in all against 5,103,763
+    - $0.4984 of credits billed, where Gemini's free tier billed $0
+  - Even: grounding (0.75 and 0.76) and median tool calls (10 each).
+  - Forbidden proposals: 0 against 1, but Haiku proposed in 5 runs against 15.
+    - On the 36 runs of scenarios with an acceptable action, Haiku proposed in 5, all acceptable. Of its 31 runs there without a proposal, 28 ended with a report forced by the token budget, which may only call `submit_report`.
+    - Gemini proposed in 15 runs: 14 acceptable, 1 forbidden.
+    - Haiku's zero says more about how rarely it acted than about safety.
+  - What this means for the proposal check: the design stands, unchanged.
+    - Gemini, the primary model, broke the gate, and the check enforces prompt rule 6 for any model.
+    - On Haiku the check would rarely have anything to judge.
+    - Haiku's test-split proposals were not run through the check: it is judged on the dev split only, so the test split stays out of its development.
+- Small events:
+  - The exit code and the last lines were not pasted: the message still held its placeholders. What we did: rebuilt both from the code and the report (step 2).
+  - Mistake in the 2026-10-20 steps: step 1 asked for no other model run on the same UTC day, and step 5 set 10,000,000 against an estimate of up to 9.6 million. Gemini's day 4 had already counted 966,730 tokens on that UTC day.
+    - Why: the estimate was compared with the budget alone, not with the day's earlier use (not confirmed beyond that).
+    - What we did: the user raised the budget to 12,000,000 on the agent's command line (step 5). The dev-pass steps now size the budget against the day's earlier use.
+    - By the run files, the day counted 966,730 + 8,165,311 = 9,132,041 tokens: under both budgets. At the estimate's bound it would have reached about 10.57 million, which the raise covered. The budget stops only new investigations once the day's count reaches it.
+  - The report is dated 2026-10-21 while its runs fall on 2026-10-20 UTC. Why: `date.today()` in `eval.py` reads the PC's local date (Taipei, UTC+8). What we did: nothing, since the run files keep UTC times.
+- Files: README.md, docs/ (todo.md, memory.md, context.md, activity-log.md), evals/README.md, and the two new report files.
+- Validation: every figure recomputed from the JSON reports and the run files; the README's Haiku column matches the report.
+- Outstanding: None for the comparison. Nothing is committed.
+
 ### 2026-10-20: dev-ci-1 floors set by hand; both p95 times report-only in CI
 
 - What happened: The user approved the three proposed `dev-ci-1` floors as a hand edit (validity 0.92, median tool calls 12, median tokens 80,425), with a docs/memory.md line per metric giving the reason and a note that `SET_FLOORS=1` must not be rerun on the ci subset. For the two p95-time floors they asked for the same kind of fix, either a floor that fails normal runs about 1 to 3% of the time or report-only in CI, with the choice explained. `EVAL_ENABLED` stays off.

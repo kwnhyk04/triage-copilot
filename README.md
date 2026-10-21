@@ -58,6 +58,46 @@ Test split of scenario set v1, 25 scenarios x 3 runs, on gemini-3.5-flash-lite (
 | Investigation time, p95 | 180 s | 77 s |
 | Cost per investigation, paid-equivalent / billed | $0.25 / $0 | $0.0148 / $0 |
 
+## Model comparison: Gemini 3.5 Flash-Lite and Claude Haiku 5.5
+
+Kept by hand. The same test split (25 scenarios x 3 runs), agent, tools and frozen prompt `2b91d4523fb028a6`, with one model for the agent and its log summaries: gemini-3.5-flash-lite and gemini-3.1-flash-lite on Google's free tier (the exam above, 2026-10-17 to 2026-10-20, report `evals/reports/2026-10-20.md`), and claude-haiku-5-5 for both on Anthropic API credits (2026-10-20, 17:07 to 18:51 UTC, report `evals/reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5.md`). Neither was tuned on the test split. 95% intervals in brackets.
+
+| Metric | Target | Gemini 3.5 Flash-Lite | Claude Haiku 5.5 | Better |
+| --- | --- | --- | --- | --- |
+| Root cause top-1 | 0.75 | 0.60 (0.44 to 0.75): fail | 0.75 (0.63 to 0.85): fail, 0.747 | Haiku |
+| Root cause top-3 | 0.90 | 0.60 (0.44 to 0.75): fail | 0.77 (0.65 to 0.88): fail | Haiku |
+| Consistency (correct in all 3 runs) | 0.65 | 0.44 (0.24 to 0.64): fail | 0.48 (0.28 to 0.68): fail | Haiku, within noise |
+| Evidence grounding | 0.95 | 0.76 (0.60 to 0.89): fail | 0.75 (0.60 to 0.88): fail | even |
+| Action correctness (do-nothing baseline 0.52) | 0.80 | 0.71 (0.55 to 0.85): fail | 0.59 (0.40 to 0.76): fail | Gemini |
+| Action correctness, scenarios with an acceptable action | 0.80 | 0.39 (0.19 to 0.60): fail | 0.14 (0.00 to 0.33): fail | Gemini |
+| Forbidden action proposals | 0 (hard gate) | **1: fail** | 0: pass | Haiku |
+| Tool-call validity | 0.99 | 0.98 (0.97 to 0.99): fail, 13 invalid of 703 | 1.00 (0.99 to 1.00): pass, 2 invalid of 788 | Haiku |
+| Degraded-tool scenarios: top-1 correct | 0.60 | 0.42 (0.00 to 0.83): fail | 0.75 (0.33 to 1.00): pass | Haiku |
+| Degraded-tool scenarios: down tool in missing evidence | 1.00 | 0.75 (0.00 to 1.00): fail | 1.00: pass | Haiku |
+| Tool calls per investigation, median | 8 | 10 (7 to 11): fail | 10 (9 to 12): fail | even |
+| Tool calls per investigation, max | 15 (hard cap) | 15: pass | 14: pass | both pass |
+| Time to first hypothesis, p95 (proxy: time to the report) | 45 s | 77 s (69 s to 98 s): fail | 31 s (27 s to 33 s): pass | Haiku |
+| Investigation time, p95 | 180 s | 77 s: pass | 31 s: pass | Haiku |
+| Tokens per investigation, median | 60,000 | 64,998 (47,629 to 81,584): fail | 112,178 (108,563 to 114,178): fail | Gemini |
+| Tokens per investigation, max | 150,000 (hard cap) | 116,986: pass | 125,936: pass | both pass |
+| Cost per investigation, paid-equivalent (mean) | $0.25 | $0.0148: pass | $0.0066: pass | Haiku |
+| Cost per investigation, as billed (mean) | $0 (hard gate, free setup only) | $0: pass | $0.0066 in credits: not gated | Gemini |
+| Unapproved executions | 0 (hard gate) | 0: pass (tests) | 0: pass (tests) | same |
+| Webhook ack during a 500-alert storm | p99 200 ms | p99 86 ms: pass (tests, no model) | same test | same |
+
+| Totals | Gemini 3.5 Flash-Lite | Claude Haiku 5.5 |
+| --- | --- | --- |
+| Targets met, of 18 measured | 5 | 9, and the billed gate does not apply on credits |
+| `make eval` exit | 1: the forbidden-proposal gate | 1, from the code and the report: action correctness on scenarios with an acceptable action, 0.14, under the `test-full-3` floor, 0.19, which Gemini's run set |
+| Runs | 75 over four quota days | 75 in 1 h 44 min, no stop or retry |
+| Model calls | 780: 778 answered, 2 Gemini 504s | 864: 863 agent turns, 1 log summary, all answered |
+| Tokens | 5,103,763: 5,032,942 input (2,144,785 of it cached), 70,821 output | 8,165,311: 7,984,284 input (4,341,032 cache reads, 5,036 cache writes), 181,027 output |
+| Billed | $0 on the free tier ($1.11 at paid rates) | $0.4984 of Anthropic API credits |
+| Reports a cap forced | 20 of 75 | 63 of 75, all on the token budget |
+| Runs with a proposal | 15: 14 acceptable, 1 forbidden | 5, all acceptable (4 rollbacks, 1 flag-off) |
+
+Haiku was better at finding the cause (top-1 0.75 against 0.60, better in 6 of 8 families, worse in db-pool-exhaustion and memory-leak), with degraded tools, at valid tool calls, and in speed: the p95 time is 31 s against 77 s. Haiku was worse at acting. It proposed in only 5 runs, against 15 for Gemini. On scenarios with an acceptable action, it was right in 5 of 36 runs, against 14. In 28 of its 31 such runs without a proposal, the token budget forced the report, and a forced report cannot propose. It also used 1.6 times Gemini's tokens and spent credits, where Gemini billed nothing. It made no forbidden proposal and Gemini made one. With so few proposals, that says less about safety than about how rarely Haiku acted, so the check on proposals that revert a change (docs/todo.md) is built as approved, for any model.
+
 ## Layout
 
 | Path | What | Port |

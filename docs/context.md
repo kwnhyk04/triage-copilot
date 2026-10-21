@@ -37,11 +37,13 @@ Targets (design goals) and the counted test split on Gemini: 2026-10-20, 25 scen
 | Tokens per investigation | median 60k, hard cap 150k | median 64,998 (47,629 to 81,584), max 116,986 | fail; cap held |
 | Cost per investigation | $0.25 | $0.0148 paid-equivalent; $0 billed (free tier) | pass |
 
+The same split on Claude Haiku 5.5 (2026-10-20 UTC, report `evals/reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5.md`), every target side by side in the README (Model comparison): 9 of the 18 measured targets met. Haiku did better on top-1 (0.75), validity (1.00), the degraded scenarios, time (p95 31 s), and forbidden proposals (none). It did worse on action correctness (0.59, and 0.14 on scenarios with an acceptable action) and median tokens (112,178), and it billed $0.4984 of credits for the 75 runs.
+
 ## Technical Stack
 
 TypeScript 6.0 strict on Node 24 LTS (pnpm 12, Turborepo 2, Fastify 5, GraphQL Yoga 5, Next.js 16, Drizzle, zod 4, Jest 30, ESLint 10, Prettier) and Python 3.12+ (uv workspace, FastAPI, SQLAlchemy 2.1, Alembic, pydantic 2, pydantic-settings, boto3, pytest, ruff, pyright strict). Postgres 18 + pgvector, SQS (ElasticMQ in dev), OpenTelemetry, Docker, gitleaks (pre-commit hook), GitHub Actions.
 
-LLM providers (switchable by env vars): Gemini Flash (free tier) primary, then optionally Claude Haiku 5.5 on Anthropic API credits (`LLM_CLAUDE_FALLBACK`, off by default, until the credits expire on 2026-11-10), then the NVIDIA NIM fallback; Ollama for local runs. Deployment: UI on Vercel, backend on the PC via Tailscale Funnel.
+LLM providers (switchable by env vars): Gemini Flash (free tier) primary, then optionally Claude Haiku 5.5 on Anthropic API credits (`LLM_CLAUDE_FALLBACK`, off by default, until the credits expire on 2026-11-10), then the NVIDIA NIM fallback; Ollama for local runs. The Anthropic account's $50 monthly spend limit is shared with two other projects (docs/memory.md). Deployment: UI on Vercel, backend on the PC via Tailscale Funnel.
 
 Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; compose project name `triagecopilot`). Set in `.env`; template in `.env.example`. Checked against `docker compose ps` under `make dev` on 2026-10-14.
 
@@ -205,7 +207,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
   - `gateway.Dockerfile` keeps the workspace layout for Node's type stripping and includes drizzle-kit for `db:migrate`.
   - Services still bind 127.0.0.1 by default; step 10's compose sets the hosts.
 
-Still planned: the Claude comparison on the test split (docs/todo.md, 6b), the executor's queue consumer and effectors.
+Still planned: the token cap setting and a second Haiku run on the test split (docs/todo.md), the executor's queue consumer and effectors.
 
 ## Implemented Functionality
 
@@ -251,6 +253,7 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
   - Validator: one test per inconsistency, each caught on a mutated copy of the pool scenario. The 6a pool timeline (warn lines claiming a full pool from -8m while the pool filled until -4m) fails it.
   - Isolation: the data app answers 404 or 405 on every admin path, encoded or traversing, and leaks no admin state. Hostile arguments in every string argument of every sim tool reach only 127.0.0.1:4230 and the data routes. The agent's settings hold no admin address.
   - Resume: a run that parked for model quota mid-investigation and resumed after more than `MAX_SECONDS` finishes with a full, not a partial, report (`test_workers_int.py`).
+  - Proposal check (2026-10-21, branch `proposal-check`): `refusal` in `job.py` refuses a rollback or a flag-off unless the investigation's results so far show the change and a metric window that matched a series reaches back to it. It answers `ProposalRefused`, which is not a `ToolInputError`, and stores nothing. `test_proposal_check.py` covers it on real tool results from dev scenarios, and `test_ai_loop_int.py` through the scripted job loop. Reports count refusals beside the forbidden-proposal gate, and the run cache keys on `PROPOSAL_CHECK`. Its dev pass passed on 2026-10-21: no forbidden proposal, and one refusal, bad-config-1's rollback of checkout to a deploy over 360 minutes old, which is not an acceptable action.
   - Scoring:
     - top-1 needs the class and the service;
     - grounding needs a cited result of the signal's own tool;
@@ -287,23 +290,30 @@ Step 6b is in progress: the scenario set (frozen, manifest sha256 `b81c80f4ba442
 - Claude Haiku 5.5 is built in as the first fallback (off by default) and ran the dev split once on the frozen prompt (2026-10-17): top-1 0.80, action correctness 0.80, no forbidden proposal, validity 1.00, $0.0971 of credits for 15 investigations. No model-specific breakage; 11 of 15 runs reached the token reserve, since Haiku counts about 1.5 times Gemini's tokens per turn.
 - Python unit tests: 402 passed; `make test-int` after the exam (2026-10-20): Jest 33 and pytest 41 passed; ruff and pyright clean. The dev database is at agent 0009.
 - The test split on Gemini is complete: 75 of 75 runs from 2026-10-17 to 2026-10-20, four quota days (docs/todo.md, 6b). Day 1 stopped on the UTC token budget, days 2 and 3 at the agent's own limit of 260 Gemini requests (day 3 confirmed on 2026-10-20 from the parked run's result file), and day 4 ran the last 17 runs on 159 requests. `make eval SPLIT=test` exited 1 on the forbidden-proposal gate, and 13 of the 18 measured targets missed (Targets above). By family, top-1 ranges from 1.00 (db-pool-exhaustion, memory-leak) to 0.11 (noisy-neighbor), with dns-partition at 0.25 and bad-config at 0.33. The floors of `test-full-3` and `dev-ci-1` are set (2026-10-20).
-- The one forbidden proposal (noisy-neighbor-4 run 3) rolled back payments' newest deploy, made about 20 hours before the alert, while another workload took the node's CPU. Nothing was approved or executed. The user approved a check in the agent's `_propose` (docs/activity-log.md, 2026-10-20), to be built after the Claude comparison is recorded; the prompt stays frozen.
+- The one forbidden proposal (noisy-neighbor-4 run 3) rolled back payments' newest deploy, made about 20 hours before the alert, while another workload took the node's CPU. Nothing was approved or executed. The user approved a check in the agent's `_propose` (docs/activity-log.md, 2026-10-20).
+- The Claude comparison ran on 2026-10-20 (17:07 to 18:51 UTC) and was recorded on 2026-10-21: the same test split on `claude-haiku-5-5` met 9 of the 18 measured targets, against Gemini's 5 (Targets above; README, Model comparison). It made no forbidden proposal, but it proposed in only 5 of 75 runs, against Gemini's 15.
+- The proposal check is built on branch `proposal-check` (2026-10-21), with the prompt still frozen: `make test`, `make test-int`, lint and pyright pass. Every recorded dev proposal through it gives the same result as the 2026-10-20 replay. Its dev pass on Gemini (2026-10-21, report `evals/reports/2026-10-21-dev-full-1-2b91d452.md`) exited 0: no forbidden proposal, one refusal, none acceptable, so the branch is ready to ship. Top-1 was 0.53 against the same prompt's 0.73 on 2026-10-16, inside the interval (0.27 to 0.80); the three runs that lost it made no proposal, so the check never ran in them.
 - Gateway, web, agent and sim are stopped, and the compose infra is down (volumes kept), as the user reported on 2026-10-20.
 - `make lint` passes (2026-10-17): `.prettierignore` skips the frozen scenario YAMLs and the eval reports, which are generated, instead of reformatting them.
 - Step 7 (CI/CD) is built locally and verified (2026-10-17): actionlint, the four image builds, lint, typecheck, unit tests, build, contracts and scenario checks, gitleaks. The GitHub steps are done (the user confirmed on 2026-10-18): PR #1 is `0779d77` on origin/main. `make test-int` runs locally again after the exam.
 
 Next, in this order:
 
-1. The Claude comparison on the test split, run by the user with the steps in docs/todo.md (6b), before the credits expire on 2026-11-10: about 7.9 million tokens (9.6 million at most), $0.49 of credits ($0.59 at most), about 845 model calls and 1 h 40 min.
-2. The approved check for proposals that revert a change, after the comparison is recorded: code, unit tests and one dev pass. A test split after it would be a second attempt informed by a test failure, not a held-out result; whether to run one is the user's call.
-3. `EVAL_ENABLED=true` after the Haiku comparison; the `dev-ci-1` floors are set (docs/todo.md, step 7).
-4. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.
+1. The user ships `proposal-check`. A Gemini test split after the check would be a second attempt informed by a test failure, not a held-out result; whether to run one is the user's call.
+2. The token cap setting, `INVESTIGATION_TOKEN_CAP`, on branch `haiku-token-cap` (docs/todo.md).
+3. The second Haiku run on the test split, with a cap of 350,000, run by the user before 2026-11-10 (docs/todo.md).
+4. `EVAL_ENABLED=true`, the user's switch; the `dev-ci-1` floors are set (docs/todo.md, step 7).
+5. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.
 
 ## Known Limitations
 
 - The counted test split (2026-10-20) failed: the forbidden-proposal gate broke and 13 of the 18 measured targets missed (Targets above). 25 scenarios run 3 times give wide 95% intervals.
-- Nothing in code checks a proposal against the evidence: `_propose` checks only its arguments and that its evidence ids name results, so a rollback of a deploy older than every metric window the agent read is stored (noisy-neighbor-4 run 3).
-- Claude Haiku counts about 1.5 times Gemini's tokens for the same prompt, and the 150,000-token cap counts cached input too, so most Haiku investigations end at the token reserve with a forced report (dev split, 2026-10-17). Time to first hypothesis can only be measured by a proxy, the time to the report, until the agent records a hypothesis step (docs/todo.md).
+- The proposal check (`refusal`) has known limits:
+  - It cannot stop a revert of a harmless change made inside the metric window.
+  - A change older than 360 minutes can never be proposed.
+  - Restarts and scaling are not checked.
+  - The eval cannot tell whether the running agent has the check, since the prompt sha is the same with or without it (docs/memory.md, 2026-10-21).
+- Claude Haiku counts about 1.5 times Gemini's tokens for the same prompt, and the 150,000-token cap counts cached input too, so most Haiku investigations end at the token reserve with a forced report (dev split, 2026-10-17; 63 of 75 on the test split, 2026-10-20), and a forced report cannot propose an action. The second Haiku run raises the cap to 350,000 (docs/todo.md). Time to first hypothesis can only be measured by a proxy, the time to the report, until the agent records a hypothesis step (docs/todo.md).
 - Scenario set v1 gaps, for v2:
   - No scenario's answer is traffic_surge, and none's is unknown.
   - Pool exhaustion is always `database`, and no certificate case has an acceptable action.
