@@ -6,6 +6,12 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
+- [ ] (Waits for the user's decision) Proposal check version 2, on restarts and scaling (proposed 2026-10-24, docs/activity-log.md): Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` would also judge `restart_service` and `scale_service` from the investigation's `query_metrics` results. A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused. Any other is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises. `PROPOSAL_CHECK` becomes 2, and the prompt stays frozen. Steps:
+  1. Tests first, on dev scenarios: `test_proposal_check.py` (db-pool-exhaustion-1 and -3, dns-partition-1, memory-leak-1, noisy-neighbor-1 and -3) and `test_ai_loop_int.py`.
+  2. The code, and a replay of the dev cache's restart and scale proposals.
+  3. One dev pass on Haiku at `INVESTIGATION_TOKEN_CAP=350000` (about $0.16) and one on Gemini at the defaults (free).
+  - Done when both dev passes show no forbidden proposal and no refused proposal that the labels accept, with every refusal listed. Never the test split.
+- [ ] (The user's call) Size the 15-call cap for Haiku from data: it forced 47 of the second configuration's 75 reports, so how many calls Haiku would use is not measured. Measuring it takes a run with a higher call cap, which breaks the design's 15-call gate by construction.
 - [ ] Two advisories have no fix inside current constraints (docs/activity-log.md, 2026-10-24): pillow 12.3.0 (41, fix 13.0.0, blocked by fastembed `pillow<13`) and esbuild <=0.24.2 (GHSA-67mh-4wv8-2f99, via `drizzle-kit` 0.31.11 `@esbuild-kit/esm-loader`; only drizzle-kit 1.0 beta/rc drops it). Done when `pnpm audit` and `uv audit` list nothing, with no ignore entries.
 - [ ] Move `next` and `eslint-config-next` from 16.4.2 to 16.4.3 once it is past pnpm's release-age gate (published 2026-10-23).
 - [ ] Add `pnpm audit` and `uv audit` to CI (`.github/workflows/ci.yml` has only gitleaks and actionlint), so advisories fail in the pull request, not later.
@@ -51,42 +57,7 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## In Progress
 
-- [ ] Claude Haiku, second configuration (plan approved by the user on 2026-10-21; docs/activity-log.md): the test split again on `claude-haiku-5-5` with a per-investigation token cap of 350,000 in place of 150,000, so the token reserve no longer forces its reports (it forced 63 of 75 in run 1, and a forced report cannot propose). Not an exam: a configuration chosen after run 1, labeled so, never with `SET_FLOORS=1`. Thinking stays off, so only the cap changes; the agent also has the proposal check, which run 1 did not. It must run before 2026-11-10, when the credits expire.
-  - [x] The token cap setting, built on branch `haiku-token-cap` on 2026-10-21, tests first (docs/activity-log.md): `INVESTIGATION_TOKEN_CAP` (default 150,000, in thousands, at least 60,000) replaces `MAX_TOKENS`; no prompt passes 100,000 tokens (`PROMPT_LIMIT` in `TurnBudget`, `_stop_reason` and log summaries); the eval keys, names and labels a run off the default cap, refuses `SET_FLOORS=1` off the default models or cap, refuses a run under another cap, and counts the reports each cap forced. `make lint`, `make typecheck`, `make test` (Python 415 passed) and `make test-int` (Jest 33, pytest 44) pass. Left: the user ships it.
-  - [ ] The run, by the user from main once `haiku-token-cap` is merged. Estimate from run 1's data: 9.9 to 12.8 million tokens, $0.63 to $0.86 of credits, 979 to 1,121 model calls, about 1 h 50 min. Run these from the repo root, in this order:
-    1. Check:
-       - `git branch --show-current` prints `main`, and `git log --oneline -1` is the `haiku-token-cap` merge.
-       - No `*.state.json` in `evals/reports/runs/`, and `.env` sets `ANTHROPIC_API_KEY`.
-       - Nothing listens on ports 4200, 4201, 4210, 4230, 4231, 3200, 5434, 4566 or 8476.
-       - The Anthropic console shows at least $3 left of the month's $50 spend limit, which all three projects share.
-       - The date is before 2026-11-10 (UTC); from then on `LLM_CLAUDE_UNTIL` stops every Claude call.
-    2. `make infra-up`.
-    3. Terminal 1: `make dev-sim`. Wait until `curl.exe -s http://127.0.0.1:4231/admin/state` answers.
-    4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers.
-    5. Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=30000000 INVESTIGATION_TOKEN_CAP=350000 LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_PRIMARY_RPM=50 LLM_PRIMARY_RPD=0 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5 LLM_SMALL_RPM=50 LLM_SMALL_RPD=0`. Wait until `curl.exe -s http://127.0.0.1:4210/readyz` answers.
-       - `DAILY_AI_TOKEN_BUDGET` counts every model's tokens per UTC day: 30,000,000 covers 75 runs at the cap (26.25 million) after up to 3.75 million used earlier that day.
-    6. Terminal 4: `make eval SPLIT=test ESTIMATE=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false INVESTIGATION_TOKEN_CAP=350000 LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5`. It must print "75 investigations planned, 75 to run"; its per-call and time figures come from run 1 and undercount. Then run the same command without `ESTIMATE=1`. It writes `evals/reports/<date>-test-full-3-2b91d452-claude-haiku-5-5-cap350k.md` and never the README table. Never add `SET_FLOORS=1`; the eval refuses it.
-       - Exit 0 or 1: all 75 runs are done. Exit 1 is expected, on the 150,000-token gate and probably the `test-full-3` median-token floor (122,376).
-       - Exit 2: the credits or the spend limit are used up; the run parks, and the agent keeps Claude off until the month ends (UTC). Stop the servers (step 7) and send Claude Code the output. Resuming needs credits and a new month before 2026-11-10, with the parked run's world put back between steps 3 and 4: `uv run python -c "import glob, json, sys; sys.path.insert(0, 'evals/harness'); import run; [run.resume(json.load(open(p))) for p in glob.glob('evals/reports/runs/*.state.json')]"`.
-       - Exit 3 with "another token cap": the agent and the eval disagree on `INVESTIGATION_TOKEN_CAP`. Restart the agent with the eval's value (step 5) and run step 6 again; it starts that run anew.
-    7. Stop the servers by process tree, agent first:
-       - List the make PIDs: `Get-CimInstance Win32_Process -Filter "Name='make.exe'" | Select-Object ProcessId, CommandLine`.
-       - Put each PID in `$make` as a quoted string and run the block below in PowerShell. It stops a tree only when the PID is a `make.exe` whose command line names that target, and prints "not stopped" for anything else; then list the PIDs again and correct that one. Quote the keys: an int index on an `[ordered]` table picks by position, so the lookup misses and the block stops nothing (docs/memory.md, 2026-10-18).
-
-         ```powershell
-         $make = [ordered]@{ '<agent PID>' = 'dev-agent'; '<dev-ts PID>' = 'dev-ts'; '<sim PID>' = 'dev-sim' }
-         foreach ($id in $make.Keys) {
-           $want = $make[$id]
-           $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
-           if ($want -and $p -and "$($p.ProcessId)" -eq $id -and $p.Name -eq 'make.exe' -and ($p.CommandLine -split '\s+') -contains $want) {
-             taskkill /PID $id /T /F
-           } else { "PID $id is not make $want; not stopped" }
-         }
-         ```
-
-       - Check that ports 4200, 4210 and 4230 are free, then `make infra-down`.
-    8. Send Claude Code the exit code and the eval's last lines (the `broke:` lines, if any, and the `report:` line).
-  - [ ] Record it, by Claude Code from the report and the result files: the report's "Reports a cap forced" note, which says how many runs the 15-call cap cut off (run 1: none), refusals, the largest prompt (must stay under 100,000 tokens), log-summary outputs against their 400-token cap (the only Haiku summary so far used 352), and calls and spend against the estimate. If the 15-call cap cut runs off, sizing it from this run's data would take another run (the user's call). Then a README subsection, "Claude Haiku 5.5, second configuration", beside run 1, and the docs.
+None.
 
 ## Completed
 
@@ -123,6 +94,11 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [x] Partition test flake (2026-10-18): `phase_done` in `services/agent/tests/test_partitioning_int.py` polls up to 10 s for a write past the previous phase's count instead of sleeping 0.3 s. Merged on main as #3 (`26f70cf`); ship merges only after every check passes. The user confirmed on 2026-10-19.
 
 - [x] 6b. Scenario set v1, eval harness and the full eval (2026-10-16 to 2026-10-21): scenario set v1 frozen (40 scenarios, 15 dev and 25 test) with its validator, the sim's isolated admin port, the harness (intervals, run cache, floors, reports), the prompt frozen at change 1 (`2b91d4523fb028a6`), the test split on Gemini (the exam, 2026-10-17 to 2026-10-20: exit 1 on one forbidden proposal; floors set) and on Claude Haiku (2026-10-20: exit 1 on a floor), and the proposal check, which passed its dev pass and merged on 2026-10-21 (`177839d`). Details in docs/activity-log.md and docs/context.md.
+- [x] Claude Haiku, second configuration (2026-10-21 to 2026-10-24). The plan was approved on 2026-10-21, and the token cap setting merged as #8 (`22acfae`). The user ran the test split on `claude-haiku-5-5` with `INVESTIGATION_TOKEN_CAP=350000` on 2026-10-21 (13:23 to 15:16 UTC; report `evals/reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5-cap350k.md`), and Claude Code recorded it on 2026-10-24.
+  - Exit 1, on 3 forbidden restarts, the median-token floor and the 150,000-token gate.
+  - Inside the estimate: $0.7800, 1,060 calls, 11,718,364 tokens, 1 h 52 min.
+  - Largest prompt 30,699 tokens. The 15 calls forced 47 of 75 reports, the token cap none.
+  - Results: README (Model comparison) and docs/activity-log.md. The run steps are in `git show fa2872a:docs/todo.md` (In Progress).
 - [x] A parked investigation that hit the provider's "daily quota spent" stays parked until midnight Pacific, and `make eval` exits 2 on it (2026-10-16): `Limiter.spent()` reads the provider's `quota_exhausted` answers; `test_workers_int.py` and `test_eval_score.py` cover both.
 - [x] `LLM_PRIMARY_RPD` defaults to 260, under the 275 requests measured on 2026-10-16 (2026-10-16). Still open: check the project's real limit in AI Studio.
 - [x] Every model call records the agent's prompt sha (agent 0008), and the eval refuses a run whose calls name another prompt (2026-10-16).

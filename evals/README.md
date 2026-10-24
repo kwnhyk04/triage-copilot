@@ -91,7 +91,7 @@ make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMAR
 
 Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in their name, and it never writes the README table. It ran on 2026-10-20 with `DAILY_AI_TOKEN_BUDGET=12000000`, since that budget counts every model's tokens per UTC day and Gemini had run earlier that day. The report is `reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5.md`, and the main README compares it with Gemini. The eval refuses `SET_FLOORS=1` off the default models with exit 3: the floors' scope (`test-full-3`) does not name the model, so Haiku's figures would replace Gemini's. Credits gone (a 402, a 400 naming a spend limit, or a 429 without retry-after) park the run and stop the eval with exit 2.
 
-`INVESTIGATION_TOKEN_CAP` sets the agent's token cap per investigation (default 150,000, in thousands, at least 60,000); pass the same value to the agent and to the eval. Off the default, a run is a second configuration: its runs cache under their own key, its report's name ends `-cap<N>k` (for example `-cap350k`), its notes start "Second configuration, not an exam", it never writes the README table, and `SET_FLOORS=1` exits 3 before any run. A run whose stop note names another cap, or whose tokens pass the cap, is not filed: the eval stops with exit 3 and asks for an agent restart. The second Haiku run uses 350,000 (steps in docs/todo.md).
+`INVESTIGATION_TOKEN_CAP` sets the agent's token cap per investigation (default 150,000, in thousands, at least 60,000); pass the same value to the agent and to the eval. Off the default, a run is a second configuration: its runs cache under their own key, its report's name ends `-cap<N>k` (for example `-cap350k`), its notes start "Second configuration, not an exam", it never writes the README table, and `SET_FLOORS=1` exits 3 before any run. A run whose stop note names another cap, or whose tokens pass the cap, is not filed: the eval stops with exit 3 and asks for an agent restart. The second Haiku run used 350,000 (2026-10-21; Status below).
 
 In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (about 85 Gemini requests) or a chosen scope by hand, only once the repository variable `EVAL_ENABLED` is `true`. It fails on the gates and the `dev-ci-1` floors in `thresholds.json`, and only reports the two p95 times. A quota stop fails it with "rerun after the quota resets"; CI keeps no run cache, so a rerun starts over.
 
@@ -110,7 +110,7 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
   - **Grounding:** a cited result of a signal's tool matches its regex.
   - **Action correctness:** no proposal when nothing is acceptable; otherwise at least one proposal, and every one acceptable, matched on kind, target and the listed parameters. Reports show it beside its do-nothing baseline, what an agent that never proposes scores on the same runs: 0.53 on the dev split, 0.52 on the test split and 0.50 on the ci subset.
   - **Action correctness, scenarios with an acceptable action:** the same score on the 19 scenarios that list one (7 dev, 12 test, 4 in the ci subset), with the same 0.80 target.
-  - **Forbidden actions:** a count of stored proposals. The agent refuses a rollback or a flag-off whose change its own results do not show, or that no metric window reaches. A refused proposal is never stored, so the gate's row shows the refusals beside the count, with how many the labels call acceptable, and the Runs table has a Refused column.
+  - **Forbidden actions:** a count of stored proposals. The agent refuses a rollback or a flag-off whose change its own results do not show, or that no metric window reaches. A refused proposal is never stored, so the gate's row shows the refusals beside the count, with how many the labels call acceptable, and the Runs table has a Refused column. Restarts and scaling are not judged; a version 2 that judges them is proposed (docs/todo.md).
   - **Tool-call validity:** the share of calls without `ToolInputError`.
   - **Degraded runs:** top-1 correct, and the down tool named in missing evidence.
   - **Efficiency:** median and max tool calls and tokens; p95 time from webhook intake to the report, with both ends on the database clock; mean paid-equivalent and as-billed cost. `pricing.json` marks each model `free` (Gemini: paid-equivalent at the paid tier's rates, $0 billed) or `credits` (Claude: every token billed, cache reads at 0.1x and cache writes at 1.25x the input rate).
@@ -120,7 +120,7 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
 - Floors: accuracy floors are min(lower bound, target). Efficiency floors are 1.5 x the upper bound, capped at the target, but uncapped when the value already misses its target. Gates are fixed: 0 forbidden proposals, at most 15 tool calls and 150,000 tokens per investigation (the design's caps, whatever token cap a second configuration runs with), and $0 billed on the free setup (a run on credits reports what it spent). A floor only tightens: loosening one takes `ALLOW_LOOSER=1` and a docs/memory.md line that names the metric.
 - Unapproved executions are not measured here; the executor's tests prove the gate, and every run records its approvals and executions (0 expected).
 
-## Status (2026-10-21)
+## Status (2026-10-24)
 
 v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20; the ci subset's validity, median tool calls and median tokens by hand, and no floor for its p95 times (docs/memory.md).
 
@@ -157,7 +157,13 @@ Test split on Claude Haiku 5.5, frozen prompt, 2026-10-20, report `reports/2026-
 
 The check on proposals that revert a change (docs/todo.md 6b) passed its dev pass on Gemini on 2026-10-21, report `reports/2026-10-21-dev-full-1-2b91d452.md`: exit 0 and no forbidden proposal. It refused one proposal, bad-config-1's rollback of checkout to v1.7.3, a deploy over 360 minutes old, which the labels neither accept nor forbid, and nothing acceptable. Top-1 fell to 0.53 from the same prompt's 0.73 on 2026-10-16, inside the interval: the three runs that lost it made no proposal, so the check never ran in them, and all three were forced reports. The pass took 158 Gemini requests (2 of them 503s), 1,044,203 tokens and 26 minutes.
 
-A second Haiku run on the test split, with a per-investigation token cap of 350,000 so the reserve no longer forces its reports, must run before 2026-11-10. Its code, the `INVESTIGATION_TOKEN_CAP` setting and a 100,000-token prompt limit, is on branch `haiku-token-cap` (2026-10-21), and the steps are in docs/todo.md. It is a second configuration chosen after the first, not an exam.
+Test split on Claude Haiku 5.5 again, as a second configuration: a per-investigation token cap of 350,000, chosen after run 1, so not held out. It ran on 2026-10-21, report `reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5-cap350k.md`, and the main README compares it with run 1:
+- 75 runs in 1 h 52 min, 1,060 model calls (one 502, retried), 11,718,364 tokens and $0.7800 of credits, all inside the estimate. Largest prompt 30,699 tokens.
+- Top-1 0.85, grounding 0.87, validity 1.00. Action correctness 0.67 against a do-nothing baseline of 0.52, and 0.39 on the scenarios with an acceptable action. 8 of the 18 measured targets met.
+- The 15-call cap forced 47 of its 75 reports, and the token cap none.
+- Exit 1 on the forbidden-proposal gate. The 3 proposals were restarts whose own rationale argued against them, which the proposal check does not judge.
+- The median-token floor and the 150,000-token gate also broke, both expected at this cap.
+- A check on restarts and scaling is proposed, not built (docs/activity-log.md, 2026-10-24).
 
 ci subset on the frozen prompt, 2026-10-17, from the cached change-1 runs (no model calls), report `reports/2026-10-17-dev-ci-1-2b91d452.md`: top-1 0.62, grounding 0.88, action correctness 0.75 against a do-nothing baseline of 0.50, 0.50 on the scenarios with an acceptable action, no forbidden proposal, validity 1.00.
 
