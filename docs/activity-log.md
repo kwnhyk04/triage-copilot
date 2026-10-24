@@ -19,6 +19,23 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-24: Security updates for next, certifi and other advisories (branch security-updates, uncommitted)
+
+- What happened: New advisories hit next 16.4.0 (two critical remote code execution flaws GHSA-2464-fhr4-w9xw and GHSA-673q-mjm6-r5xr, high GHSA-p3m5-59mp-jv5r; fixed in 16.4.1) and certifi 2026.7.22 (critical GHSA-6q48-6c7w-9gw2; fixed in 2026.10.19). The repo's own scans are gitleaks and actionlint only; neither lists dependency advisories, so I also ran `pnpm audit` and `uv audit`. They listed fast-uri, esbuild, filelock, virtualenv and pillow. Pillow (41 advisories, fix 13.0.0) and the esbuild advisory (GHSA-67mh-4wv8-2f99) have no fix inside the current constraints and are NOT resolved.
+- Why: Not confirmed for why CI flags these (no dependency scan is in `.github/workflows/ci.yml`; the flag likely comes from outside the repo). Pillow stays at 12.3.0 because fastembed 0.8.1 and 0.9.0 both require `pillow<13`. The esbuild advisory comes from `drizzle-kit` 0.31.11 (latest stable) through `@esbuild-kit/esm-loader`; only drizzle-kit 1.0 beta/rc drops it.
+- What we did, in order:
+  1. `git checkout -b security-updates` on main. The uncommitted AGENTS.md commit-message rule stays and ships with this branch.
+  2. Set `next` to 16.4.3 in `apps/web/package.json` and `eslint-config-next` to 16.4.3 in `package.json`, then `pnpm install`. pnpm added 12 `minimumReleaseAgeExclude` entries to `pnpm-workspace.yaml` because 16.4.3 was published under a day ago (2026-10-23). I reverted that file with `git checkout pnpm-workspace.yaml` rather than bypass the release-age guard.
+  3. Set both to 16.4.2 (published 2026-10-15, past the gate, contains the 16.4.1 fix) and ran `pnpm install` again: no workspace change. Move to 16.4.3 after a day if wanted.
+  4. `uv lock --upgrade-package certifi`: certifi 2026.7.22 to 2026.10.23, nothing else changed in the lock.
+  5. `pnpm audit` listed fast-uri 3.1.8 and 4.2.2 (transitive via ajv and fastify). `pnpm update -r fast-uri` raised them inside their existing ranges; the lockfile now passes.
+  6. `uv audit` listed filelock 4.1.1, virtualenv 21.14.7 and pillow 12.3.0. `uv lock --upgrade-package filelock --upgrade-package virtualenv` gave filelock 4.2.4 and virtualenv 21.14.13.
+  7. `uv lock --upgrade-package pillow --upgrade-package fastembed` moved fastembed to 0.9.0 without moving pillow, so I put fastembed back with `uv lock --upgrade-package fastembed==0.8.1`. Reason: no benefit, and a new embedder release would risk the pinned embedding model behaviour.
+  8. Ran actionlint and gitleaks as in ci.yml (both clean), then `make lint`, `make typecheck`, `make test`, `make test-int`.
+- Files: apps/web/package.json, package.json, pnpm-lock.yaml, uv.lock, AGENTS.md (commit-message rule, from the user), docs/
+- Validation: gitleaks (20 commits) and actionlint clean. `make lint`, `typecheck` pass. `make test`: 415 passed. `make test-int`: 44 passed. `pnpm audit` after step 5: 1 moderate (esbuild). `uv audit` after step 6: 41 (all pillow). `make build` and `make contracts-check` not run.
+- Outstanding: Pillow and the esbuild advisory (user decision, docs/todo.md). No ignore entries were added.
+
 ### 2026-10-21: Token cap setting and 100,000-token prompt limit for the second Haiku run (branch haiku-token-cap)
 
 - What happened: The user reported `proposal-check` merged and asked for the token-cap change on a new branch `haiku-token-cap` from current main, as planned. The request covered `INVESTIGATION_TOKEN_CAP` (default 150,000), the run-cache key, the `-cap350k` report name, the second-configuration note, the `SET_FLOORS` refusal and the `problems()` guard. It also covered a prompt guard so no single prompt passes 100,000 tokens, even at the 350,000 cap. The 15-call cap stays for the run, and the report must say how many runs it cuts off. Tests first, then lint, typecheck, test and test-int. No live model call, no commit.
