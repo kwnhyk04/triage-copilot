@@ -160,6 +160,7 @@ From the approved design doc:
   - **Retention:** 30 days.
   - **Reasons:** neither app delivers alerts today, and FA production has no metrics; Claude ends on 2026-11-10; and safety never rests on the prompt.
 - 2026-10-24: Proposal check version 2 on the sim is approved and comes first, as P0, before phase 1 (user decision). Phase 2 step P2.3 only maps it to real targets. Reason: its Haiku dev pass needs Claude credits before 2026-11-10.
+- 2026-10-25: Proposal check version 2 is built as approved (branch `proposal-check-v2`). A database target is always refused. Any other restart or scale needs a `query_metrics` result of the target's own memory or CPU, or its node's CPU, at `RESOURCE_LIMIT` (0.9), or its `container_restarts_total` rising. `PROPOSAL_CHECK` is now 2, not the 1 the 2026-10-21 entry names, so every cached run reruns under it. Reason: it enforces the restart half of prompt rule 6 in code, as version 1 did the revert half. The 0.9 comes from the scenario generator's shared code, and the test split stayed out of its development (user instruction).
 
 ## Preferences and Instructions
 
@@ -271,6 +272,7 @@ None yet.
   - Worse: 3 forbidden restarts against none.
   - The token cap forced no report; the 15-call cap forced 47 of 75.
   - Spent, inside the estimate: $0.7800 of credits, 11,718,364 tokens and 1,060 calls. Largest prompt 30,699 tokens.
+- 2026-10-25: Build one sim per test module, not one per case. `test_proposal_check.py` built a new `create_apps`, which loads all 40 scenarios, for each of its 36 cases. `make test` then failed twice on the 1.5 s cold-query limit in `test_scenario_set.py`, first bad-deploy-1 (1.61 s), then slow-dependency-5. That test passed alone, and the suite passed twice with the check file deselected. Why: not confirmed; likely memory and garbage-collection load in the one pytest process, which runs `services` before `evals`. What we did: one module-level sim, as `test_scenario_set.py` has. The file went from 9.2 s to 1.2 s, and `make test` passed three times in a row.
 
 ## Constraints
 

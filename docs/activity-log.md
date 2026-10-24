@@ -19,6 +19,111 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-25: Proposal check version 2 built on branch proposal-check-v2 (restarts and scaling); dev-pass steps written
+
+- What happened: The user approved building P0, version 2 of the proposal check (docs/todo.md; entry of 2026-10-24 below). Their conditions:
+  - First check that main is checked out and clean, with #10 and the plan PR, then create branch `proposal-check-v2`.
+  - Tests first, then code, on dev scenarios only. Never read, replay or run the test split, and build no test from the three test-split proposals.
+  - The dev split never produced a forbidden restart, so the tests build those cases directly:
+    - a restart of a database;
+    - a restart or scale of a non-database target whose metrics stay under the limit;
+    - every acceptable restart and scale in the dev cache, still stored;
+    - db-pool-exhaustion-3's database at 0.93 CPU.
+  - The 0.9 goes in one named constant. Its comment says where it came from (the scenario generator's shared code) and that it was never tuned on a test-split run, and the README says the same.
+  - The prompt stays frozen, and `PROPOSAL_CHECK` becomes 2.
+  - A free replay of the dev cache's restart and scale proposals, each listed.
+  - `make lint`, `make typecheck`, `make test` and `make test-int`, then `make infra-down`, touching no other project's containers or volumes.
+  - No model calls. The commands for two dev passes go in docs/todo.md with a cost estimate: Haiku at `INVESTIGATION_TOKEN_CAP=350000`, and Gemini at the defaults. Flag Haiku's estimate if it is above about $0.16.
+- Why: Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge (2026-10-24).
+- What we did:
+  1. Checked main and branched:
+     - `git branch --show-current` printed `main`, and `git status --porcelain --untracked-files=all` printed nothing.
+     - `git merge-base --is-ancestor` found `235358a` (#10) and `1017c01` (#11, the plan) in HEAD.
+     - Then `git switch -c proposal-check-v2`.
+  2. Read:
+     - `job.py` (`_propose`, `refusal`);
+     - `tools.py`, where `query_metrics` writes `name{labels}: first X, min Y, max Z, last W`;
+     - prompt rule 6;
+     - both test files;
+     - the sim's noise, uniform within plus or minus the metric's noise, with ratios clamped to 0 and 1.
+     
+     From `evals/scenarios/v1/generate.py` I read the shared helpers and the `SET` table, then only the dev variants' functions: `db_pool_1`, `db_pool_3`, `memory_leak_1`, `memory_leak_3`, `noisy_neighbor_1`, `noisy_neighbor_3` and `dns_partition_1`.
+  3. Ran two read-only scratch scripts, `dev_actions.py` and `dev_levels.py` in this session's scratchpad. They pick files by dev scenario name before opening any.
+     - The dev labels name 8 acceptable restarts or scales and 19 forbidden ones. Of the forbidden ones, 4 target a database: orders-db three times, and inventory-db.
+     - Every forbidden non-database target stays at or under about 0.56 (base plus noise), or has no series at all (expired-cert-4's events-broker). inventory-db, a database, reaches 0.93.
+     - Every acceptable target reaches memory 0.97, a batch job's CPU 0.96 or a node's 0.99, or its restarts rise.
+  4. Tests first, on dev scenarios only, using nothing from the three test-split proposals. In `services/agent/tests/test_proposal_check.py`:
+     - The 4 forbidden database restarts and scales are refused as databases, inventory-db's after its CPU at 0.93.
+     - The 15 forbidden restarts and scales of other targets are refused after the target's memory, CPU, node CPU and restart counter were read.
+     - memory-leak-1's catalog after its 0.81 blip is refused. So is a restart with no metric result of its target, and one after another service's series at its limit.
+     - The 8 acceptable ones are stored after one result of the target's own series. The dev cache's 3 stored ones are stored after the same reads their runs made.
+     - The line in the first test that left restarts alone now expects a refusal.
+     
+     In `services/agent/tests/test_ai_loop_int.py`, the new test `test_a_refused_restart_is_not_stored_and_the_loop_goes_on`, on memory-leak-1:
+     - A restart of orders-db is refused as a database and stores nothing, and the loop goes on.
+     - A restart of orders after its memory is then stored.
+     - The model writes its own report, which is not partial.
+     
+     RED:
+     - 22 unit cases failed on `assert None is not None` at their refusal assertions.
+     - 14 passed: the 4 old tests, plus the stored cases that version 1 also lets through.
+     - The loop test failed, having stored the restart of orders-db.
+  5. Code, in `services/agent/src/agent/job.py`:
+     - `RESOURCE_LIMIT = 0.9`, with a comment that names its source (the generator's `app`, `db`, `baseline`, `leak` and `neighbor`) and says it was never tuned on a test-split run.
+     - New constants: `DATABASE_SERIES`, `RESOURCE_SERIES`, `SERIES_LINE` and `LABEL`.
+     - `refusal` passes restarts and scales to the new `_restart_refusal`. Rollbacks and flag-offs are judged as before.
+     - `PROPOSAL_CHECK = 2`.
+     - `prompt.py` and `tools.py` are unchanged.
+     
+     GREEN: all 36 unit cases pass, and so do both refused-proposal loop tests.
+  6. Mutation check, in memory only (the `agent.job` constants patched before `pytest.main`), where each mutation failed tests:
+     - `RESOURCE_LIMIT` at 0.8 failed the catalog blip test.
+     - At 0.99 it failed 5 stored cases.
+     - An empty `DATABASE_SERIES` failed the 4 database tests.
+     - Dropping `node_cpu_usage_ratio` failed the 2 node cases.
+  7. The replay (`replay_v2.py`, scratchpad) ran the 77 dev result files, picked by name, through the real `_propose`: its argument and evidence-id checks, then `refusal` version 2, each cut at its proposal.
+     1. memory-leak-1 run 1 on Gemini 3.5 Flash-Lite: scale orders to 3 replicas, acceptable. Kept: its results show orders' memory at 0.98 and its restarts rising from 0 to 4.
+     2. memory-leak-3 run 1 on Gemini: restart recommendations, acceptable. Refused before the check, as under version 1: `ToolInputError: evidence_ids name no successful tool result`, since it cited ids in brackets. `refusal` alone keeps it.
+     3. The same run's retry: kept, with memory at 0.98 and restarts rising from 2 to 5.
+     4. noisy-neighbor-3 run 1 on Claude Haiku 5.5: scale log-compactor to 0, acceptable. Kept: log-compactor's CPU on node-5 is at 0.97.
+     
+     Version 2 refused none of them, and nothing acceptable was lost. The dev cache holds no forbidden restart or scale, so the tests carry that half.
+  8. Wrote the dev-pass steps and estimates in docs/todo.md (P0, step 3):
+     - Haiku runs at `INVESTIGATION_TOKEN_CAP=350000`, then Gemini at the defaults, both with `DAILY_AI_TOKEN_BUDGET=9000000`.
+     - Haiku costs about $0.16, flagged as sitting at the line: up to $0.24 at run 2's p95 a run, and about $0.30 at its dearest run.
+     - The estimate uses only recorded totals: run 2's $0.7800 for 75 runs, its p95 and maximum per run, and the 2026-10-17 dev pass. No test-split file was opened.
+  9. Updated the docs: README.md, evals/README.md, docs/todo.md, docs/context.md, docs/memory.md and this entry.
+  - Why this was the best option: it is the approved design. The tests give the dev split the forbidden restarts it never produced, one constant carries the limit, and the replay shows that nothing acceptable is lost.
+- Small events:
+  - GateGuard gated the first Bash command and the first write of each file. What we did: stated the facts and sent the call again.
+  - The loop test failed outside make: "POSTGRES_PASSWORD is not set; run through make test-int, which loads .env".
+    - Why: only the Makefile loads `.env`.
+    - What we did: a scratch makefile (`one.mk`), included after the repo's: `make -f Makefile -f one.mk one-int K=<filter>`. The repo's `.env` export and its key unexports applied, and `.env` was never opened.
+  - `make test` failed twice on the 1.5 s cold-query limit in `test_scenario_set.py`, first on bad-deploy-1 (1.61 s), then on slow-dependency-5, with 446 passed each time.
+    - That test passed alone, and the suite passed twice with the check file deselected.
+    - Why: not confirmed. It is likely the load of a new sim per case in the check file; docs/memory.md, Lessons Learned.
+    - What we did: one module-level sim in that file. Then `make test` passed three times.
+  - The shell's output filter cut a script's output (`[+89 hidden: rtk recall ...]`). What we did: `rtk recall` printed it whole.
+  - Reading the generator's `SET` table from line 2380 also showed the last 4 lines of `dns_partition_5`, a test-split variant: one red-herring sentence. Nothing from it went into the tests or the code.
+  - Correction to the 2026-10-24 entry: "Today's scratch replay of the rule stores all 4" is true of the rule. But memory-leak-3's first restart failed its evidence-id check under version 1 and was never stored (step 7 above).
+  - Infra:
+    - When the task began, none of this project's containers existed. Postgres, ElasticMQ and Toxiproxy, left running on 2026-10-24, were gone; who removed them is not confirmed.
+    - `make infra-up` started all three, and `make test-int` used them. `make infra-down` then removed them and the network. `triagecopilot_pgdata` and `triagecopilot_elasticmq-data` stay.
+    - The ports were not checked before `make infra-up`. It started all three, so they were free.
+    - No other project's container or volume was touched, and `docker inspect` was not used.
+- Files: services/agent/src/agent/job.py, services/agent/tests/test_proposal_check.py, services/agent/tests/test_ai_loop_int.py, README.md, evals/README.md, docs/todo.md, docs/context.md, docs/memory.md, docs/activity-log.md.
+- Validation:
+  - `make lint`: exit 0. `make typecheck`: exit 0, pyright 0 errors.
+  - `make test`:
+    - Two runs exited 2, each with 1 failed and 446 passed: the timing test above.
+    - With the shared sim, three runs exited 0: Jest 36, 43 and 3 tests (ts-clients, gateway, web), and pytest 447 passed, 45 deselected.
+  - `make test-int`: exit 0. Jest 7 suites and 33 tests; pytest 45 passed in 179.27 s. `make infra-down`: exit 0.
+  - No model call and no eval ran.
+- Outstanding:
+  - The two dev passes (docs/todo.md, P0, step 3). Haiku's must run before 2026-11-10.
+  - Whether a test split follows is the user's call.
+  - Nothing is committed.
+
 ### 2026-10-24: Plan for real incidents from FreightAudit and FilingLens approved (branch real-incident-plan, docs only)
 
 - What happened: In plan mode, read-only, the user asked for a plan to let TC triage real alerts from their two apps on this PC, FreightAudit (FA) and FilingLens (FL). The fixed decisions:

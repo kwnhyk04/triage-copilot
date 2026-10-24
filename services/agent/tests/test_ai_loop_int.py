@@ -528,6 +528,57 @@ def test_a_refused_proposal_is_not_stored_and_the_model_learns_why(engine: Engin
     assert not [m for m in done.missing_evidence if "propose_action" in m.root]
 
 
+def test_a_refused_restart_is_not_stored_and_the_loop_goes_on(engine: Engine) -> None:
+    fired = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=2)
+    request = new_request().model_copy(update={"requested_at": fired})
+    inv = request.investigation_id
+
+    def restart(target: str) -> Plan:
+        def propose(steps: Sequence[StepRecordedV2]) -> ToolRequest:
+            return ask(
+                "propose_action",
+                kind="restart_service",
+                target=target,
+                params={},
+                rationale=f"Restart {target}.",
+                evidence_ids=ids(steps, "query_metrics"),
+            )
+
+        return propose
+
+    # memory-leak-1: orders runs out of its own memory; orders-db is a database.
+    plan: list[Plan] = [
+        ask("query_metrics", query='db_connections{service="orders-db"}'),
+        restart("orders-db"),
+        ask("query_metrics", query='memory_usage_ratio{service="orders"}'),
+        restart("orders"),
+        report(0.8, "query_metrics"),
+    ]
+
+    async def main() -> None:
+        async with sim() as (client, admin):
+            await activate(admin, "memory-leak-1", fired)
+            tools = Tools(client, alerts_client(), None, None).all()
+            outcome = await job_for(engine, Planned(plan), tools).run(request, asyncio.Event())
+            assert outcome == "done"
+
+    asyncio.run(main())
+
+    steps = [s for _, s in recorded(engine, inv)]
+    first, second = [s for s in steps if s.tool_name == "propose_action" and not is_model_turn(s)]
+    assert first.result is None
+    assert first.summary.startswith(
+        "propose_action failed: ProposalRefused: orders-db is a database"
+    )
+    assert second.result is not None
+    a = ProposedAction
+    with engine.connect() as conn:
+        stored = conn.execute(select(a.idempotency_key, a.target).where(a.investigation_id == inv))
+        assert [tuple(row) for row in stored] == [(second.tool_call_id, "orders")]
+    status, done, _ = final(engine, inv)
+    assert (status, len(done.proposed_actions), done.partial) == ("awaiting_approval", 1, False)
+
+
 def test_a_report_citing_unknown_results_goes_back_to_the_model(engine: Engine) -> None:
     async def metrics(ctx: ToolContext, args: dict[str, Any]) -> str:
         return "http_error_ratio rose to 0.14"
