@@ -1,0 +1,3140 @@
+{
+  "date": "2026-10-21",
+  "scope": {
+    "split": "test",
+    "subset": "full",
+    "runs": 3,
+    "scenarios": 25,
+    "investigations": 75,
+    "key": "test-full-3"
+  },
+  "set": {
+    "name": "v1",
+    "manifest_sha256": "b81c80f4ba4424272360e435052daf1107e79f533583b3da138247feb260e338"
+  },
+  "models": {
+    "primary": "claude-haiku-5-5",
+    "fallback": "deepseek-ai/deepseek-v4.1-flash",
+    "small": "claude-haiku-5-5"
+  },
+  "models_text": "claude-haiku-5-5 (agent), claude-haiku-5-5 (log summaries), no fallback",
+  "billing": "credits",
+  "prompt_sha256": "2b91d4523fb028a67e6a0ec69a7542f7de6b4102eefc592ee5a9a99f143bdad1",
+  "embedding": {
+    "model": "nomic-ai/nomic-embed-text-v1.5",
+    "fastembed": "0.8.1",
+    "revision": "e9b6763023c676ca8431644204f50c2b100d9aab"
+  },
+  "token_cap": 350000,
+  "metrics": {
+    "top1": {
+      "name": "Root cause top-1",
+      "target": 0.75,
+      "kind": "accuracy",
+      "value": 0.8533333333333334,
+      "ci": [
+        0.76,
+        0.9333333333333333
+      ],
+      "do_nothing": null,
+      "floor": 0.44,
+      "result": "pass"
+    },
+    "top3": {
+      "name": "Root cause top-3",
+      "target": 0.9,
+      "kind": "accuracy",
+      "value": 0.8666666666666667,
+      "ci": [
+        0.7733333333333333,
+        0.9466666666666667
+      ],
+      "do_nothing": null,
+      "floor": 0.44,
+      "result": "fail"
+    },
+    "consistency": {
+      "name": "Consistency (correct in all 3 runs)",
+      "target": 0.65,
+      "kind": "accuracy",
+      "value": 0.68,
+      "ci": [
+        0.48,
+        0.84
+      ],
+      "do_nothing": null,
+      "floor": 0.24,
+      "result": "pass"
+    },
+    "grounding": {
+      "name": "Evidence grounding",
+      "target": 0.95,
+      "kind": "accuracy",
+      "value": 0.8666666666666667,
+      "ci": [
+        0.7733333333333333,
+        0.9466666666666667
+      ],
+      "do_nothing": null,
+      "floor": 0.6,
+      "result": "fail"
+    },
+    "action_correctness": {
+      "name": "Action correctness",
+      "target": 0.8,
+      "kind": "accuracy",
+      "value": 0.6666666666666666,
+      "ci": [
+        0.5066666666666667,
+        0.8133333333333334
+      ],
+      "do_nothing": 0.52,
+      "floor": 0.5466666666666666,
+      "result": "fail"
+    },
+    "action_correctness_actionable": {
+      "name": "Action correctness, scenarios with an acceptable action",
+      "target": 0.8,
+      "kind": "accuracy",
+      "value": 0.3888888888888889,
+      "ci": [
+        0.1794444444444445,
+        0.6111111111111112
+      ],
+      "do_nothing": null,
+      "floor": 0.18518518518518517,
+      "result": "fail"
+    },
+    "forbidden_actions": {
+      "name": "Forbidden action proposals",
+      "target": 0,
+      "kind": "gate",
+      "value": 3,
+      "ci": [
+        0.0,
+        6.0
+      ],
+      "do_nothing": null,
+      "floor": 0,
+      "result": "fail",
+      "refused": 0,
+      "refused_acceptable": 0
+    },
+    "tool_call_validity": {
+      "name": "Tool-call validity",
+      "target": 0.99,
+      "kind": "accuracy",
+      "value": 0.9969418960244648,
+      "ci": [
+        0.9933407061189017,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": 0.9703253072076402,
+      "result": "pass"
+    },
+    "degraded_correct": {
+      "name": "Degraded-tool scenarios: top-1 correct",
+      "target": 0.6,
+      "kind": "accuracy",
+      "value": 1.0,
+      "ci": [
+        1.0,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": 0.0,
+      "result": "pass"
+    },
+    "degraded_missing_evidence": {
+      "name": "Degraded-tool scenarios: down tool in missing evidence",
+      "target": 1.0,
+      "kind": "accuracy",
+      "value": 0.9166666666666666,
+      "ci": [
+        0.6666666666666666,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": 0.0,
+      "result": "fail"
+    },
+    "tool_calls_median": {
+      "name": "Tool calls per investigation (median)",
+      "target": 8,
+      "kind": "efficiency",
+      "value": 15,
+      "ci": [
+        13.0,
+        15.0
+      ],
+      "do_nothing": null,
+      "floor": 16.5,
+      "result": "fail"
+    },
+    "tool_calls_max": {
+      "name": "Tool calls per investigation (max, hard cap)",
+      "target": 15,
+      "kind": "gate",
+      "value": 15,
+      "ci": [
+        15.0,
+        15.0
+      ],
+      "do_nothing": null,
+      "floor": 15,
+      "result": "pass"
+    },
+    "first_hypothesis_p95": {
+      "name": "Time to first hypothesis (p95; proxy: time to the report)",
+      "target": 45,
+      "kind": "efficiency",
+      "value": 43.290816299999996,
+      "ci": [
+        34.6061021,
+        47.844143
+      ],
+      "do_nothing": null,
+      "floor": 146.69654400000002,
+      "result": "pass"
+    },
+    "investigation_time_p95": {
+      "name": "Investigation time (p95)",
+      "target": 180,
+      "kind": "efficiency",
+      "value": 43.290816299999996,
+      "ci": [
+        34.6061021,
+        47.844143
+      ],
+      "do_nothing": null,
+      "floor": 146.69654400000002,
+      "result": "pass"
+    },
+    "tokens_median": {
+      "name": "Tokens per investigation (median)",
+      "target": 60000,
+      "kind": "efficiency",
+      "value": 154421,
+      "ci": [
+        131605.0,
+        188471.0
+      ],
+      "do_nothing": null,
+      "floor": 122376.0,
+      "result": "fail"
+    },
+    "tokens_max": {
+      "name": "Tokens per investigation (max, hard cap)",
+      "target": 150000,
+      "kind": "gate",
+      "value": 261069,
+      "ci": [
+        227577.0,
+        261069.0
+      ],
+      "do_nothing": null,
+      "floor": 150000,
+      "result": "fail"
+    },
+    "cost_paid": {
+      "name": "Cost per investigation, paid-equivalent (mean)",
+      "target": 0.25,
+      "kind": "efficiency",
+      "value": 0.010400646666666668,
+      "ci": [
+        0.00893980946,
+        0.011895051839999999
+      ],
+      "do_nothing": null,
+      "floor": 0.024636366999999996,
+      "result": "pass"
+    },
+    "cost_billed": {
+      "name": "Cost per investigation, as billed (mean)",
+      "target": 0,
+      "kind": "gate",
+      "value": 0.010400646666666668,
+      "ci": [
+        0.00893980946,
+        0.011895051839999999
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "n/a"
+    }
+  },
+  "proven_elsewhere": [
+    {
+      "name": "Unapproved executions",
+      "target": "0 (hard gate)",
+      "measured": "0 in every eval run; the gate is proven by tests",
+      "result": "pass",
+      "date": "",
+      "evidence": "services/executor/tests/test_executor_run.py, services/agent/tests/test_executor_int.py, apps/gateway/src/executions.int.test.ts"
+    },
+    {
+      "name": "Webhook ack during a 500-alert storm",
+      "target": "p99 200 ms, 0 dropped, 5 or fewer investigations",
+      "measured": "p99 86 ms, 0 dropped, 5 investigations",
+      "result": "pass",
+      "date": "2026-10-15",
+      "evidence": "apps/gateway/src/intake.int.test.ts (make test-int)"
+    }
+  ],
+  "notes": [
+    "Second configuration, not an exam: the agent ran with INVESTIGATION_TOKEN_CAP=350,000 in place of the exam's 150,000, chosen after earlier runs of this split had been seen, so these scores are not held out. The eval refuses SET_FLOORS=1 off the default models and cap, so the floors shown were set on the default configuration.",
+    "Time to first hypothesis has no step of its own yet: hypotheses exist only in the final report, so it is measured as the time from webhook intake to the report, an upper bound that equals the investigation time (docs/todo.md has the item that adds an early hypothesis step).",
+    "Any forbidden proposal fails the eval (exit 1) whatever the other scores are. Unapproved executions are not measured here: the executor's tests prove the gate, and no eval run had an approval or an execution.",
+    "The agent refuses a rollback or a flag-off unless its own results show the change and a metric window reaching back to it; a refused proposal is never stored, so it is no forbidden proposal, and the gate's row counts the refusals beside it, with how many were acceptable.",
+    "Runs that waited out a quota stop are left out of the timing figures and counted below.",
+    "Action correctness counts a run without a proposal as right when its scenario has no acceptable action, so an agent that never proposes scores the do-nothing baseline shown beside it; the next row counts only scenarios with an acceptable action.",
+    "Reports a cap forced: 47 of 75 (47: it used all 15 tool calls).",
+    "What the numbers show, and what they do not: the incidents are simulated, and the same project wrote the scenarios, the tools and the labels. Prompts were tuned on the dev split only (evals/prompt-log.md), never on the test scenarios. 25 scenarios x 3 runs is a small sample: the 95% intervals, which resample scenarios, are wide, and per-family figures rest on a few scenarios each. Costs are what the run spent in Anthropic API credits; the $0-billed gate applies to the free setup only."
+  ],
+  "forced": {
+    "it used all 15 tool calls": 47
+  },
+  "approvals_during_eval": 0,
+  "executions_during_eval": 0,
+  "resumed_runs": 0,
+  "families": {
+    "bad-config": {
+      "runbooks": [],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 0.7777777777777778,
+          "ci": [
+            0.3333333333333333,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 0.7777777777777778,
+          "ci": [
+            0.3333333333333333,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.8888888888888888,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": 0.3333333333333333
+        },
+        "action_correctness_actionable": {
+          "value": 0.8333333333333334,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 13,
+          "ci": [
+            8.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            9.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 32.530449000000004,
+          "ci": [
+            21.910885,
+            32.985145
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 32.530449000000004,
+          "ci": [
+            21.910885,
+            32.985145
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 184385,
+          "ci": [
+            105998.0,
+            194877.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 227577,
+          "ci": [
+            123761.0,
+            227577.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.012115726666666667,
+          "ci": [
+            0.007844693333333333,
+            0.014871059999999998
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.012115726666666667,
+          "ci": [
+            0.007844693333333333,
+            0.014871059999999998
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "bad-deploy": {
+      "runbooks": [
+        "bad-deploy-rollback"
+      ],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.3333333333333333,
+            1.0
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.3333333333333333,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 0.9895833333333334,
+          "ci": [
+            0.9583333333333334,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 10,
+          "ci": [
+            8.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            8.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 29.7489308,
+          "ci": [
+            19.371728,
+            30.472046
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 29.7489308,
+          "ci": [
+            19.371728,
+            30.472046
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 110535,
+          "ci": [
+            88415.0,
+            194883.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 233456,
+          "ci": [
+            108271.0,
+            233456.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.009092488888888889,
+          "ci": [
+            0.0062644066666666665,
+            0.014221173333333333
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.009092488888888889,
+          "ci": [
+            0.0062644066666666665,
+            0.014221173333333333
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "db-pool-exhaustion": {
+      "runbooks": [
+        "db-connection-pool-exhaustion"
+      ],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.7777777777777778,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 2,
+          "ci": [
+            0.0,
+            3.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 13,
+          "ci": [
+            12.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            12.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 36.7855698,
+          "ci": [
+            25.993532,
+            36.929323
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 36.7855698,
+          "ci": [
+            25.993532,
+            36.929323
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 154421,
+          "ci": [
+            130189.0,
+            183129.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 189023,
+          "ci": [
+            130265.0,
+            189023.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.010207488888888889,
+          "ci": [
+            0.007178153333333334,
+            0.012836993333333333
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.010207488888888889,
+          "ci": [
+            0.007178153333333334,
+            0.012836993333333333
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "dns-partition": {
+      "runbooks": [],
+      "scenarios": 4,
+      "runs": 12,
+      "metrics": {
+        "top1": {
+          "value": 0.75,
+          "ci": [
+            0.6666666666666666,
+            0.9166666666666666
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 0.8333333333333334,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 0.25,
+          "ci": [
+            0.0,
+            0.75
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 0.75,
+          "ci": [
+            0.5,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.25,
+            1.0
+          ],
+          "do_nothing": 0.75
+        },
+        "action_correctness_actionable": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 1,
+          "ci": [
+            0.0,
+            3.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15.0,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 44.947542549999994,
+          "ci": [
+            35.718182799999994,
+            45.684784
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 44.947542549999994,
+          "ci": [
+            35.718182799999994,
+            45.684784
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 211251.0,
+          "ci": [
+            198298.0,
+            217779.5
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 261069,
+          "ci": [
+            211239.0,
+            261069.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.015356605,
+          "ci": [
+            0.013959510000000001,
+            0.0167537
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.015356605,
+          "ci": [
+            0.013959510000000001,
+            0.0167537
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "expired-cert": {
+      "runbooks": [
+        "certificate-expiry"
+      ],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.6666666666666666,
+            0.6666666666666666
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 7,
+          "ci": [
+            6.0,
+            11.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 11,
+          "ci": [
+            7.0,
+            11.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 24.3887404,
+          "ci": [
+            13.89965,
+            24.484212
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 24.3887404,
+          "ci": [
+            13.89965,
+            24.484212
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 77846,
+          "ci": [
+            57602.0,
+            135040.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 136943,
+          "ci": [
+            69502.0,
+            136943.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.005398415555555556,
+          "ci": [
+            0.0033671733333333334,
+            0.008006893333333334
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.005398415555555556,
+          "ci": [
+            0.0033671733333333334,
+            0.008006893333333334
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "memory-leak": {
+      "runbooks": [],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 0.8888888888888888,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.2222222222222222,
+          "ci": [
+            0.0,
+            0.6666666666666666
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 0.2222222222222222,
+          "ci": [
+            0.0,
+            0.6666666666666666
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 0.9925373134328358,
+          "ci": [
+            0.9777777777777777,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 32.3650864,
+          "ci": [
+            29.260751,
+            32.410262
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 32.3650864,
+          "ci": [
+            29.260751,
+            32.410262
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 138812,
+          "ci": [
+            128267.0,
+            201672.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 209458,
+          "ci": [
+            137661.0,
+            209458.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.009650331111111111,
+          "ci": [
+            0.007144526666666666,
+            0.013756860000000003
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.009650331111111111,
+          "ci": [
+            0.007144526666666666,
+            0.013756860000000003
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "noisy-neighbor": {
+      "runbooks": [
+        "high-latency-triage"
+      ],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 0.4444444444444444,
+          "ci": [
+            0.3333333333333333,
+            0.6666666666666666
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 0.4444444444444444,
+          "ci": [
+            0.3333333333333333,
+            0.6666666666666666
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 0.4444444444444444,
+          "ci": [
+            0.3333333333333333,
+            0.6666666666666666
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.1111111111111111,
+          "ci": [
+            0.0,
+            0.3333333333333333
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 0.1111111111111111,
+          "ci": [
+            0.0,
+            0.3333333333333333
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 0.9925925925925926,
+          "ci": [
+            0.9777777777777777,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 34.3929568,
+          "ci": [
+            28.74702,
+            34.603298
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 34.3929568,
+          "ci": [
+            28.74702,
+            34.603298
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 145410,
+          "ci": [
+            129431.0,
+            158799.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 170266,
+          "ci": [
+            145410.0,
+            170266.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.008492604444444446,
+          "ci": [
+            0.007364826666666667,
+            0.009503260000000001
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.008492604444444446,
+          "ci": [
+            0.007364826666666667,
+            0.009503260000000001
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "slow-dependency": {
+      "runbooks": [
+        "high-latency-triage"
+      ],
+      "scenarios": 3,
+      "runs": 9,
+      "metrics": {
+        "top1": {
+          "value": 0.8888888888888888,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 0.8888888888888888,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": 0.6666666666666666,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 0.8888888888888888,
+          "ci": [
+            0.6666666666666666,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 52.440629,
+          "ci": [
+            28.991104,
+            55.504953
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 52.440629,
+          "ci": [
+            28.991104,
+            55.504953
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 182214,
+          "ci": [
+            129947.0,
+            191937.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 194280,
+          "ci": [
+            163703.0,
+            194280.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.011239526666666668,
+          "ci": [
+            0.007923293333333335,
+            0.01316436
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.011239526666666668,
+          "ci": [
+            0.007923293333333335,
+            0.01316436
+          ],
+          "do_nothing": null
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "scenario": "bad-config-3",
+      "family": "bad-config",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 227577,
+      "seconds": 30.377428,
+      "cost": 0.017459,
+      "billed": 0.017459,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-4",
+      "family": "bad-config",
+      "run": 1,
+      "top1": false,
+      "top3": false,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 209860,
+      "seconds": 31.848405,
+      "cost": 0.014960160000000002,
+      "billed": 0.014960160000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-5",
+      "family": "bad-config",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 105593,
+      "seconds": 20.088216,
+      "cost": 0.00731614,
+      "billed": 0.00731614,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-3",
+      "family": "bad-deploy",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 10,
+      "invalid_calls": 0,
+      "tokens": 131605,
+      "seconds": 18.852203,
+      "cost": 0.00900566,
+      "billed": 0.00900566,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-4",
+      "family": "bad-deploy",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 233456,
+      "seconds": 28.664258,
+      "cost": 0.017415760000000002,
+      "billed": 0.017415760000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-deploy-5",
+      "family": "bad-deploy",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 1,
+      "tokens": 88415,
+      "seconds": 16.53511,
+      "cost": 0.0057243400000000005,
+      "billed": 0.0057243400000000005,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-2",
+      "family": "db-pool-exhaustion",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 11,
+      "invalid_calls": 0,
+      "tokens": 154421,
+      "seconds": 20.556751,
+      "cost": 0.01098122,
+      "billed": 0.01098122,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-4",
+      "family": "db-pool-exhaustion",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": false,
+      "forbidden": 1,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 13,
+      "invalid_calls": 0,
+      "tokens": 130189,
+      "seconds": 35.081589,
+      "cost": 0.00779434,
+      "billed": 0.00779434,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-5",
+      "family": "db-pool-exhaustion",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 13,
+      "invalid_calls": 0,
+      "tokens": 117927,
+      "seconds": 23.289947,
+      "cost": 0.006536540000000001,
+      "billed": 0.006536540000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "dns-partition-2",
+      "family": "dns-partition",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 195387,
+      "seconds": 31.442603,
+      "cost": 0.013720860000000001,
+      "billed": 0.013720860000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-3",
+      "family": "dns-partition",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 261069,
+      "seconds": 44.344345,
+      "cost": 0.020156660000000003,
+      "billed": 0.020156660000000003,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-4",
+      "family": "dns-partition",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 216043,
+      "seconds": 36.394597,
+      "cost": 0.01574966,
+      "billed": 0.01574966,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-5",
+      "family": "dns-partition",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 206830,
+      "seconds": 31.324535,
+      "cost": 0.014750360000000002,
+      "billed": 0.014750360000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "expired-cert-2",
+      "family": "expired-cert",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 77643,
+      "seconds": 12.988959,
+      "cost": 0.00477318,
+      "billed": 0.00477318,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-3",
+      "family": "expired-cert",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 11,
+      "invalid_calls": 0,
+      "tokens": 136943,
+      "seconds": 24.245533,
+      "cost": 0.009198220000000002,
+      "billed": 0.009198220000000002,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-5",
+      "family": "expired-cert",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 6,
+      "invalid_calls": 0,
+      "tokens": 57602,
+      "seconds": 13.048008,
+      "cost": 0.00313432,
+      "billed": 0.00313432,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "memory-leak-2",
+      "family": "memory-leak",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 127711,
+      "seconds": 29.260751,
+      "cost": 0.00681086,
+      "billed": 0.00681086,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "memory-leak-4",
+      "family": "memory-leak",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 142588,
+      "seconds": 30.741025,
+      "cost": 0.008292160000000002,
+      "billed": 0.008292160000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "memory-leak-5",
+      "family": "memory-leak",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 1,
+      "tokens": 201672,
+      "seconds": 32.410262,
+      "cost": 0.014250960000000003,
+      "billed": 0.014250960000000003,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-2",
+      "family": "noisy-neighbor",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 152186,
+      "seconds": 28.257662,
+      "cost": 0.009213160000000001,
+      "billed": 0.009213160000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-4",
+      "family": "noisy-neighbor",
+      "run": 1,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 158799,
+      "seconds": 26.571868,
+      "cost": 0.009928460000000002,
+      "billed": 0.009928460000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-5",
+      "family": "noisy-neighbor",
+      "run": 1,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 129431,
+      "seconds": 25.773891,
+      "cost": 0.0069508600000000005,
+      "billed": 0.0069508600000000005,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-3",
+      "family": "slow-dependency",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 125524,
+      "seconds": 26.43504,
+      "cost": 0.006539360000000001,
+      "billed": 0.006539360000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-4",
+      "family": "slow-dependency",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 193783,
+      "seconds": 55.504953,
+      "cost": 0.013732860000000001,
+      "billed": 0.013732860000000001,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-5",
+      "family": "slow-dependency",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 189041,
+      "seconds": 32.239524,
+      "cost": 0.012766260000000001,
+      "billed": 0.012766260000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-3",
+      "family": "bad-config",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 13,
+      "invalid_calls": 0,
+      "tokens": 192786,
+      "seconds": 25.838088,
+      "cost": 0.01398044,
+      "billed": 0.01398044,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-config-4",
+      "family": "bad-config",
+      "run": 2,
+      "top1": false,
+      "top3": false,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 194877,
+      "seconds": 28.086095,
+      "cost": 0.01352106,
+      "billed": 0.01352106,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-5",
+      "family": "bad-config",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 9,
+      "invalid_calls": 0,
+      "tokens": 123761,
+      "seconds": 19.006623,
+      "cost": 0.0087873,
+      "billed": 0.0087873,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-3",
+      "family": "bad-deploy",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 76201,
+      "seconds": 17.390897,
+      "cost": 0.00468458,
+      "billed": 0.00468458,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-4",
+      "family": "bad-deploy",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 194883,
+      "seconds": 30.472046,
+      "cost": 0.01366806,
+      "billed": 0.01366806,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-deploy-5",
+      "family": "bad-deploy",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 87933,
+      "seconds": 19.371728,
+      "cost": 0.005481740000000001,
+      "billed": 0.005481740000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-2",
+      "family": "db-pool-exhaustion",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": false,
+      "forbidden": 1,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 12,
+      "invalid_calls": 0,
+      "tokens": 183129,
+      "seconds": 21.646227,
+      "cost": 0.01343838,
+      "billed": 0.01343838,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-4",
+      "family": "db-pool-exhaustion",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 127201,
+      "seconds": 36.929323,
+      "cost": 0.006729860000000001,
+      "billed": 0.006729860000000001,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "db-pool-exhaustion-5",
+      "family": "db-pool-exhaustion",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 188495,
+      "seconds": 34.157932,
+      "cost": 0.01297646,
+      "billed": 0.01297646,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-2",
+      "family": "dns-partition",
+      "run": 2,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 191757,
+      "seconds": 27.983036,
+      "cost": 0.013145460000000001,
+      "billed": 0.013145460000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-3",
+      "family": "dns-partition",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 219071,
+      "seconds": 45.684784,
+      "cost": 0.015994460000000002,
+      "billed": 0.015994460000000002,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-4",
+      "family": "dns-partition",
+      "run": 2,
+      "top1": false,
+      "top3": false,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 211263,
+      "seconds": 35.164753,
+      "cost": 0.0154497,
+      "billed": 0.0154497,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "dns-partition-5",
+      "family": "dns-partition",
+      "run": 2,
+      "top1": false,
+      "top3": true,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": false,
+      "forbidden": 1,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 188471,
+      "seconds": 24.750524,
+      "cost": 0.01274366,
+      "billed": 0.01274366,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "expired-cert-2",
+      "family": "expired-cert",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 77846,
+      "seconds": 14.846146,
+      "cost": 0.004840280000000001,
+      "billed": 0.004840280000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-3",
+      "family": "expired-cert",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 92517,
+      "seconds": 21.031447,
+      "cost": 0.005906140000000001,
+      "billed": 0.005906140000000001,
+      "degraded": true,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-5",
+      "family": "expired-cert",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 69502,
+      "seconds": 13.89965,
+      "cost": 0.00393068,
+      "billed": 0.00393068,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "memory-leak-2",
+      "family": "memory-leak",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 128267,
+      "seconds": 29.007891,
+      "cost": 0.00684486,
+      "billed": 0.00684486,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "memory-leak-4",
+      "family": "memory-leak",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 133251,
+      "seconds": 32.297323,
+      "cost": 0.00755086,
+      "billed": 0.00755086,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "memory-leak-5",
+      "family": "memory-leak",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 209458,
+      "seconds": 26.639922,
+      "cost": 0.014995560000000002,
+      "billed": 0.014995560000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-2",
+      "family": "noisy-neighbor",
+      "run": 2,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 153151,
+      "seconds": 27.103066,
+      "cost": 0.009319660000000002,
+      "billed": 0.009319660000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-4",
+      "family": "noisy-neighbor",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 170266,
+      "seconds": 34.603298,
+      "cost": 0.01102556,
+      "billed": 0.01102556,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-5",
+      "family": "noisy-neighbor",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 145410,
+      "seconds": 24.643811,
+      "cost": 0.00838516,
+      "billed": 0.00838516,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-3",
+      "family": "slow-dependency",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 129947,
+      "seconds": 23.71358,
+      "cost": 0.007057660000000001,
+      "billed": 0.007057660000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-4",
+      "family": "slow-dependency",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 177006,
+      "seconds": 42.839304,
+      "cost": 0.011895560000000001,
+      "billed": 0.011895560000000001,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-5",
+      "family": "slow-dependency",
+      "run": 2,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 194280,
+      "seconds": 34.612645,
+      "cost": 0.01347216,
+      "billed": 0.01347216,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-3",
+      "family": "bad-config",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 13,
+      "invalid_calls": 0,
+      "tokens": 182219,
+      "seconds": 22.961592,
+      "cost": 0.013173739999999998,
+      "billed": 0.013173739999999998,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-config-4",
+      "family": "bad-config",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 184385,
+      "seconds": 32.985145,
+      "cost": 0.012413060000000002,
+      "billed": 0.012413060000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "bad-config-5",
+      "family": "bad-config",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 105998,
+      "seconds": 21.910885,
+      "cost": 0.00743064,
+      "billed": 0.00743064,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-3",
+      "family": "bad-deploy",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 11,
+      "invalid_calls": 0,
+      "tokens": 110535,
+      "seconds": 20.80141,
+      "cost": 0.00668542,
+      "billed": 0.00668542,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-4",
+      "family": "bad-deploy",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 171199,
+      "seconds": 23.693093,
+      "cost": 0.0115797,
+      "billed": 0.0115797,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "bad-deploy-5",
+      "family": "bad-deploy",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 108271,
+      "seconds": 16.40789,
+      "cost": 0.007587139999999999,
+      "billed": 0.007587139999999999,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-2",
+      "family": "db-pool-exhaustion",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 12,
+      "invalid_calls": 0,
+      "tokens": 189023,
+      "seconds": 25.993532,
+      "cost": 0.014091379999999999,
+      "billed": 0.014091379999999999,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "db-pool-exhaustion-4",
+      "family": "db-pool-exhaustion",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 130265,
+      "seconds": 36.56994,
+      "cost": 0.00701026,
+      "billed": 0.00701026,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "db-pool-exhaustion-5",
+      "family": "db-pool-exhaustion",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 182468,
+      "seconds": 31.98488,
+      "cost": 0.01230896,
+      "billed": 0.01230896,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-2",
+      "family": "dns-partition",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 201209,
+      "seconds": 28.034307,
+      "cost": 0.014231460000000003,
+      "billed": 0.014231460000000003,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-3",
+      "family": "dns-partition",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 216488,
+      "seconds": 40.571883,
+      "cost": 0.015666160000000002,
+      "billed": 0.015666160000000002,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-4",
+      "family": "dns-partition",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 234722,
+      "seconds": 34.426972,
+      "cost": 0.01750556,
+      "billed": 0.01750556,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "dns-partition-5",
+      "family": "dns-partition",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 211239,
+      "seconds": 38.454398,
+      "cost": 0.015165259999999998,
+      "billed": 0.015165259999999998,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "expired-cert-2",
+      "family": "expired-cert",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 78664,
+      "seconds": 13.641789,
+      "cost": 0.00485008,
+      "billed": 0.00485008,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-3",
+      "family": "expired-cert",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 11,
+      "invalid_calls": 0,
+      "tokens": 135040,
+      "seconds": 24.484212,
+      "cost": 0.00891632,
+      "billed": 0.00891632,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": null
+    },
+    {
+      "scenario": "expired-cert-5",
+      "family": "expired-cert",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 6,
+      "invalid_calls": 0,
+      "tokens": 57124,
+      "seconds": 12.311459,
+      "cost": 0.0030365200000000005,
+      "billed": 0.0030365200000000005,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "memory-leak-2",
+      "family": "memory-leak",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 137661,
+      "seconds": 25.429144,
+      "cost": 0.00777786,
+      "billed": 0.00777786,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "memory-leak-4",
+      "family": "memory-leak",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 138812,
+      "seconds": 30.187545,
+      "cost": 0.0083058,
+      "billed": 0.0083058,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null
+    },
+    {
+      "scenario": "memory-leak-5",
+      "family": "memory-leak",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 178915,
+      "seconds": 29.545978,
+      "cost": 0.012024060000000001,
+      "billed": 0.012024060000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-2",
+      "family": "noisy-neighbor",
+      "run": 3,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 1,
+      "tokens": 132570,
+      "seconds": 34.077445,
+      "cost": 0.007296360000000001,
+      "billed": 0.007296360000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-4",
+      "family": "noisy-neighbor",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 134412,
+      "seconds": 30.161881,
+      "cost": 0.007555760000000001,
+      "billed": 0.007555760000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "noisy-neighbor-5",
+      "family": "noisy-neighbor",
+      "run": 3,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 127267,
+      "seconds": 28.74702,
+      "cost": 0.00675846,
+      "billed": 0.00675846,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-3",
+      "family": "slow-dependency",
+      "run": 3,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 163703,
+      "seconds": 28.991104,
+      "cost": 0.01017286,
+      "billed": 0.01017286,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-4",
+      "family": "slow-dependency",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 182214,
+      "seconds": 47.844143,
+      "cost": 0.01226436,
+      "billed": 0.01226436,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls"
+    },
+    {
+      "scenario": "slow-dependency-5",
+      "family": "slow-dependency",
+      "run": 3,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 191937,
+      "seconds": 30.975163,
+      "cost": 0.01325466,
+      "billed": 0.01325466,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls"
+    }
+  ]
+}
