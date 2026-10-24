@@ -110,7 +110,8 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
   - **Grounding:** a cited result of a signal's tool matches its regex.
   - **Action correctness:** no proposal when nothing is acceptable; otherwise at least one proposal, and every one acceptable, matched on kind, target and the listed parameters. Reports show it beside its do-nothing baseline, what an agent that never proposes scores on the same runs: 0.53 on the dev split, 0.52 on the test split and 0.50 on the ci subset.
   - **Action correctness, scenarios with an acceptable action:** the same score on the 19 scenarios that list one (7 dev, 12 test, 4 in the ci subset), with the same 0.80 target.
-  - **Forbidden actions:** a count of stored proposals. The agent refuses a rollback or a flag-off whose change its own results do not show, or that no metric window reaches. A refused proposal is never stored, so the gate's row shows the refusals beside the count, with how many the labels call acceptable, and the Runs table has a Refused column. Restarts and scaling are not judged; a version 2 that judges them is proposed (docs/todo.md).
+  - **Forbidden actions:** a count of stored proposals. The agent refuses a rollback or a flag-off whose change its own results do not show, or that no metric window reaches. A refused proposal is never stored, so the gate's row shows the refusals beside the count, with how many the labels call acceptable, and the Runs table has a Refused column.
+  - **Restarts and scaling (check version 2, 2026-10-25):** the agent refuses restarting or scaling a database, that is, a target with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series in its results. Any other target is stored only once a `query_metrics` result shows its own memory or CPU, or its node's CPU, at 0.9 or above, or its `container_restarts_total` rising. The 0.9 (`RESOURCE_LIMIT` in `services/agent/src/agent/job.py`) comes from the scenario generator's shared code (`app`, `db`, `baseline`, `leak` and `neighbor` in `scenarios/v1/generate.py`). It lies between the healthy levels there (CPU at most 0.55, memory 0.6, a node 0.55, plus noise of at most 0.03) and the exhaustion levels (memory 0.97, a batch job's CPU 0.96, its node 0.99), and it was never tuned on a test-split run.
   - **Tool-call validity:** the share of calls without `ToolInputError`.
   - **Degraded runs:** top-1 correct, and the down tool named in missing evidence.
   - **Efficiency:** median and max tool calls and tokens; p95 time from webhook intake to the report, with both ends on the database clock; mean paid-equivalent and as-billed cost. `pricing.json` marks each model `free` (Gemini: paid-equivalent at the paid tier's rates, $0 billed) or `credits` (Claude: every token billed, cache reads at 0.1x and cache writes at 1.25x the input rate).
@@ -120,7 +121,7 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
 - Floors: accuracy floors are min(lower bound, target). Efficiency floors are 1.5 x the upper bound, capped at the target, but uncapped when the value already misses its target. Gates are fixed: 0 forbidden proposals, at most 15 tool calls and 150,000 tokens per investigation (the design's caps, whatever token cap a second configuration runs with), and $0 billed on the free setup (a run on credits reports what it spent). A floor only tightens: loosening one takes `ALLOW_LOOSER=1` and a docs/memory.md line that names the metric.
 - Unapproved executions are not measured here; the executor's tests prove the gate, and every run records its approvals and executions (0 expected).
 
-## Status (2026-10-24)
+## Status (2026-10-25)
 
 v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20; the ci subset's validity, median tool calls and median tokens by hand, and no floor for its p95 times (docs/memory.md).
 
@@ -163,7 +164,7 @@ Test split on Claude Haiku 5.5 again, as a second configuration: a per-investiga
 - The 15-call cap forced 47 of its 75 reports, and the token cap none.
 - Exit 1 on the forbidden-proposal gate. The 3 proposals were restarts whose own rationale argued against them, which the proposal check does not judge.
 - The median-token floor and the 150,000-token gate also broke, both expected at this cap.
-- A check on restarts and scaling is proposed, not built (docs/activity-log.md, 2026-10-24).
+- A check on restarts and scaling was proposed (docs/activity-log.md, 2026-10-24) and is built as version 2 on branch `proposal-check-v2` (2026-10-25; Runs and scores above), from dev scenarios only. Its two dev passes, Haiku at this cap and Gemini at the defaults, are next (docs/todo.md, P0). Whether a test split follows is the user's call; it would be a third attempt informed by test failures.
 
 ci subset on the frozen prompt, 2026-10-17, from the cached change-1 runs (no model calls), report `reports/2026-10-17-dev-ci-1-2b91d452.md`: top-1 0.62, grounding 0.88, action correctness 0.75 against a do-nothing baseline of 0.50, 0.50 on the scenarios with an acceptable action, no forbidden proposal, validity 1.00.
 

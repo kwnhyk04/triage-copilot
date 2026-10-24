@@ -6,14 +6,54 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
-- [ ] P0, next: proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
+- [ ] P0, in progress (built 2026-10-25; the dev passes are next): proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
   - A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused.
   - Any other target is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises.
   - `PROPOSAL_CHECK` becomes 2, and the prompt stays frozen.
   - Steps:
-    1. Tests first, on dev scenarios: `test_proposal_check.py` (db-pool-exhaustion-1 and -3, dns-partition-1, memory-leak-1, noisy-neighbor-1 and -3) and `test_ai_loop_int.py`.
-    2. The code, and a replay of the dev cache's restart and scale proposals.
-    3. One dev pass on Haiku at `INVESTIGATION_TOKEN_CAP=350000` (about $0.16, counted in TC's $15 a month) and one on Gemini at the defaults (free).
+    1. Done (2026-10-25, branch `proposal-check-v2`; docs/activity-log.md): tests first, on dev scenarios only, in `test_proposal_check.py` (every restart and scale that a dev scenario accepts or forbids, db-pool-exhaustion-3's database at 0.93 CPU, memory-leak-1's 0.81 blip on catalog, and the dev cache's 3 stored ones) and `test_ai_loop_int.py`.
+    2. Done (2026-10-25): the code, with the 0.9 in `RESOURCE_LIMIT` (`job.py`), taken from the scenario generator's shared code and never tuned on a test-split run. The replay of the dev cache's 4 restart and scale proposals: 3 kept, and 1 stopped before the check by unknown evidence ids, as under version 1; all 4 are acceptable. `make lint`, `make typecheck`, `make test` (Python 447 passed) and `make test-int` (Jest 33, pytest 45) pass.
+    3. Next, by the user: the two dev passes below, from the repo root in PowerShell, in this order. Never `SPLIT=test` or `SET_FLOORS=1`.
+       - Estimate, Haiku pass: about $0.16 of credits, counted in TC's $15 a month. 15 runs at run 2's $0.0104 a run make $0.156. The dev split's Haiku pass at the default cap ($0.0971 on 2026-10-17), times run 2's cost over run 1's (1.56), makes $0.152. About 2.3 million tokens, 210 model calls and 25 minutes.
+       - Flag: that sits at the $0.16 line, not clearly under it. At run 2's p95 a run ($0.016) the pass would cost $0.24, and at most about $0.30 if every run cost as much as run 2's dearest ($0.020).
+       - Estimate, Gemini pass: $0 billed (free tier), about 160 of the agent's 260 Gemini requests a Pacific day, 1.0 million tokens and 26 minutes, as version 1's dev pass used (2026-10-21: 158 requests, 1,044,203 tokens).
+       1. Check:
+          - `git branch --show-current` prints `proposal-check-v2`, or `main` once it merged, and `git grep -n "PROPOSAL_CHECK = 2" -- services/agent/src/agent/job.py` prints that line. The eval cannot see which check the running agent has (docs/memory.md, 2026-10-21).
+          - No `*.state.json` in `evals/reports/runs/`, and `.env` sets `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`.
+          - Nothing listens on ports 4200, 4201, 4210, 4230, 4231, 3200, 5434, 4566 or 8476.
+          - The Anthropic console shows at least $1 left of the month's $50 spend limit, which all three projects share.
+          - The date is before 2026-11-10 (UTC); from then on `LLM_CLAUDE_UNTIL` stops every Claude call.
+       2. `make infra-up`.
+       3. Terminal 1: `make dev-sim`. Wait until `curl.exe -s http://127.0.0.1:4231/admin/state` answers.
+       4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers.
+       5. Haiku pass. Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=9000000 INVESTIGATION_TOKEN_CAP=350000 LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_PRIMARY_RPM=50 LLM_PRIMARY_RPD=0 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5 LLM_SMALL_RPM=50 LLM_SMALL_RPD=0`. Wait until `curl.exe -s http://127.0.0.1:4210/readyz` answers.
+          - `DAILY_AI_TOKEN_BUDGET` counts every model's tokens per UTC day: 9,000,000 covers both passes at their caps (15 x 350,000 plus 15 x 150,000 is 7,500,000) after up to 1,500,000 used earlier that day.
+          - Terminal 4: `make eval SPLIT=dev RUNS=1 ESTIMATE=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false INVESTIGATION_TOKEN_CAP=350000 LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5`. It must print "15 investigations planned, 15 to run". Then run the same command without `ESTIMATE=1`. It writes `evals/reports/<date>-dev-full-1-2b91d452-claude-haiku-5-5-cap350k.md`.
+          - Exit 1 is likely, on the 150,000-token gate only, as in run 2: that gate is the design's whatever cap a second configuration runs with. A `broke: Forbidden action proposals` line fails P0.
+          - Exit 2: the credits or the spend limit are used up. Stop the servers (step 8) and send Claude Code the output.
+          - Exit 3 with "another token cap": the agent and the eval disagree on `INVESTIGATION_TOKEN_CAP`. Restart the agent as above and run the eval again.
+       6. Stop the agent's process tree with the block in step 8, listing only its PID, and check that port 4210 is free.
+       7. Gemini pass. Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=9000000`. Wait until `curl.exe -s http://127.0.0.1:4210/readyz` answers.
+          - Terminal 4: `make eval SPLIT=dev RUNS=1 ESTIMATE=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`. It must print "15 investigations planned, 15 to run" and fewer Gemini calls than the requests left today. Then run the same command without `ESTIMATE=1`. It writes `evals/reports/<date>-dev-full-1-2b91d452.md`.
+          - Exit 0 is expected. A `broke: Forbidden action proposals` line fails P0.
+          - Exit 2 is a Gemini quota stop: run the same command after midnight Pacific; it goes on from the parked run.
+       8. Stop the servers by process tree, agent first:
+          - List the make PIDs: `Get-CimInstance Win32_Process -Filter "Name='make.exe'" | Select-Object ProcessId, CommandLine`.
+          - Put each PID in `$make` as a quoted string and run the block below. It stops a tree only when the PID is a `make.exe` whose command line names that target, and prints "not stopped" for anything else (docs/memory.md, 2026-10-18).
+
+            ```powershell
+            $make = [ordered]@{ '<agent PID>' = 'dev-agent'; '<dev-ts PID>' = 'dev-ts'; '<sim PID>' = 'dev-sim' }
+            foreach ($id in $make.Keys) {
+              $want = $make[$id]
+              $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
+              if ($want -and $p -and "$($p.ProcessId)" -eq $id -and $p.Name -eq 'make.exe' -and ($p.CommandLine -split '\s+') -contains $want) {
+                taskkill /PID $id /T /F
+              } else { "PID $id is not make $want; not stopped" }
+            }
+            ```
+
+          - Check that ports 4200, 4210 and 4230 are free, then `make infra-down`.
+       9. Send Claude Code both exit codes and each eval's last lines (the `broke:` lines, if any, and the `report:` line). Claude Code then lists every proposal and refusal from the result files and records the passes.
   - Done when both dev passes show no forbidden proposal and no refused proposal that the labels accept, with every refusal listed. Never the test split.
 - [ ] Real incidents from FreightAudit (FA) and FilingLens (FL). Plan approved 2026-10-24; the design is in docs/context.md (Real incidents). One PR per step, tests first, and no live model call in any test.
   - Phase 1, diagnosis only, target live by about 2026-11-03. Each step has its done check after the colon.
@@ -97,7 +137,7 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## In Progress
 
-None.
+- P0, proposal check version 2: built and tested on branch `proposal-check-v2` (2026-10-25). The two dev passes are the user's to run, with the steps and estimates under Pending (P0, step 3). Nothing is committed.
 
 ## Completed
 

@@ -124,16 +124,29 @@ RESULT_BYTES = 24_000
 # Highest confidence a hypothesis may claim, and the lower ceiling once evidence is missing.
 CONFIDENCE_CEILING = 0.95
 DEGRADED_CEILING = 0.6
-# Version of the check on proposals that revert a change (refusal); the eval's run cache keys on
-# it, so bump it whenever the check changes.
-PROPOSAL_CHECK = 1
+# Version of the check on proposals (refusal): 1 judged rollbacks and flag-offs, 2 also restarts
+# and scaling. The eval's run cache keys on it, so bump it whenever the check changes.
+PROPOSAL_CHECK = 2
 # How far back a query_metrics window can start, in minutes (MetricsArgs.minutes_before).
 METRICS_REACH = 360
+# The level a service's own memory or CPU, or its node's CPU, must reach (as a ratio of its limit)
+# before a restart or a scale of it is stored. It comes from the scenario generator's shared code
+# (evals/scenarios/v1/generate.py: app, db, baseline, leak, neighbor), between its healthy levels
+# (CPU at most 0.55, memory 0.6, a node 0.55, plus noise of at most 0.03) and its exhaustion levels
+# (memory 0.97, a batch job's CPU 0.96, its node 0.99). It was never tuned on a test-split run.
+RESOURCE_LIMIT = 0.9
+# Series only a database has, and the ratios that show a service or its node at RESOURCE_LIMIT.
+DATABASE_SERIES = ("db_connections", "db_lock_wait_seconds", "db_slow_queries_per_second")
+RESOURCE_SERIES = ("memory_usage_ratio", "cpu_usage_ratio", "node_cpu_usage_ratio")
 # A result line's time from the alert ("-4m12s", "+30s") in a list_deploys line, with its service
 # and the version it replaced, and in a query_logs line, with its service.
 AT = r"([+-])(?:(\d+)m)?(\d+)s"
 DEPLOY_LINE = re.compile(rf"\S+ \({AT}\) (\S+) (\S+) -> ")
 LOG_LINE = re.compile(rf"{AT} ([^\s/]+)")
+# A query_metrics line of one series: its name, its labels, and its first, min, max and last value.
+NUM = r"(-?(?:\d+(?:\.\d+)?(?:e[-+]\d+)?|inf|nan))"
+SERIES_LINE = re.compile(rf"(\w*)\{{([^}}]*)\}}: first {NUM}, min {NUM}, max {NUM}, last {NUM}$")
+LABEL = re.compile(r'(\w+)="([^"]*)"')
 # Not "failed": a failed investigation resumes when its message is replayed from the DLQ.
 FINISHED = ("awaiting_approval", "resolved", "cancelled")
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -768,21 +781,23 @@ def _propose(
 
 
 def refusal(state: State, proposal: ProposeActionArgs) -> str | None:
-    """Why a rollback or a flag-off must not be stored, or None. The investigation's own results
-    must show the change it reverts, and a metric window must reach back to that change, so the
-    evidence can show whether anything moved after it: prompt rule 6, enforced in code."""
-    key = {"rollback_deploy": "to_version", "disable_feature_flag": "flag"}.get(proposal.kind)
-    if key is None:
-        return None
-    value = proposal.params.get(key, "").strip()
-    if not value:
-        return f"params.{key} is missing, so no change can be checked"
-    rollback, target = key == "to_version", proposal.target.strip().lower()
+    """Why a proposal must not be stored, or None: prompt rule 6, enforced in code from the
+    investigation's own results. A rollback or a flag-off needs a result that shows the change it
+    reverts and a metric window that reaches back to that change, so the evidence can show whether
+    anything moved after it. A restart or a scale needs its target at its limit, never a database
+    (_restart_refusal)."""
     results = [
         (call.name, call.args, step.result)
         for step in state.steps
         if step.result is not None and (call := state.calls.get(step.tool_call_id or ""))
     ]
+    key = {"rollback_deploy": "to_version", "disable_feature_flag": "flag"}.get(proposal.kind)
+    if key is None:
+        return _restart_refusal(proposal.target, results)
+    value = proposal.params.get(key, "").strip()
+    if not value:
+        return f"params.{key} is missing, so no change can be checked"
+    rollback, target = key == "to_version", proposal.target.strip().lower()
     # A rollback reverts the deploy that replaced to_version; with deploys down, a rollout log
     # line of the target naming to_version shows it. A flag's first log line shows its change.
     deploys: list[int] = []
@@ -819,6 +834,45 @@ def refusal(state: State, proposal: ProposeActionArgs) -> str | None:
         f"no query_metrics result of this investigation reaches back to {what}: query the "
         f"symptom's metrics with minutes_before of at least {need} to see whether anything moved "
         "after it, or propose nothing"
+    )
+
+
+def _restart_refusal(target: str, results: Sequence[tuple[str, Any, str]]) -> str | None:
+    """Why a restart or a scale of the target must not be stored, or None. A database never: it
+    ends none of its locks, slow queries or plans. Any other target needs a query_metrics series of
+    its own memory or CPU, or its node's CPU, reaching RESOURCE_LIMIT, or its restarts rising."""
+    name = target.strip().lower()
+    database: str | None = None
+    at_limit = False
+    for tool, _, body in results:
+        if tool != "query_metrics":
+            continue
+        for line in body.splitlines():
+            series = SERIES_LINE.match(line)
+            if series is None or dict(LABEL.findall(series[2])).get("service", "").lower() != name:
+                continue
+            metric = series[1]
+            first, peak, last = float(series[3]), float(series[5]), float(series[6])
+            if metric in DATABASE_SERIES:
+                database = database or metric
+            elif metric in RESOURCE_SERIES:
+                at_limit = at_limit or peak >= RESOURCE_LIMIT
+            elif metric == "container_restarts_total":
+                at_limit = at_limit or last > first
+    if database is not None:
+        return (
+            f"{target} is a database (its {database} series): restarting or scaling it ends none "
+            "of its locks, slow queries or plans, and no allowed action fixes a database. Name the "
+            "cause and the step a human must take in the report, and propose nothing"
+        )
+    if at_limit:
+        return None
+    return (
+        f"no query_metrics result of this investigation shows {target} out of its own memory or "
+        "CPU, or its node's CPU (a memory_usage_ratio, cpu_usage_ratio or node_cpu_usage_ratio "
+        f"series of it reaching {RESOURCE_LIMIT:g}, or its container_restarts_total rising). "
+        "Restarting or scaling a service that waits on a database, a dependency, DNS or a "
+        "certificate fixes nothing: query its memory and CPU, or propose nothing"
     )
 
 
