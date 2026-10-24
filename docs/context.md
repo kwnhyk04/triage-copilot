@@ -14,6 +14,7 @@ AI-native portfolio project showing a tool-using agent loop with a human approva
 - Agent loop with checkpoints, step and token budgets, and paginated tool results.
 - Human approval UI and an allowlisted, idempotent executor.
 - Scenario engine with 40 scripted incidents; optional live mode on the OpenTelemetry Demo.
+- Real incidents from the user's two apps on this PC, FreightAudit and FilingLens (planned 2026-10-24; Real Incidents below). They are never scored against eval floors.
 - Must demonstrate: backpressure, retries, pagination, partial failures, schema migrations.
 
 Targets (design goals) and the counted test split on Gemini: 2026-10-20, 25 scenarios x 3 runs, frozen prompt `2b91d4523fb028a6`, report `evals/reports/2026-10-20.md`, 95% intervals in brackets. The exam failed: the forbidden-proposal gate broke, so `make eval` exited 1, and 13 of the 18 measured targets missed.
@@ -280,6 +281,81 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 - Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms locally (0.552 s in CI on 2026-10-18; the test allows 3 s). Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
 - Story B (event versioning): replaying stored v1 steps returns v2 objects; a golden snapshot pins the result, and stored rows are never rewritten.
 
+## Real Incidents (planned 2026-10-24, nothing built)
+
+The plan was approved by the user on 2026-10-24. Its steps are in docs/todo.md (P0, then P1.1 to P4.3), and its decisions in docs/memory.md. The flow:
+- Claude Haiku 5.5 triages every alert: real or not, and the likely cause.
+- For a real incident only, Claude Opus 5.5 at effort medium plans the fix.
+- The user approves or rejects every plan.
+- An approved plan either runs a fixed `restart_service` on an app or worker container, or has Claude Sonnet 5.5 at effort medium draft a fix on a local branch. The branch is never pushed, merged or deployed.
+- Phase 1 is diagnosis only.
+
+**The two apps today**, read-only on 2026-10-24:
+- **Alerting:** neither app delivers alerts anywhere. FreightAudit (FA) has 4 Prometheus rules and FilingLens (FL) has 14, all on their dev stacks, with no Alertmanager.
+- **FA production** (`freightaudit-prod`) runs now. It has OpenTelemetry off, so no metrics. Its only alert signals are JSON log lines with an `alert` field (`extract_paused`, `claude_switched_off`).
+- **FL production** (`filinglens-prod`) has never been started.
+- **Exposure:** both productions publish no host ports, and their apis are public only through Tailscale Funnel sidecars. Windows is not on the tailnet.
+
+**Alert path: pull, no new port.** A new TC service, `watch`, is deterministic, makes no model calls, and listens only for its own probes on 127.0.0.1. It polls:
+- each api's health (FA production through its public Funnel URL);
+- `docker ps` state;
+- `docker logs` for alert fields and error bursts;
+- and, for a dev stack that opted in, the app's own Prometheus `/api/v1/alerts`.
+
+It posts Alertmanager v4 alerts to TC's own webhook, with one tenant token per app, so intake, dedupe, grouping and the flood caps are reused.
+- Rejected: an Alertmanager in each app, which changes both repos, needs production monitoring and an egress allowlist; and Tailscale Serve, since everything runs on this PC.
+
+**The snapshot.** On each firing transition, `watch` attaches a bounded, scrubbed snapshot (at most 48 KB) as annotations. It holds health results, container states with image and start times, log tails, changes (container recreations and commits on `origin/main`, never fetched), and PromQL results when Prometheus is up.
+- Labels stay stable, so fingerprints and dedupe hold.
+- The agent reads only this snapshot, through the gateway's internal alerts route. It gets no Docker, git or app network access.
+- So injected log text cannot widen what is read, and recorded fixtures are plain data.
+
+**Least privilege.** `watch` runs fixed argv with no shell:
+- `docker ps` with names exact-matched to a TC-committed catalog and their compose project label checked;
+- `docker logs` on catalog containers;
+- `git log` and `git show --stat` on `origin/main`, with hooks, fsmonitor, textconv, ext-diff and signature checks off;
+- and HTTP GET to configured URLs only, with no redirects.
+
+It never runs `docker inspect` (the env holds keys), `exec` or `compose config`. It never reads `.env*`, databases, queues, object storage, invoice or filing contents.
+
+**Secrets.** One scrubber in `watch`:
+- keeps allowlisted JSON fields per app;
+- masks key shapes, JWTs, bearer tokens, PEM blocks, URL credentials, query strings, emails and `*.ts.net` hostnames;
+- keeps an exception's type and last line, and truncates fields.
+
+The agent also scrubs provider error text. Canary tests cover `watch`, gateway, agent steps, the report mirror, TC logs and spans.
+
+**Models.**
+- Live triage runs Claude first until `LLM_CLAUDE_UNTIL` (2026-11-10), then the existing free chain (Gemini 3.5 Flash-Lite, then NIM DeepSeek v4.1 Flash; summaries on Gemini 3.1 Flash-Lite).
+- The sim roles and eval cache keys stay unchanged.
+- **Falls to the free chain, with a reason:** credits or spend limit (now account-wide), a 401 or 403, a refusal (no server-side refusal fallback), a spent dollar cap, or a 429 retry-after over 60 s.
+- **Planner and coder:** single streamed structured-output calls with no tools. Opus 5.5 and Sonnet 5.5 reject forced `tool_choice` and keep thinking on, so a single call needs no thinking replay.
+- **ReportRecorded v2** adds `verdict` and `models[]` per part, with skip reasons.
+
+**Budget.**
+- TC gets $15 a month of the shared $50, evals included (FA $15, FL $15).
+- Daily caps: triage $0.40, planner $1.00, coder $0.60. A call runs only if its worst-case cost fits, and it is then charged its real cost.
+- Triage cost measured in run 2: $0.0104 mean, $0.0202 max. Estimates: a plan about $0.20 (worst $0.48), a code draft about $0.13 (worst $0.25).
+- Free models keep `DAILY_AI_TOKEN_BUDGET` and Gemini's RPD. Gemini's roughly 260 daily requests are shared with FA until FA's key moves to its own Google project.
+
+**Safety.**
+- The approval gate exists.
+- Plans are constrained by schema: an enum of kinds, catalog targets, allowlisted files, free text only in the rationale.
+- Proposal check v2 applies to real targets: never a database, queue, cache or proxy; a restart only when the target's own health fails while its dependencies are healthy.
+- Switches table: `live` (default off) and `claude` in phase 1; later `planner`, `actions` and `coder`.
+- Flood caps: 30 triages a day per app, with a digest of the rest. Live data is kept 30 days.
+- **Coder limits:**
+  - a separate worktree under `H:\.cache\triage-copilot\worktrees\`, which leaves the user's checkout alone;
+  - branch `tc/<app>/<id>`;
+  - hooks and filters off, credential helpers off, no push path;
+  - a per-app source allowlist, so CI workflows, `.env*`, keys, agent instructions, lockfiles, configs and infra are never editable;
+  - at most 10 files and 400 lines;
+  - it never runs tests or scripts.
+
+**Quality after 2026-11-10,** when every role is free. On the sim, triage drops from Haiku's top-1 of 0.85 to Gemini's 0.60, and p95 rises from 43 s to 77 s. Plans and drafts are unmeasured.
+
+**Open risk:** Docker Desktop containers may reach host 127.0.0.1 ports through `host.docker.internal`, and FL production has that route. This gets checked at go-live (P1.12).
+
 ## Current Development Status
 
 Steps 1 (scaffolding), 2 (contracts) and 3 (data) done on 2026-10-14, step 4 (workers) with its follow-up (parking, recovery sweeper), step 5 (tests) and step 6a (AI core) on 2026-10-15. A live run on bad-deploy found the right root cause and proposed the rollback in 6 model turns and 35,090 tokens.
@@ -308,10 +384,11 @@ Step 6b is done (2026-10-21, once the proposal check merged as `177839d`): the s
 
 Next, in this order:
 
-1. The user's decision on version 2 of the proposal check, on restarts and scaling (docs/todo.md). If approved: tests, code, then a Haiku and a Gemini dev pass, never the test split.
-2. Whether to size the 15-call cap with another Haiku run (the user's call). A test split after version 2 would be a third attempt informed by test failures, not a held-out result.
-3. `EVAL_ENABLED=true`, the user's switch; the `dev-ci-1` floors are set (docs/todo.md, step 7).
-4. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.
+1. P0: proposal check version 2 on the sim, approved 2026-10-24. Its Haiku dev pass must run before 2026-11-10 (docs/todo.md).
+2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md).
+3. Whether to size the 15-call cap with another Haiku run (the user's call). A test split after version 2 would be a third attempt informed by test failures, not a held-out result.
+4. `EVAL_ENABLED=true`, the user's switch; the `dev-ci-1` floors are set (docs/todo.md, step 7).
+5. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.
 
 ## Known Limitations
 

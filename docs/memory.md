@@ -143,6 +143,23 @@ From the approved design doc:
 - 2026-10-21: No single prompt may pass 100,000 tokens (`PROMPT_LIMIT` in `services/agent/src/agent/model.py`; the user's rule, since Haiku bills five times its rate above it). `TurnBudget.limits` refuses any turn whose input bound passes it, `_stop_reason` stops the loop when the forced report after one more tool turn could pass it, and a log page whose summary prompt would pass it goes unsummarized. At the default cap the token reserve always stops a run first, so default runs are unchanged. This replaces the 2026-10-17 reasoning that the 150,000-token cap alone keeps Haiku under its long-prompt rate.
 - 2026-10-21: Every eval report counts the reports a cap forced, by the job's stop note (`Scored.stopped`; the note "Reports a cap forced: N of M (...)" and `forced` in the JSON). Reason: the user keeps the 15-call cap for the second Haiku run and wants to know how many runs it cuts off.
 - 2026-10-24: Haiku run 2's three forbidden proposals are recorded as a finding, and nothing was tuned on the test split (the user's instruction). The three runs were read, not replayed through any candidate check. The proposed version 2 of the check takes its 0.9 level from the scenario generator's shared helpers and the dev scenarios only. Reason: as on 2026-10-21, the test split stays out of the check's development.
+- 2026-10-24: The plan for real incidents from FreightAudit (FA) and FilingLens (FL) is approved (user decisions; docs/context.md, Real Incidents; docs/todo.md).
+  - **Roles:** Haiku triages, Opus 5.5 at medium plans only real incidents, the user approves every plan, then a fixed restart or a Sonnet 5.5 draft on a local branch. Phase 1 is diagnosis only.
+  - **Alerts:** pulled by a TC `watch` service, with no new port and no change in FA or FL. The agent reads only a scrubbed snapshot attached to each alert.
+  - **Budget:** TC gets $15 a month of the shared $50, evals included. Daily caps: triage $0.40, planner $1.00, coder $0.60. The user creates a TC Anthropic workspace with a $15 limit at go-live, if the Console offers it.
+  - **Docker:** `watch` may run `docker ps` and `docker logs` on catalog containers only.
+  - **Stacks:** production only. FA production first, FL production once it is live; dev stacks opt in per app.
+  - **Free tiers:** scrubbed excerpts may go to them in phases 1 to 3.
+  - **Refusals:** server-side refusal fallback is off; a refusal falls to the free chain.
+  - **Gemini:** the user moves FA's Gemini key to its own Google project before go-live.
+  - **Actions:** phase 3 allows `restart_service` on app and worker containers only.
+  - **Timeline:** phase 1 by about 2026-11-03. Phase 2 starts only once phase 1 is live, and if it lands after 2026-11-10 the planner runs on free models.
+  - **Floods:** 30 triages a day per app, with a digest of the rest.
+  - **Push:** never; local branch only.
+  - **Host loopback:** checked at go-live.
+  - **Retention:** 30 days.
+  - **Reasons:** neither app delivers alerts today, and FA production has no metrics; Claude ends on 2026-11-10; and safety never rests on the prompt.
+- 2026-10-24: Proposal check version 2 on the sim is approved and comes first, as P0, before phase 1 (user decision). Phase 2 step P2.3 only maps it to real targets. Reason: its Haiku dev pass needs Claude credits before 2026-11-10.
 
 ## Preferences and Instructions
 
@@ -269,3 +286,5 @@ None yet.
 - 2026-10-21: The 2026-10-20 question on adding the check is settled: approved, then built (Decisions). Still open: whether a test split runs after its dev pass (user decision).
 - 2026-10-24: Whether to build version 2 of the proposal check, on restarts and scaling, and run its two dev passes (user decision; docs/activity-log.md, 2026-10-24). A test split after it would be a third attempt informed by test failures.
 - 2026-10-24: Whether to size the 15-call cap for Haiku with another run (the user's call, under the 2026-10-21 rule on Claude caps). It forced 47 of run 2's 75 reports, so how many calls Haiku would use is not measured, and a higher cap breaks the design's 15-call gate.
+- 2026-10-24: Settled: the question above on building version 2 of the proposal check. It is approved as P0 (Decisions). Still open: whether a test split runs after it, which would be a third attempt informed by test failures (user decision).
+- 2026-10-24: Whether the coder may run on the free models after 2026-11-10, which would send repo source to free tiers. The user decides at phase 4.

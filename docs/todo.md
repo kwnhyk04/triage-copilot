@@ -6,11 +6,51 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
-- [ ] (Waits for the user's decision) Proposal check version 2, on restarts and scaling (proposed 2026-10-24, docs/activity-log.md): Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` would also judge `restart_service` and `scale_service` from the investigation's `query_metrics` results. A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused. Any other is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises. `PROPOSAL_CHECK` becomes 2, and the prompt stays frozen. Steps:
-  1. Tests first, on dev scenarios: `test_proposal_check.py` (db-pool-exhaustion-1 and -3, dns-partition-1, memory-leak-1, noisy-neighbor-1 and -3) and `test_ai_loop_int.py`.
-  2. The code, and a replay of the dev cache's restart and scale proposals.
-  3. One dev pass on Haiku at `INVESTIGATION_TOKEN_CAP=350000` (about $0.16) and one on Gemini at the defaults (free).
+- [ ] P0, next: proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
+  - A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused.
+  - Any other target is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises.
+  - `PROPOSAL_CHECK` becomes 2, and the prompt stays frozen.
+  - Steps:
+    1. Tests first, on dev scenarios: `test_proposal_check.py` (db-pool-exhaustion-1 and -3, dns-partition-1, memory-leak-1, noisy-neighbor-1 and -3) and `test_ai_loop_int.py`.
+    2. The code, and a replay of the dev cache's restart and scale proposals.
+    3. One dev pass on Haiku at `INVESTIGATION_TOKEN_CAP=350000` (about $0.16, counted in TC's $15 a month) and one on Gemini at the defaults (free).
   - Done when both dev passes show no forbidden proposal and no refused proposal that the labels accept, with every refusal listed. Never the test split.
+- [ ] Real incidents from FreightAudit (FA) and FilingLens (FL). Plan approved 2026-10-24; the design is in docs/context.md (Real incidents). One PR per step, tests first, and no live model call in any test.
+  - Phase 1, diagnosis only, target live by about 2026-11-03. Each step has its done check after the colon.
+    - [ ] P1.1 Fixes: Claude summaries recorded as role `small` (the `LAST_TURN` bound in `job.py`); a credit stop for 402, `billing_error` or a spend-limit 400 stops every Anthropic model for the month, while a 429 without retry-after stays per model; 401/403 and refusals fall to the free chain; `spent()` returns a reason; the prompt sha is recorded per call: each failure lands on the free chain with its reason, and the frozen sim prompt and eval per-role counts are unchanged.
+    - [ ] P1.2 Live tenants: settings, tenant-to-source mapping, and the `live` (default off) and `claude` switches with a CLI: a live tenant never reaches the sim tools and parks while `live` is off.
+    - [ ] P1.3 The gateway stores alert annotations (expand-only migration, `StoredAlert.annotations`, `get_alert_context` shows them): annotations round-trip and old rows still read.
+    - [ ] P1.4 Per-app catalog and scrubber, plus synthetic FA and FL fixtures built from their log field lists: no canary survives (keys, emails, `?key=` URLs, tracebacks, ts.net names).
+    - [ ] P1.5 Hardened Docker (`ps`, `logs`), git (`log`, `show --stat` on `origin/main`) and HTTP readers: a fake `docker` and `git` on PATH, plus fake servers, show disallowed subcommands, names and URLs refused.
+    - [ ] P1.6 The `watch` service (detection, a snapshot of at most 48 KB in annotations, posting to the webhook, `/healthz`, `/readyz`, `make dev-watch`): fixtures end to end against a stub gateway post only transitions, with stable labels.
+    - [ ] P1.7 ReportRecorded v2 (`verdict`, `models[]`), accepted beside v1, plus gateway mirror columns and GraphQL fields: the gateway accepts v2 before any agent emits it.
+    - [ ] P1.8 Live triage: a live prompt with its own sha; tools `get_alert_context`, `read_snapshot`, catalog `get_dependencies`, `search_runbooks` and `submit_report` with a verdict, and no `propose_action`; a Claude-first chain; the triage dollar cap; `INVESTIGATION_TOKEN_CAP=350000` and `DAILY_AI_TOKEN_BUDGET=25000000` for the live agent: ScriptedModel from fixtures through `watch`, gateway and agent ends in a report v2 with its verdict and models, and the sim sha and eval cache keys are unchanged.
+    - [ ] P1.9 Flood guard (30 triages a day per app, a digest of the rest, `watch`'s own rate limit): a storm through `watch` gives at most 30 triages, and every alert is recorded.
+    - [ ] P1.10 Serve `GET /v1/investigations/{id}` and a minimal read-only web list and detail (verdict, cause, evidence, models, fallback notes): the user can read every live report.
+    - [ ] P1.11 Retention: live snapshots and steps are purged after 30 days: nothing older remains.
+    - [ ] P1.12 Go live, by the user, in this order: (1) move FA's Gemini key to its own Google project; (2) a TC Anthropic workspace with a $15 monthly limit, if the Console offers it; (3) issue the FA tenant token (FL's once FL production is live); (4) check whether a container reaches TC's ports through `host.docker.internal` and record the result; (5) `live` on, FA production only; (6) a fallback drill with `claude` off; (7) a 3-day shadow run: every alert has a report or a recorded reason, spend stays within the caps, a canary scan of stored data is clean, and the drill's report names the free model and the reason.
+  - Phase 2, plans with the approval recorded and nothing run. It starts only once phase 1 is live; if it lands after 2026-11-10, the planner runs on the free models.
+    - [ ] P2.1 Planner provider path: a streamed structured-output call to `claude-opus-5-5` at effort medium (no tools, `max_tokens` 16,000, its own 300 s timeout, no server-side refusal fallback); a refusal falls to the free chain; the `planner` enum value and the $1.00 daily cap: fake Anthropic responses (JSON, refusal, max_tokens) pass.
+    - [ ] P2.2 Plan schema and PlanRecorded v1 (`kind` none, restart_service or code_fix; `target` from the catalog; files from a per-app source allowlist; free text only in the rationale), made only for `real` and once per group, shown read-only: a plan appears on a real incident and never on a `not_real` one.
+    - [ ] P2.3 Map proposal check v2 (P0) to real targets: never a database, queue, cache or proxy; a restart only when the target's own health or container fails while its declared dependencies are healthy: catalog fixtures show each case.
+    - [ ] P2.4 Approve or reject a plan in the web, through the BFF and the approver key; the decision is stored, nothing runs: decisions are recorded once (409 after).
+    - [ ] P2.5 Measure the planner on dev-split reports, then turn `planner` on. Before 2026-11-10 that is Opus, about 15 plans for about $3, with the user's approval of the spend first; after, the free chain: the cost per plan is recorded.
+  - Phase 3, fixed actions: only `restart_service` on app and worker containers.
+    - [ ] P3.1 ActionApproved v2 carries the tenant and app: contract tests pass in both languages.
+    - [ ] P3.2 An executor consumer and a restart effector (fixed argv `docker compose -p <project> restart <service>`, checked against the catalog, dry run by default, behind the `actions` switch): a fake `docker` shows only approved, catalog-listed restarts.
+    - [ ] P3.3 A dry-run drill, then one real restart of an FA dev container: both are recorded.
+  - Phase 4, coder. It starts with the user's decision on whether the coder may run on the free models, which would send repo source to free tiers.
+    - [ ] P4.1 The hardened worktree sandbox: FA and FL only; a worktree under `H:\.cache\triage-copilot\worktrees\` from `origin/main`; branch `tc/<app>/<id>`; hooks, LFS and smudge filters off; `--no-verify`; credential helpers off; no push path; a per-app source allowlist; at most 10 files and 400 changed lines: tests on temp repos refuse every escape.
+    - [ ] P4.2 A `claude-sonnet-5-5` draft at effort medium, applied and committed locally (never run, pushed or merged), with the $0.60 daily cap: a fake model's patch lands on the branch, and one that touches `.github/` is refused.
+    - [ ] P4.3 The report view shows the branch and its diffstat, behind the `coder` switch: the user can review the branch locally.
+  - Decided (docs/memory.md, 2026-10-24): TC gets $15 a month, evals included, with daily caps of triage $0.40, planner $1.00 and coder $0.60. Production stacks only; dev stacks opt in per app. Never push. Retention 30 days.
+- [ ] Found in FA and FL while planning (2026-10-24): for those projects' own sessions to fix. Nothing was changed in their repos.
+  - FA: the docs name a `claude_unavailable` log line, but the code emits `claude_switched_off`.
+  - FA: the docs say a 429 without retry-after turns Claude off, but the code treats every 429 as a rate limit.
+  - FA: production sets `OTEL_SDK_DISABLED`, so its 4 Prometheus alert rules can never fire for it.
+  - FL: `infra/prometheus-alerts.yml` has 14 rules, but the docs say 13, and the monitoring table leaves out ClaudeKeyOrModelRejected.
+  - FL: the 2026-11-10 expiry switches Claude off in the process only and never sets the Redis key, so the `filinglens_claude_off` gauge stays "none" after it.
+  - FL: docs/context.md and docs/todo.md still call the deploy config uncommitted, though it merged as PR #28.
 - [ ] (The user's call) Size the 15-call cap for Haiku from data: it forced 47 of the second configuration's 75 reports, so how many calls Haiku would use is not measured. Measuring it takes a run with a higher call cap, which breaks the design's 15-call gate by construction.
 - [ ] Two advisories have no fix inside current constraints (docs/activity-log.md, 2026-10-24): pillow 12.3.0 (41, fix 13.0.0, blocked by fastembed `pillow<13`) and esbuild <=0.24.2 (GHSA-67mh-4wv8-2f99, via `drizzle-kit` 0.31.11 `@esbuild-kit/esm-loader`; only drizzle-kit 1.0 beta/rc drops it). Done when `pnpm audit` and `uv audit` list nothing, with no ignore entries.
 - [ ] Move `next` and `eslint-config-next` from 16.4.2 to 16.4.3 once it is past pnpm's release-age gate (published 2026-10-23).
