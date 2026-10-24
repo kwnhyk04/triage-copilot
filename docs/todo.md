@@ -6,6 +6,9 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
+- [ ] Two advisories have no fix inside current constraints (docs/activity-log.md, 2026-10-24): pillow 12.3.0 (41, fix 13.0.0, blocked by fastembed `pillow<13`) and esbuild <=0.24.2 (GHSA-67mh-4wv8-2f99, via `drizzle-kit` 0.31.11 `@esbuild-kit/esm-loader`; only drizzle-kit 1.0 beta/rc drops it). Done when `pnpm audit` and `uv audit` list nothing, with no ignore entries.
+- [ ] Move `next` and `eslint-config-next` from 16.4.2 to 16.4.3 once it is past pnpm's release-age gate (published 2026-10-23).
+- [ ] Add `pnpm audit` and `uv audit` to CI (`.github/workflows/ci.yml` has only gitleaks and actionlint), so advisories fail in the pull request, not later.
 - [ ] (Later, the user's call) Haiku with thinking. Every Claude turn forces its tool call, so Haiku 5.5 never thinks (0 thought tokens on all 864 calls of run 1), while Gemini thinks at LOW. Turning it on needs: `tool_choice` `auto` on investigation turns; a path for a reply without a tool call (a nudge text would change the prompt sha); thinking blocks stored in `tool_calls.provider_state` and replayed unchanged, with a test that each rebuilt request matches the previous one byte for byte (Haiku 5.5 answers 400 when a replayed block follows an edited turn); a larger turn output cap, so a larger token cap; explicit `thinking` and `effort`; a cache key and report label for it; then one Haiku dev pass (about $0.15) before any test split.
 - [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
 - [ ] (manual) pre-commit's cache, with its gitleaks build, is on C: (`PRE_COMMIT_HOME` unset), against the AGENTS.md disk rule. Set `PRE_COMMIT_HOME` to a folder under `H:\.cache` and run `make install` again.

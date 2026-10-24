@@ -158,6 +158,8 @@ From the approved design doc:
 
 ## Known Issues and Pitfalls
 
+- 2026-10-24: `pnpm install` of a package younger than the release-age gate (about one day) silently writes `minimumReleaseAgeExclude` entries into `pnpm-workspace.yaml`. Check `git diff pnpm-workspace.yaml` after any dependency bump and pick an older release instead. `next` is 16.4.2, not 16.4.3, for this reason.
+- 2026-10-24: pillow cannot reach 13.0.0 (41 advisories fixed there) while fastembed requires `pillow<13` (0.8.1 and 0.9.0). The esbuild advisory under `drizzle-kit` 0.31.11 has no stable fix. Both are open (docs/todo.md); do not add audit ignore entries.
 - 2026-10-14: make runs recipes with cmd.exe when started from PowerShell and with sh from Git Bash. Keep recipes shell-neutral: no single quotes, no `VAR=x cmd`, no `$(...)`.
 - 2026-10-14: Jest can only load ESM-only packages (Fastify `inject` pulls `cookie` 2) with `NODE_OPTIONS=--experimental-vm-modules`; gateway test scripts set it through pnpm's `shellEmulator`.
 - 2026-10-14: Turbo filters env vars (strict mode), so dev servers need `--env-mode=loose` (the Makefile passes it). Pages that read runtime env must call `await connection()`, or `next build` tries to prerender them and fails.
