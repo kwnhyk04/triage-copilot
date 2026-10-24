@@ -19,6 +19,33 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-24: Plan for real incidents from FreightAudit and FilingLens approved (branch real-incident-plan, docs only)
+
+- What happened: In plan mode, read-only, the user asked for a plan to let TC triage real alerts from their two apps on this PC, FreightAudit (FA) and FilingLens (FL). The fixed decisions:
+  - Haiku triages, Opus 5.5 at medium plans real incidents only, the user approves every plan, and an approved plan leads to a fixed action or a Sonnet 5.5 draft on a local branch.
+  - Phase 1 is diagnosis only. Claude stops on 2026-11-10.
+  - The sim stays unscored for real incidents.
+  
+  The first ExitPlanMode was rejected with the user's 12 answers and two changes: proposal check v2 becomes P0, before phase 1, and the FA/FL mismatches go into docs/todo.md. The user also asked that the docs be written on a new branch `real-incident-plan` from main. The second ExitPlanMode was approved.
+- Why: neither app delivers alerts today, and Claude's credits end on 2026-11-10.
+- What we did:
+  1. Read AGENTS.md and TC's docs. The design doc is summarized in docs/context.md; `../_design-reference` holds only UI mockups.
+  2. Three read-only Explore agents mapped TC's code paths, FA's monitoring and FL's monitoring. They were told never to open `.env*`, keys or `backups/`, and to quote no secret values.
+     - FA: 4 dev-only Prometheus rules; production running with no metrics; alerts only as JSON log lines; Funnel only.
+     - FL: 14 dev-only rules; production never started.
+     - Neither app has an Alertmanager.
+  3. Computed run 2's per-triage cost distribution and final-prompt sizes with an inline read-only `uv run --no-sync python -I -c`. Read the claude-api skill's Opus 5.5 and Sonnet 5.5 sections: forced `tool_choice` and disabled thinking give 400, and preserved thinking and pricing apply.
+  4. A Plan agent reviewed the draft. It found that the defaults block live triage, that refusals and 401/403 need to fall through, that the worst-case budget gates were too small for one call, and that the git and Docker calls needed hardening. It also suggested the snapshot in place of a data API, and an ordering in which `live` stays off before alerts arrive and report v2 is accepted before it is emitted. All were adopted.
+  5. Plan file: `C:\Users\kwonhyuk\.claude\plans\pasted-content-id-dc31-plan-mode-transient-kite.md`.
+  6. After approval: `git checkout -b real-incident-plan main` (clean, at `235358a`). Then docs/todo.md (P0 approved, P1.1 to P4.3 with done checks, and the "Found in FA and FL" note), docs/context.md (the Real Incidents section, scope and Next), docs/memory.md (decisions and questions) and this entry.
+  - Why this was the best option: the plan rests on what the three repos really do, and the user decided every open point before any code.
+- Small events:
+  - GateGuard gated the first Bash command and the first write of each file. What we did: stated the facts and sent the call again; in batches, the calls after the refused one applied.
+  - In plan mode, background agents report only after a turn ends, so two turns ended on status lines while they ran. Why: the harness delivers notifications as new turns.
+- Files: docs/todo.md, docs/context.md, docs/memory.md, docs/activity-log.md. No code changed, and nothing changed in FA or FL.
+- Validation: docs only. Prettier skips Markdown, so lint does not check these files.
+- Outstanding: P0 next, then phase 1. Nothing is committed.
+
 ### 2026-10-24: Haiku run 2 recorded: exit 1 on three forbidden restarts; a check on restarts and scaling proposed (no code)
 
 - What happened: The user ran the second Haiku configuration with the docs/todo.md steps, whose first step checks that main is at the `haiku-token-cap` merge (#8, `22acfae`): the test split on `claude-haiku-5-5` for the agent and the log summaries, with `INVESTIGATION_TOKEN_CAP=350000`. `make eval` exited 1 and printed:
