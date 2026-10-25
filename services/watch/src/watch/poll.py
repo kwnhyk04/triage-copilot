@@ -31,6 +31,10 @@ Source = Literal["health", "docker", "logs", "prometheus"]
 Status = Literal["firing", "resolved"]
 FIRE_AFTER: dict[Source, int] = {"health": 3, "docker": 2, "logs": 1, "prometheus": 1}
 RESOLVE_AFTER = 2
+# watch's own rate limit: an alert that fired FLAP_FIRINGS times within FLAP_WINDOW flaps, and
+# stays firing until the first of those firings is FLAP_WINDOW old, so one alert posts at most
+# that many firings an hour and its flapping shows as one long firing.
+FLAP_FIRINGS, FLAP_WINDOW = 3, timedelta(hours=1)
 # A log signal stays bad this long after its last line.
 LOG_HOLD = timedelta(minutes=10)
 # This many error lines within the window make an ErrorBurst.
@@ -76,6 +80,8 @@ class Track:
     detail: str = ""
     # The startsAt of the alert as posted, while it fires.
     firing: datetime | None = None
+    # When it fired, within the last FLAP_WINDOW.
+    fired: deque[datetime] = field(default_factory=deque[datetime])
 
 
 def fingerprint(labels: Mapping[str, str]) -> str:
@@ -395,13 +401,18 @@ class Watcher:
             track.bad, track.good = (track.bad + 1, 0) if bad else (0, track.good + 1)
             if bad:
                 track.detail = detail
+            while track.fired and now - track.fired[0] >= FLAP_WINDOW:
+                track.fired.popleft()
             due: Status | None = None
             if track.firing is None and track.bad >= FIRE_AFTER[key.source]:
                 due = "firing"
             elif track.firing is not None and track.good >= RESOLVE_AFTER:
-                due = "resolved"
+                # A flapping alert's resolve waits, which keeps it one firing.
+                due = "resolved" if len(track.fired) < FLAP_FIRINGS else None
             if due and self._post(key, due, track.firing or now, now, track.detail):
                 track.firing = now if due == "firing" else None
+                if due == "firing":
+                    track.fired.append(now)
                 posted.append((due, key))
         return posted
 

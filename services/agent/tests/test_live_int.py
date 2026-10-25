@@ -3,20 +3,37 @@ never reaches the sim tools and parks while the live switch is off, and every sw
 at the next model turn."""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Connection, Engine, create_engine, insert, select, update
 from test_workers_int import SCRIPT, TENANT, TOOLS, Counting, Tools, make_job, new_request, recorded
 
-from agent.db import Investigation
-from agent.llm import spent
-from agent.model import ScriptedModel, is_model_turn
+from agent.db import AiUsage, Investigation, ModelCall, Outbox
+from agent.job import PROMPT_SHA, UTC_TODAY
+from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft
+from agent.llm import Binding, Limiter, Router, spent
+from agent.model import (
+    HypothesisDraft,
+    Message,
+    ModelTurn,
+    ReportDraft,
+    ScriptedModel,
+    ToolRequest,
+    ToolSpec,
+    TurnRequest,
+    Usage,
+    is_model_turn,
+)
+from agent.providers import Provider, ProviderTurn
 from agent.settings import Role
 from agent.switches import Switch, is_on, run, set_switch
+from agent.tools import Tool, ToolContext
+from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 
 if TYPE_CHECKING:
     from conftest import ScratchDb
@@ -115,3 +132,254 @@ def test_turning_claude_off_skips_every_claude_model_with_the_reason(engine: Eng
     switch(engine, "claude", True)
     with engine.connect() as conn:
         assert spent(conn, haiku) is None
+
+
+LATER = datetime.now(UTC).date() + timedelta(days=60)
+# Live triage's Claude, capped at $0.40 a UTC day, and the free chain after it.
+TRIAGE = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, until=LATER, daily_usd=0.40)
+GEMINI = Role("primary", "gemini", "gemini-3.5-flash-lite", None, 0, 0)
+NIM = Role("fallback", "nvidia", "deepseek-ai/deepseek-v4.1-flash", None, 0, 0)
+SMALL = Role("small", "gemini", "gemini-3.1-flash-lite", None, 0, 0)
+VERDICT = LiveReportDraft(
+    summary="freight-audit's api fails its readiness check: postgres restarts.",
+    hypotheses=[
+        HypothesisDraft(
+            root_cause_class="database",
+            service="postgres",
+            confidence=0.7,
+            summary="The api's readiness check fails on postgres, whose container restarts.",
+            evidence_ids=[],
+        )
+    ],
+    verdict="real",
+)
+
+
+class Recording:
+    """Plays a script and keeps every request the job made."""
+
+    def __init__(self, actions: Sequence[ToolRequest | ReportDraft]) -> None:
+        self.model = ScriptedModel(actions)
+        self.requests: list[TurnRequest] = []
+
+    async def turn(self, request: TurnRequest) -> ModelTurn:
+        self.requests.append(request)
+        return await self.model.turn(request)
+
+    def available(self, conn: Connection) -> bool:
+        return True
+
+
+class Reporting:
+    """A provider that answers every turn with live triage's report."""
+
+    name = "gemini"
+    model = "gemini-3.5-flash-lite"
+
+    async def generate(
+        self,
+        system: str,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec],
+        allowed: tuple[str, ...] | None,
+        max_output_tokens: int,
+    ) -> ProviderTurn:
+        return ProviderTurn(
+            "submit_report", VERDICT.model_dump(), None, Usage(input=900, output=60)
+        )
+
+    async def complete(self, system: str, text: str, max_output_tokens: int) -> tuple[str, Usage]:
+        raise AssertionError("live triage summarizes nothing")
+
+
+def snapshot_tool(seen: list[ToolContext]) -> dict[str, Tool]:
+    async def read_snapshot(ctx: ToolContext, args: dict[str, Any]) -> str:
+        seen.append(ctx)
+        return "Snapshot of freight-audit on the prod stack: postgres restarting."
+
+    return {"read_snapshot": read_snapshot}
+
+
+def report_message(engine: Engine, inv: UUID) -> ReportRecordedV2:
+    query = select(Outbox.body).where(
+        Outbox.message_type == "report-recorded", Outbox.group_id == str(inv)
+    )
+    with engine.connect() as conn:
+        return ReportRecordedV2.model_validate(conn.execute(query).scalar_one())
+
+
+def prompt_shas(engine: Engine, inv: UUID) -> set[str | None]:
+    query = select(ModelCall.prompt_sha).where(ModelCall.investigation_id == inv)
+    with engine.connect() as conn:
+        return set(conn.execute(query).scalars())
+
+
+def test_a_live_triage_runs_its_own_prompt_and_tools_and_reports_a_verdict(
+    engine: Engine,
+) -> None:
+    switch(engine, "live", True)
+    read = ToolRequest(tool="read_snapshot", args={"alert": 1}, reason="Read the snapshot.")
+    model, sim = Recording([read, VERDICT]), Recording(SCRIPT)
+    seen: list[ToolContext] = []
+    job = make_job(
+        engine,
+        Tools().all(),
+        sim,
+        live_tenants=APPS,
+        live_tools=snapshot_tool(seen),
+        live_model=model,
+        live_token_cap=350_000,
+    )
+    live, other = new_request(LIVE), new_request(TENANT)
+
+    assert asyncio.run(job.run(live, asyncio.Event())) == "done"
+    assert asyncio.run(job.run(other, asyncio.Event())) == "done"
+
+    first = model.requests[0]
+    assert (first.system, first.prompt_sha, first.report) == (
+        LIVE_SYSTEM,
+        LIVE_PROMPT_SHA,
+        LiveReportDraft,
+    )
+    assert [spec.name for spec in first.tools] == [spec.name for spec in LIVE_SPECS]
+    # Live triage runs under its own token cap, the sim under the eval's.
+    assert (first.budget.remaining, sim.requests[0].budget.remaining) == (350_000, 150_000)
+    assert [(ctx.app, ctx.prompt_sha) for ctx in seen] == [("freight-audit", LIVE_PROMPT_SHA)]
+    assert prompt_shas(engine, live.investigation_id) == {LIVE_PROMPT_SHA}
+    assert prompt_shas(engine, other.investigation_id) == {PROMPT_SHA}
+    message = report_message(engine, live.investigation_id)
+    assert (message.schema_version, message.verdict) == (2, "real")
+    assert [m.model_dump(mode="json") for m in message.models] == [
+        {
+            "part": "triage",
+            "provider": "scripted",
+            "model": "scripted",
+            "calls": 2,
+            "failed": 0,
+            "reason": None,
+        }
+    ]
+    assert message.report.hypotheses[0].service == "postgres"
+    # A simulated incident has no verdict, and its models are listed too.
+    sim_message = report_message(engine, other.investigation_id)
+    assert (sim_message.verdict, [m.calls for m in sim_message.models]) == (None, [4])
+
+
+def test_live_triage_runs_on_its_own_daily_budget(engine: Engine) -> None:
+    switch(engine, "live", True)
+    with engine.begin() as conn:
+        # Past the sim's budget of 1,000,000 tokens, far under live triage's.
+        conn.execute(insert(AiUsage).values(day=UTC_TODAY, tokens=2_000_000))
+    job = make_job(
+        engine,
+        Tools().all(),
+        live_tenants=APPS,
+        live_tools=snapshot_tool([]),
+        live_model=ScriptedModel([VERDICT]),
+        live_daily_token_budget=25_000_000,
+    )
+
+    assert asyncio.run(job.run(new_request(TENANT), asyncio.Event())) == "parked"
+    assert asyncio.run(job.run(new_request(LIVE), asyncio.Event())) == "done"
+
+
+def live_router(engine: Engine) -> Router:
+    """Live triage's chain on the real limiter and spent(): Claude, then Gemini, then NIM."""
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        with engine.connect() as conn:
+            return spent(conn, role, worst_usd)
+
+    unused = cast("Provider", object())
+    return Router(
+        Binding(GEMINI, cast("Provider", Reporting())),
+        Binding(NIM, unused),
+        Binding(SMALL, unused),
+        fallback_on_rate_limit=True,
+        limiter=Limiter(is_spent),
+        claude=Binding(TRIAGE, unused),
+        claude_first=True,
+    )
+
+
+def test_a_skipped_claude_is_named_in_the_report_and_back_once_its_reason_ends(
+    engine: Engine,
+) -> None:
+    switch(engine, "live", True)
+    switch(engine, "claude", False)
+    job = make_job(
+        engine,
+        Tools().all(),
+        live_tenants=APPS,
+        live_tools=snapshot_tool([]),
+        live_model=live_router(engine),
+    )
+    request = new_request(LIVE)
+
+    assert asyncio.run(job.run(request, asyncio.Event())) == "done"
+
+    message = report_message(engine, request.investigation_id)
+    skipped = "claude-haiku-5-5 skipped: Claude is switched off (agent.switches)"
+    assert [m.model_dump(mode="json") for m in message.models] == [
+        {
+            "part": "triage",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "calls": 0,
+            "failed": 1,
+            "reason": skipped,
+        },
+        {
+            "part": "triage",
+            "provider": "gemini",
+            "model": "gemini-3.5-flash-lite",
+            "calls": 1,
+            "failed": 0,
+            "reason": None,
+        },
+    ]
+    # A call the agent skipped stops nothing once its reason ends: Claude answers at once again.
+    switch(engine, "claude", True)
+    with engine.connect() as conn:
+        assert spent(conn, TRIAGE) is None
+
+
+def claude_spend(engine: Engine, model: str, output_tokens: int) -> None:
+    """An Anthropic call today that produced this many output tokens and read no input."""
+    inv = uuid4()
+    with engine.begin() as conn:
+        conn.execute(insert(Investigation).values(id=inv))
+        conn.execute(
+            insert(ModelCall).values(
+                investigation_id=inv,
+                role="primary",
+                provider="anthropic",
+                model=model,
+                outcome="ok",
+                input_tokens=0,
+                output_tokens=output_tokens,
+                cached_tokens=0,
+                thought_tokens=0,
+                latency_ms=900,
+            )
+        )
+
+
+def test_the_triage_cap_counts_today_s_claude_spend_and_each_call_s_worst_case(
+    engine: Engine,
+) -> None:
+    claude_spend(engine, "claude-haiku-5-5", 780_000)  # $0.39 at $0.50 per million out
+    with engine.connect() as conn:
+        assert "triage cap of $0.40" in (spent(conn, TRIAGE, 0.02) or "")
+        assert spent(conn, TRIAGE, 0.005) is None
+        # Only roles with a cap are held to it.
+        assert spent(conn, replace(TRIAGE, daily_usd=None), 1.0) is None
+    with engine.begin() as conn:
+        conn.execute(update(ModelCall).values(created_at=ModelCall.created_at - timedelta(days=1)))
+    with engine.connect() as conn:
+        # Yesterday's spend (UTC) no longer counts.
+        assert spent(conn, TRIAGE, 0.02) is None
+    claude_spend(engine, "claude-opus-5-5", 1)
+    with engine.connect() as conn:
+        # A model without a price cannot be checked against the cap, so Claude waits.
+        assert "claude-opus-5-5" in (spent(conn, TRIAGE, 0.0) or "")

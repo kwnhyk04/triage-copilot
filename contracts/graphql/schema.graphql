@@ -59,6 +59,39 @@ type Investigation {
   proposedActions: [ProposedAction!]!
   "In execution order."
   steps: [Step!]!
+  """
+  A live triage's verdict; null until the report, for simulated incidents, for a report written
+  after a stop, and for reports recorded before verdicts existed.
+  """
+  verdict: Verdict
+  "Every model asked, in the order first asked; empty until the report, and for older reports."
+  models: [ModelUse!]!
+}
+
+"Whether a live alert shows an incident a human must look at. NOT_REAL never hides the alert."
+enum Verdict {
+  REAL
+  NOT_REAL
+}
+
+"A model asked during an investigation, for one part of the work."
+type ModelUse {
+  part: ModelPart!
+  provider: String!
+  model: String!
+  "Requests it answered."
+  calls: Int!
+  "Requests it did not answer, and requests skipped before they reached it."
+  failed: Int!
+  "Why the last of those failed or was skipped; null when it answered every request."
+  reason: String
+}
+
+enum ModelPart {
+  "The investigation's turns."
+  TRIAGE
+  "Log page summaries."
+  SUMMARY
 }
 
 enum InvestigationStatus {

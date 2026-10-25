@@ -53,6 +53,8 @@ class ToolContext:
     token_allowance: int
     # The investigation's prompt sha, which the tool's own model calls record.
     prompt_sha: str
+    # A live tenant's app (settings.LiveApp), whose catalog the live tools read; None for the sim.
+    app: str | None = None
 
 
 @dataclass(frozen=True)
@@ -260,7 +262,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 class Tools:
     def __init__(
         self,
-        sim: httpx2.AsyncClient,
+        # None for live triage's tools, which never query the sim.
+        sim: httpx2.AsyncClient | None,
         alerts: AlertContextClient,
         runbooks: RunbookSearch | None,
         summarize: Summarize | None,
@@ -298,7 +301,7 @@ class Tools:
         ]
         for alert in group.alerts[:20]:
             labels = ", ".join(f"{k}={v}" for k, v in sorted(alert.labels.root.items()))
-            started = _relative(alert.starts_at, ctx.fired_at)
+            started = relative(alert.starts_at, ctx.fired_at)
             lines.append(f"- {alert.status} since {started}: {labels}")
             notes = alert.annotations.root if self.annotations and alert.annotations else {}
             lines.extend(
@@ -319,7 +322,7 @@ class Tools:
         body = await self._get("/api/v1/query_range", params)
         series: list[dict[str, Any]] = body["data"]["result"]
         if not series:
-            window = f"{_relative(start, ctx.fired_at)} to {_relative(end, ctx.fired_at)}"
+            window = f"{relative(start, ctx.fired_at)} to {relative(end, ctx.fired_at)}"
             return f"No series match {query.query} from {window} around the alert."
         lines: list[str] = []
         fired = ctx.fired_at.timestamp()
@@ -390,7 +393,7 @@ class Tools:
             params["cursor"] = query.cursor
         body = await self._get("/api/v1/deploys", params)
         lines = [
-            f"{d['at']} ({_relative(datetime.fromisoformat(d['at']), ctx.fired_at)}) "
+            f"{d['at']} ({relative(datetime.fromisoformat(d['at']), ctx.fired_at)}) "
             f"{d['service']} {d['previous_version']} -> {d['version']} by {d['author']}: "
             f"{d['change']}"
             for d in body["deploys"]
@@ -419,6 +422,8 @@ class Tools:
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         """A sim response; 4xx is the model's to fix, 5xx is missing evidence."""
+        if self.sim is None:
+            raise ToolUnavailable("this tool set has no sim")
         response = await self.sim.get(path, params=params)
         try:
             data: object = response.json()
@@ -447,7 +452,7 @@ def _at(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _relative(moment: datetime, fired_at: datetime) -> str:
+def relative(moment: datetime, fired_at: datetime) -> str:
     return _offset((moment - fired_at).total_seconds())
 
 

@@ -106,6 +106,67 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     }
   });
 
+  it('investigates 30 groups a tenant a UTC day, records why the rest are not, and digests them', async () => {
+    const { tenantId } = await newTenant(db.sql);
+    const intake = createIntake(db.sql, () => undefined, 100, 30);
+    const key = '{}:{app="freight-audit"}';
+    const store = async (alert: string, status = 'firing') => {
+      const { group_id } = await intake(tenantId, webhook(key, [{ alert, status }]));
+      // Five minutes pass, so the next alert opens the next group.
+      await db.sql`
+        UPDATE gateway.alert_groups SET window_start = window_start - interval '5 minutes'
+        WHERE id = ${group_id}`;
+    };
+    for (let n = 0; n < 32; n++) await store(`storm-${String(n)}`);
+    await store('late', 'resolved');
+    const groups = () => db.sql<{ status: string; reason: string | null; alerts: number }[]>`
+      SELECT status, not_investigated AS reason,
+             (SELECT count(*)::int FROM gateway.alerts a WHERE a.group_id = g.id) AS alerts
+      FROM gateway.alert_groups g WHERE tenant_id = ${tenantId} ORDER BY created_at, id`;
+    const today = await groups();
+    expect(today.slice(0, 30).every((g) => g.status === 'queued' && g.reason === null)).toBe(true);
+    expect(today.slice(30).map((g) => [g.status, g.reason])).toEqual([
+      ['queued_not_investigated', 'daily_cap'],
+      ['queued_not_investigated', 'daily_cap'],
+      ['queued_not_investigated', 'resolved'],
+    ]);
+    // Every alert is recorded, investigated or not.
+    expect(today.map((g) => g.alerts)).toEqual(Array.from({ length: 33 }, () => 1));
+
+    // The digest lists the day's uninvestigated groups, with why and what they hold.
+    const day = new Date().toISOString().slice(0, 10);
+    const [tenant] = await db.sql<{ name: string }[]>`
+      SELECT name FROM gateway.tenants WHERE id = ${tenantId}`;
+    const digest = JSON.parse((await cli('digest', day)).stdout) as {
+      day: string;
+      tenants: {
+        tenant: string;
+        investigated: number;
+        not_investigated: { reason: string; alerts: number; names: string[] }[];
+      }[];
+    };
+    const listed = digest.tenants.find((t) => t.tenant === tenant?.name);
+    expect(digest.day).toBe(day);
+    expect(listed?.investigated).toBe(30);
+    expect(listed?.not_investigated.map((g) => [g.reason, g.alerts, g.names])).toEqual([
+      ['daily_cap', 1, ['HighErrorRate']],
+      ['daily_cap', 1, ['HighErrorRate']],
+      ['resolved', 1, ['HighErrorRate']],
+    ]);
+
+    // A new UTC day starts a new count; a tenant past its 5-minute cap keeps that reason.
+    await db.sql`
+      UPDATE gateway.alert_groups SET created_at = created_at - interval '1 day'
+      WHERE tenant_id = ${tenantId}`;
+    await intake(tenantId, webhook(key, [{ alert: 'tomorrow' }]));
+    const burst = createIntake(db.sql, () => undefined, 1, 30);
+    await burst(tenantId, webhook('{}:{app="other"}', [{ alert: 'busy' }]));
+    expect((await groups()).slice(-2).map((g) => [g.status, g.reason])).toEqual([
+      ['queued', null],
+      ['queued_not_investigated', 'burst'],
+    ]);
+  });
+
   it('puts the alerts of one window in one group per group key, whatever order their labels are in', async () => {
     const app = await buildApp({
       config: APP_CONFIG,

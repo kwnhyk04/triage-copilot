@@ -54,7 +54,7 @@ from agent.settings import Role
 from agent.steps import StepRecordedV2, TokenUsage
 from agent.tools import Tool, ToolContext, ToolResult, Tools
 from py_clients.clients import AlertContextClient
-from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
+from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 from py_clients.generated.messages.step_recorded_v3_schema import StepRecordedV3
 from sim.main import Settings as SimSettings
 from sim.main import create_apps
@@ -546,7 +546,12 @@ def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(
     assert kinds == ["step-recorded"] * (events - 1) + ["report-recorded"]
     seqs = [StepRecordedV3.model_validate(body).seq for _, body in received[:-1]]
     assert seqs == sorted(seqs)
-    assert ReportRecordedV1.model_validate(received[-1][1]).status.value == "awaiting_approval"
+    # ReportRecorded v2: a simulated incident has no verdict, and its models come from model_calls.
+    message = ReportRecordedV2.model_validate(received[-1][1])
+    assert (message.status.value, message.verdict) == ("awaiting_approval", None)
+    assert [(m.part.value, m.model, m.calls, m.failed) for m in message.models] == [
+        ("triage", "planned", 4, 0)
+    ]
 
 
 def test_a_refused_proposal_is_not_stored_and_the_model_learns_why(engine: Engine) -> None:

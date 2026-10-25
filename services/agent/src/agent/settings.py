@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
+from agent.pricing import RATES
 from py_config import EnvSettings
 from py_telemetry import LogLevel
 
@@ -37,6 +38,8 @@ class Role:
     rpd: int
     api_key: str | None = field(default=None, repr=False)
     until: date | None = None
+    # Live triage's Claude only: what it may spend in a UTC day, in US dollars (agent.pricing).
+    daily_usd: float | None = None
 
 
 class Settings(EnvSettings):
@@ -66,6 +69,10 @@ class Settings(EnvSettings):
     # Tenants whose alerts are real incidents, each with the app it watches, as JSON
     # {"<tenant uuid>": "freight-audit"}; every other tenant's alerts come from the sim.
     live_tenants: dict[UUID, LiveApp] = Field(default_factory=dict[UUID, LiveApp])
+    # Live triage's own token cap and daily budget, so Claude is never cut off mid-triage (sized
+    # from Haiku's second test-split run) and the sim's runs keep the eval's.
+    live_investigation_token_cap: Annotated[int, Field(ge=60_000, multiple_of=1_000)] = 350_000
+    live_daily_ai_token_budget: Annotated[int, Field(ge=0)] = 25_000_000
     # Also write steps to investigation_steps_p while it is partitioned online (docs/migrations.md).
     steps_dual_write: bool = False
     log_level: LogLevel = "info"
@@ -97,6 +104,11 @@ class Settings(EnvSettings):
     llm_claude_model: str = "claude-haiku-5-5"
     llm_claude_rpm: Annotated[int, Field(ge=0)] = 50
     llm_claude_until: date = date(2026, 11, 10)
+    # Live triage asks Claude first, while ANTHROPIC_API_KEY is set and before LLM_CLAUDE_UNTIL,
+    # then the free chain. A Claude call runs only if today's Claude spend (UTC) plus the call's
+    # worst case stays within LLM_TRIAGE_DAILY_USD.
+    llm_triage_model: str = "claude-haiku-5-5"
+    llm_triage_daily_usd: Annotated[float, Field(ge=0)] = 0.40
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None
@@ -105,6 +117,14 @@ class Settings(EnvSettings):
     # are on, so fastembed never falls back to a temp dir on C:.
     fastembed_cache_path: Path | None = None
     runbooks_dir: Path = Path("runbooks")
+
+    @field_validator("llm_triage_model")
+    @classmethod
+    def _priced(cls, model: str) -> str:
+        # The dollar cap cannot be checked without the model's prices.
+        if model not in RATES:
+            raise ValueError(f"takes a model agent/pricing.py has prices for: {', '.join(RATES)}")
+        return model
 
     @model_validator(mode="after")
     def _needs_for_model_calls(self) -> "Settings":
@@ -134,6 +154,23 @@ class Settings(EnvSettings):
             rpd=getattr(self, f"llm_{name}_rpd"),
             api_key=secret.get_secret_value() if secret else None,
             until=self.llm_claude_until if provider == "anthropic" else None,
+        )
+
+    def triage(self) -> Role | None:
+        """Live triage's Claude, first in its chain, when ANTHROPIC_API_KEY is set."""
+        secret = self.anthropic_api_key
+        if secret is None:
+            return None
+        return Role(
+            name="primary",
+            provider="anthropic",
+            model=self.llm_triage_model,
+            base_url=None,
+            rpm=self.llm_claude_rpm,
+            rpd=0,
+            api_key=secret.get_secret_value(),
+            until=self.llm_claude_until,
+            daily_usd=self.llm_triage_daily_usd,
         )
 
     def claude(self) -> Role | None:

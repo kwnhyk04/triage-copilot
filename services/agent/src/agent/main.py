@@ -14,6 +14,7 @@ from sqlalchemy import Engine, create_engine, text
 from agent.api import add_internal_api
 from agent.consumer import Consumer, sqs_client
 from agent.job import Job
+from agent.live import live_tools
 from agent.llm import Binding, Limiter, Router, spent
 from agent.model import Model, ScriptedModel
 from agent.outbox import Relay, sqs_sender
@@ -32,23 +33,42 @@ log = logging.getLogger(__name__)
 SIM_TIMEOUT = 10.0
 
 
-def make_router(settings: Settings, engine: Engine) -> Router:
-    """The primary, fallback and small roles, and Claude when it is on, each under its limits."""
+def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
+    """The sim's router (the primary, fallback and small roles, and Claude when it is on) and live
+    triage's (Claude first while ANTHROPIC_API_KEY is set, then the same free roles). They share
+    one limiter, so a model's minute counts every request to it."""
 
-    def is_spent(role: Role) -> str | None:
+    def is_spent(role: Role, worst_usd: float) -> str | None:
         with engine.connect() as conn:
-            return spent(conn, role)
+            return spent(conn, role, worst_usd)
 
-    primary, fallback, small = (settings.role(n) for n in ("primary", "fallback", "small"))
-    claude = settings.claude()
-    return Router(
-        Binding(primary, make_provider(primary)),
-        Binding(fallback, make_provider(fallback)),
-        Binding(small, make_provider(small)),
-        fallback_on_rate_limit=settings.llm_fallback_on_rate_limit,
-        limiter=Limiter(is_spent),
+    primary, fallback, small = (
+        Binding(role, make_provider(role))
+        for role in (settings.role(n) for n in ("primary", "fallback", "small"))
+    )
+    limiter = Limiter(is_spent)
+    claude, triage = settings.claude(), settings.triage()
+    on_rate_limit = settings.llm_fallback_on_rate_limit
+    sim = Router(
+        primary,
+        fallback,
+        small,
+        fallback_on_rate_limit=on_rate_limit,
+        limiter=limiter,
         claude=Binding(claude, make_provider(claude)) if claude else None,
     )
+    if triage is None and settings.live_tenants:
+        log.warning("live triage runs on the free models only: ANTHROPIC_API_KEY is not set")
+    live = Router(
+        primary,
+        fallback,
+        small,
+        fallback_on_rate_limit=on_rate_limit,
+        limiter=limiter,
+        claude=Binding(triage, make_provider(triage)) if triage else None,
+        claude_first=True,
+    )
+    return sim, live
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -63,9 +83,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     sqs = sqs_client(settings)
     relay = Relay(engine, sqs_sender(sqs, settings.agent_events_queue))
-    # With AI_ENABLED=false every investigation parks before its first model turn, so this
-    # placeholder is never asked for one.
-    model: Model = make_router(settings, engine) if settings.ai_enabled else ScriptedModel([])
+    # With AI_ENABLED=false every investigation parks before its first model turn, so these
+    # placeholders are never asked for one.
+    model: Model
+    live_model: Model
+    model, live_model = (
+        make_routers(settings, engine) if settings.ai_enabled else (ScriptedModel([]),) * 2
+    )
     sim = httpx2.AsyncClient(base_url=settings.sim_url, timeout=SIM_TIMEOUT)
     token = settings.agent_service_token.get_secret_value()
     alerts = AlertContextClient(settings.gateway_internal_url, token)
@@ -83,6 +107,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dual_write=settings.steps_dual_write,
         on_commit=relay.nudge,
         live_tenants=settings.live_tenants,
+        live_tools=live_tools(alerts, runbooks),
+        live_model=live_model,
+        live_token_cap=settings.live_investigation_token_cap,
+        live_daily_token_budget=settings.live_daily_ai_token_budget,
     )
     consumer = Consumer(
         sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight

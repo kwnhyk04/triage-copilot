@@ -1,0 +1,3 @@
+CREATE TYPE "gateway"."not_investigated_reason" AS ENUM('resolved', 'burst', 'daily_cap');--> statement-breakpoint
+ALTER TABLE "gateway"."alert_groups" ADD COLUMN "not_investigated" "gateway"."not_investigated_reason";--> statement-breakpoint
+ALTER TABLE "gateway"."alert_groups" ADD CONSTRAINT "alert_groups_reason_without_investigation" CHECK ("gateway"."alert_groups"."not_investigated" is null or "gateway"."alert_groups"."investigation_id" is null);

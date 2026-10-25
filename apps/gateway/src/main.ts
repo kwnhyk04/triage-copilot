@@ -34,7 +34,12 @@ const app = await buildApp({
   updates: createUpdates(),
   decide: createDecide(db.sql, nudge),
   findTenant: createFindTenant(db.sql),
-  intake: createIntake(db.sql, nudge, config.MAX_NEW_INVESTIGATIONS),
+  intake: createIntake(
+    db.sql,
+    nudge,
+    config.MAX_NEW_INVESTIGATIONS,
+    config.MAX_DAILY_INVESTIGATIONS,
+  ),
   listInvestigations: createListInvestigations(db.sql),
 });
 const internal = buildInternalApp({

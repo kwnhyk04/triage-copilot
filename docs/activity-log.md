@@ -19,6 +19,43 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-25: P1.7 to P1.9 (ReportRecorded v2, live triage, flood guard) on branch p1-7-live-triage
+
+- What happened: The user asked for P1.7, P1.8 and P1.9 together on a new branch `p1-7-live-triage` from the updated main, one report at the end and one PR. Their rules: tests first with ScriptedModel and fixtures only; no live model call and no eval run; the frozen sim prompt test and the eval cache-key tests stay green; the `live` switch stays off; watch and the agent never run against the real FA or FL; files are edited with the editing tools only; take the recommended option on small decisions and list them (docs/memory.md, 2026-10-25); stop on a hook refusal, a needed key or a live model call (none came up); every check, then `make infra-down`.
+- Why: phase 1 of the real-incident plan (docs/todo.md).
+- What we did:
+  1. Checked and branched: `git fetch origin`, then `git status -sb` was clean and `git rev-parse main origin/main` printed `bca8e9f` (#14, the P1.4 to P1.6 merge) for both. Then `git switch -c p1-7-live-triage`.
+  2. P1.7, tests first: the Python and TypeScript contract tests (both versions through the union, v1 deprecated, v2's limits, the GraphQL enums agreeing) and a mirror test in `events.int.test.ts`. RED: `No module named 'py_clients.generated.messages.report_recorded_schema'`, `Cannot read properties of undefined (reading 'examples')`, and `invalid report-recorded.v1 message: ... schema_version must be equal to constant`. GREEN: the v2 schema and the union, the GraphQL fields, `make codegen`, `events.ts` on the union, `schema.ts` and gateway 0006 (`db:generate`).
+  3. P1.8 and P1.9, tests first: `test_live.py` (prompt sha, specs, `read_snapshot`, catalog `get_dependencies`, prices), router and limiter tests in `test_llm.py`, job tests in `test_live_int.py`, the v2 report in `test_ai_loop_int.py`, the end-to-end and storm tests in `test_live_e2e_int.py`, the daily cap and digest in `intake.int.test.ts`, and watch's flap test. RED: `No module named 'agent.live'`, `No module named 'agent.pricing'`, the flap test seeing 8 posts instead of 5, and `column "not_investigated" does not exist`.
+  4. P1.8 code: `agent/live.py`, `agent/pricing.py`, the live settings and `Settings.triage()`, the Claude-first live router with the 60 s rule and the dollar cap in `spent()`, the `skipped` outcome (agent 0012), the job's per-kind `Prompt` with the live model, cap and budget, ReportRecorded v2 with `models` from `model_calls`, `main.py` wiring, masked provider text, and the agent's dependency on `watch` (`uv lock --offline`, `uv sync --offline`).
+  5. P1.9 code: `MAX_DAILY_INVESTIGATIONS` and the reason in `intake.ts` (gateway 0007), `createDigest` with `cli.ts digest` and `make digest`, and watch's flap limit in `poll.py`.
+  6. Wiring and docs: `.env.example`, Makefile, README, docs/ (todo, context, memory, migrations, this entry).
+  - Why this was the best option: each done check is a test that failed first; the sim's prompt, tools and eval keys are unchanged, and nothing touched a real app, key or model.
+- Small events:
+  - GateGuard refused the first edit of each file; stating the facts cleared each, as before. Not counted as a stop.
+  - Found and fixed, test first: a call the limiter refused was recorded as `quota_exhausted`, which kept Claude off until midnight Pacific after the `claude` switch came back on (docs/memory.md, 2026-10-25).
+  - My own test bugs, caught by the runs: `LIVE_TENANTS` keyed by text instead of UUID in the end-to-end test; a canary scan for the bare word "canary" matching a fixture URL; a local `report` in `test_ai_loop_int.py` shadowing the module's `report()` helper (pyright: "report is unbound"); expected texts in my own tests (an alert order, a sentence). Each fixed in the test.
+  - Mistake: my first edit of the `gateway()` helper left a junk line and reused the name of its temp file; I fixed it before any run.
+  - Mistake: `make contracts-check | tail` showed tail's exit code; I reran both contract checks reading `PIPESTATUS`.
+  - The first `make test-int` failed `test_partition_swap_while_a_writer_runs` once (58 passed). Why: not confirmed; my output filter dropped its assertion line, a mistake. What we did: ran it alone (passed, 61 s), then the whole pytest integration layer (59 passed), then `make test-int` again (exit 0). No code of this branch touches partitioning.
+  - Formatting: `ruff format` and `ruff check --fix` on the changed Python, the formatters' own edits.
+  - Infra: `make infra-up` started this project's three containers; the volumes stay, and no other project was touched.
+- Files:
+  - Contracts: `contracts/messages/report-recorded.v2.schema.json` and `report-recorded.schema.json` (new), `contracts/graphql/schema.graphql`, and the regenerated clients.
+  - Gateway: `src/{events,schema,intake,config,main,investigations,cli}.ts`, `drizzle/0006_report_v2.sql` and `0007_flood_guard.sql` with their snapshots, `package.json`, and the tests `events.int.test.ts`, `intake.int.test.ts`, `app.test.ts`.
+  - Agent: `src/agent/{live,pricing}.py` (new), `{job,llm,model,settings,tools,db,main}.py`, `migrations/versions/0012_model_calls_skipped.py` (new), `pyproject.toml`; tests `test_live.py`, `test_live_e2e_int.py` (new), `test_llm.py`, `test_live_int.py`, `test_ai_loop_int.py`, `test_parking_int.py` (the `gateway()` helper takes `extra` and `printed`).
+  - Watch: `src/watch/poll.py`, `tests/test_watch_poll.py`. Root: `uv.lock`, `Makefile`, `.env.example`, `README.md`, `packages/{py,ts}-clients` tests.
+- Validation, final run:
+  - `make lint` and `make typecheck`: exit 0 (lint rerun after the docs).
+  - `make test`: exit 0. pytest 576 passed (553 before); Jest gateway 43, ts-clients 43, web 3, ts-config 2. The frozen prompt (`2b91d4523fb028a6`) and the eval cache-key tests passed.
+  - `make test-int`: exit 0. Jest 7 suites and 36 tests; pytest 59 passed in 160.65 s.
+  - `make contracts-check` and `make contracts-breaking`: exit 0.
+  - No model call, no eval, no watch or agent run against a real app; the `live` switch was never turned on outside scratch databases.
+- Outstanding:
+  - `make migrate` (agent 0012, gateway 0006 and 0007) before the agent or gateway from this branch starts.
+  - The live triage follow-ups in docs/todo.md: no monthly cap in code, the cap check not serialized, the live prompt untested on a real model.
+  - Nothing is committed.
+
 ### 2026-10-25: P1.4 to P1.6 (watch: catalog, scrubber, hardened readers, poller) on branch p1-4-watch
 
 - What happened: The user asked for P1.4, P1.5 and P1.6 together on a new branch `p1-4-watch` from the updated main, with one report at the end and one PR. Their rules:

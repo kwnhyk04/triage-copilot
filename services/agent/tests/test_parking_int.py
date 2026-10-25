@@ -99,28 +99,40 @@ def ready(url: str) -> bool:
 
 
 @contextlib.contextmanager
-def gateway(queue_url: str, agent_url: str, internal_port: int | None = None) -> Generator[str]:
+def gateway(
+    queue_url: str,
+    agent_url: str,
+    internal_port: int | None = None,
+    *,
+    extra: dict[str, str] | None = None,
+    printed: list[str] | None = None,
+) -> Generator[str]:
     """The gateway process on the scratch database, sweeping every second.
 
     Its internal listener, for the executor, takes internal_port, or a free port of its own.
+    `extra` sets more of its environment, and `printed` gets its output once it stopped.
     """
     port = free_port()
-    env = os.environ | {
-        "GATEWAY_PORT": str(port),
-        "GATEWAY_INTERNAL_PORT": str(internal_port or free_port()),
-        "INVESTIGATIONS_QUEUE": queue_url.rsplit("/", 1)[1],
-        "ACTIONS_QUEUE": "actions-unused-by-these-tests.fifo",
-        # Never the dev queue: these agents publish no events, and the dev gateway owns those.
-        "AGENT_EVENTS_QUEUE": "agent-events-unused-by-these-tests.fifo",
-        "AGENT_URL": agent_url,
-        "AGENT_SERVICE_TOKEN": SERVICE_TOKEN,
-        "EXECUTOR_SERVICE_TOKEN": EXECUTOR_TOKEN,
-        "SWEEPER_INTERVAL_SECONDS": "1",
-        "MAX_NEW_INVESTIGATIONS": "5",
-        "APPROVER_API_KEY": APPROVER_KEY,
-        "GATEWAY_API_KEY": secrets.token_urlsafe(32),
-        "LOG_LEVEL": "warn",
-    }
+    env = (
+        os.environ
+        | {
+            "GATEWAY_PORT": str(port),
+            "GATEWAY_INTERNAL_PORT": str(internal_port or free_port()),
+            "INVESTIGATIONS_QUEUE": queue_url.rsplit("/", 1)[1],
+            "ACTIONS_QUEUE": "actions-unused-by-these-tests.fifo",
+            # Never the dev queue: these agents publish no events, and the dev gateway owns those.
+            "AGENT_EVENTS_QUEUE": "agent-events-unused-by-these-tests.fifo",
+            "AGENT_URL": agent_url,
+            "AGENT_SERVICE_TOKEN": SERVICE_TOKEN,
+            "EXECUTOR_SERVICE_TOKEN": EXECUTOR_TOKEN,
+            "SWEEPER_INTERVAL_SECONDS": "1",
+            "MAX_NEW_INVESTIGATIONS": "5",
+            "APPROVER_API_KEY": APPROVER_KEY,
+            "GATEWAY_API_KEY": secrets.token_urlsafe(32),
+            "LOG_LEVEL": "warn",
+        }
+        | (extra or {})
+    )
     command = [shutil.which("node") or "node", "--import", "./src/telemetry.ts", "src/main.ts"]
     url = f"http://127.0.0.1:{port}"
     with tempfile.TemporaryFile() as output:
@@ -139,6 +151,9 @@ def gateway(queue_url: str, agent_url: str, internal_port: int | None = None) ->
         finally:
             process.terminate()
             process.wait(10)
+            if printed is not None:
+                output.seek(0)
+                printed.append(output.read().decode(errors="replace"))
 
 
 def new_tenant() -> str:

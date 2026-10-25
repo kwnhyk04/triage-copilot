@@ -206,6 +206,8 @@ class ModelCall(Base):
             "model_exhausted",
             "credits_exhausted",
             "error",
+            # The agent sent no request (since 0012): spent() never reads it as a stop.
+            "skipped",
             name="model_call_outcome",
         )
     )

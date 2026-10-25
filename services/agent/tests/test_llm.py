@@ -30,6 +30,7 @@ from agent.model import (
     TurnRequest,
     Usage,
 )
+from agent.pricing import RATES, worst
 from agent.prompt import METRICS, SYSTEM
 from agent.providers import ProviderTurn
 from agent.settings import Role, RoleName
@@ -186,7 +187,7 @@ def test_the_limiter_waits_out_the_minute_and_refuses_a_spent_day() -> None:
         waits.append(seconds)
         now[0] += seconds
 
-    limiter = Limiter(lambda role: None, clock=lambda: now[0], sleep=sleep)
+    limiter = Limiter(lambda role, worst: None, clock=lambda: now[0], sleep=sleep)
     twice_a_minute = role("primary", "m", rpm=2)
 
     async def three() -> None:
@@ -196,7 +197,7 @@ def test_the_limiter_waits_out_the_minute_and_refuses_a_spent_day() -> None:
     asyncio.run(three())
     assert waits == [60.0]
 
-    spent_day = Limiter(lambda role: "it made its 500 requests for today (Pacific)")
+    spent_day = Limiter(lambda role, worst: "it made its 500 requests for today (Pacific)")
     with pytest.raises(QuotaExhausted) as raised:
         asyncio.run(spent_day.acquire(role("primary", "m", rpd=500)))
     assert str(raised.value) == "m skipped: it made its 500 requests for today (Pacific)"
@@ -272,11 +273,12 @@ def test_credits_gone_moves_the_turn_down_the_chain_and_says_so(
     ]
     assert any("credits" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
     # Once spent() reads that call, the limiter keeps Claude off without asking it.
-    claude_spent = Limiter(lambda r: "credits used up" if r.provider == "anthropic" else None)
+    claude_spent = Limiter(lambda r, w: "credits used up" if r.provider == "anthropic" else None)
     primary = Fake("primary", QuotaExhausted("day spent"))
     again = chain(primary, claude, Fake("fallback"), limiter=claude_spent)
     turn = asyncio.run(again.turn(REQUEST))
-    assert [c.outcome for c in turn.calls] == ["quota_exhausted", "quota_exhausted", "ok"]
+    # The provider's own "spent" stops its model; a call the agent skipped stops nothing.
+    assert [c.outcome for c in turn.calls] == ["quota_exhausted", "skipped", "ok"]
     assert len(claude.max_outputs) == 1
 
 
@@ -350,7 +352,7 @@ def test_a_rejected_key_or_a_refusal_moves_the_turn_down_the_chain_with_its_reas
 
 def test_a_skipped_model_records_why_it_was_skipped() -> None:
     expired = "its credits ended on 2026-10-01 (UTC)"
-    limiter = Limiter(lambda r: expired if r.provider == "anthropic" else None)
+    limiter = Limiter(lambda r, w: expired if r.provider == "anthropic" else None)
     claude = Fake("claude")
     router = chain(
         Fake("primary", QuotaExhausted("day spent")), claude, Fake("fallback"), limiter=limiter
@@ -359,14 +361,14 @@ def test_a_skipped_model_records_why_it_was_skipped() -> None:
     turn = asyncio.run(router.turn(REQUEST))
 
     assert [(c.model, c.outcome, c.error) for c in turn.calls[1:]] == [
-        ("claude-model", "quota_exhausted", f"claude-model skipped: {expired}"),
+        ("claude-model", "skipped", f"claude-model skipped: {expired}"),
         ("fallback-model", "ok", None),
     ]
     assert claude.max_outputs == []
 
 
 def test_every_call_records_the_prompt_sha_it_was_made_with() -> None:
-    skip_primary = Limiter(lambda r: "its day is spent" if r.name == "primary" else None)
+    skip_primary = Limiter(lambda r, w: "its day is spent" if r.name == "primary" else None)
     claude = Fake("claude", RateLimited("busy minute", retry_after=3))
     router = chain(Fake("primary"), claude, Fake("fallback"), limiter=skip_primary)
 
@@ -376,7 +378,7 @@ def test_every_call_records_the_prompt_sha_it_was_made_with() -> None:
     summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, "sha-of-the-log-prompt"))
 
     assert [(c.outcome, c.prompt_sha) for c in raised.value.calls] == [
-        ("quota_exhausted", SHA),
+        ("skipped", SHA),
         ("rate_limited", SHA),
     ]
     assert {c.prompt_sha for c in turn.calls} == {SHA}
@@ -442,6 +444,109 @@ def test_alert_context_shows_annotations_only_where_asked() -> None:
     assert "snapshot" not in shown
     # The sim's tools keep their results, so eval runs stay comparable.
     assert "summary" not in hidden
+
+
+# Live triage's Claude role, with the triage cap of $0.40 a UTC day.
+TRIAGE = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, daily_usd=0.40)
+
+
+def live(claude: Fake, primary: Fake, fallback: Fake, *, limiter: Limiter | None = None) -> Router:
+    """Live triage's chain: Claude first, then the free chain (Gemini, then the free fallback)."""
+    return Router(
+        Binding(role("primary", primary.model), primary),
+        Binding(role("fallback", fallback.model), fallback),
+        Binding(role("small", "small-model"), Fake("small")),
+        fallback_on_rate_limit=True,
+        limiter=limiter or Limiter(None),
+        claude=Binding(TRIAGE, claude),
+        claude_first=True,
+    )
+
+
+def test_live_triage_asks_claude_first_and_the_free_chain_after_it() -> None:
+    primary = Fake("primary")
+    turn = asyncio.run(live(Fake("claude"), primary, Fake("fallback")).turn(REQUEST))
+    assert (turn.model, primary.max_outputs) == ("claude-haiku-5-5", [])
+
+    for error in (
+        Refused("anthropic declined the request (category cyber)"),
+        KeyRejected("anthropic 401: the API key was rejected"),
+        CreditsExhausted("anthropic 402: credits or spend limit used up"),
+    ):
+        turn = asyncio.run(
+            live(Fake("claude", error), Fake("primary"), Fake("fallback")).turn(REQUEST)
+        )
+        assert [c.model for c in turn.calls] == ["claude-haiku-5-5", "primary-model"]
+        assert turn.model == "primary-model"
+    # With Gemini's day spent as well, the free fallback answers.
+    gemini_spent = Fake("primary", QuotaExhausted("gemini 429: daily quota spent"))
+    turn = asyncio.run(
+        live(Fake("claude", Refused("no")), gemini_spent, Fake("fallback")).turn(REQUEST)
+    )
+    assert turn.model == "fallback-model"
+
+
+def test_claude_s_429_is_waited_out_only_up_to_a_minute() -> None:
+    minute = Fake("claude", RateLimited("anthropic 429: rate limited", retry_after=60))
+    with pytest.raises(RateLimited):
+        asyncio.run(live(minute, Fake("primary"), Fake("fallback")).turn(REQUEST))
+    for retry_after in (61, None):
+        busy = Fake("claude", RateLimited("anthropic 429: rate limited", retry_after=retry_after))
+        turn = asyncio.run(live(busy, Fake("primary"), Fake("fallback")).turn(REQUEST))
+        assert [(c.model, c.outcome) for c in turn.calls] == [
+            ("claude-haiku-5-5", "rate_limited"),
+            ("primary-model", "ok"),
+        ]
+
+
+def test_live_summaries_ask_claude_first() -> None:
+    router = live(Fake("claude"), Fake("primary"), Fake("fallback"))
+    summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, SHA))
+    assert summary == "- 40 timeouts"
+    assert [(c.role, c.model) for c in calls] == [("small", "claude-haiku-5-5")]
+
+
+def test_the_triage_cap_is_checked_against_each_call_s_worst_case() -> None:
+    asked: list[tuple[str, float]] = []
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        asked.append((role.model, worst_usd))
+        over = role.daily_usd is not None and worst_usd > 0.002
+        return "its worst case passes the triage cap" if over else None
+
+    claude = Fake("claude")
+    router = live(claude, Fake("primary"), Fake("fallback"), limiter=Limiter(is_spent))
+    turn = asyncio.run(router.turn(REQUEST))
+
+    limits = REQUEST.budget.limits("claude-haiku-5-5")
+    assert limits is not None
+    # Every input token at the cache-write rate, and the whole output allowance.
+    expected = worst(RATES["claude-haiku-5-5"], *limits)
+    assert asked == [("claude-haiku-5-5", pytest.approx(expected)), ("primary-model", 0.0)]
+    assert [(c.model, c.outcome) for c in turn.calls] == [
+        ("claude-haiku-5-5", "skipped"),
+        ("primary-model", "ok"),
+    ]
+    assert claude.max_outputs == []
+
+
+def test_provider_text_is_masked_before_it_is_recorded_or_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    planted = "sk-ant-canarycanarycanary01"
+    gone = CreditsExhausted(f"anthropic 402: credits or spend limit used up: {planted}")
+    leaky = ModelError(f"nvidia 400: bad request for https://nim.example/v1?key={planted}")
+    with caplog.at_level(logging.WARNING, logger="agent.llm"):
+        turn = asyncio.run(
+            live(Fake("claude", gone), Fake("primary"), Fake("fallback")).turn(REQUEST)
+        )
+        with pytest.raises(ModelError) as raised:
+            asyncio.run(router(Fake("primary", leaky), Fake("fallback")).turn(REQUEST))
+    recorded = [c.error or "" for c in [*turn.calls, *raised.value.calls]]
+    assert "[key]" in recorded[0]
+    assert not [
+        text for text in [*recorded, *map(str, map(vars, caplog.records))] if planted in text
+    ]
 
 
 @pytest.mark.parametrize("service", ["../../../admin/state", "..", "a/b", "orders db"])

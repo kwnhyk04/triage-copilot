@@ -388,6 +388,35 @@ describe('agent events against Postgres and ElasticMQ', () => {
     expect((await mirror(id)).steps).toEqual(steps);
   });
 
+  it('stores a v2 report with its verdict and models, and a v1 report with neither', async () => {
+    const { investigationId: live } = await group();
+    const [type, v1] = investigation(live)[4];
+    const models = [
+      {
+        part: 'triage',
+        provider: 'anthropic',
+        model: 'claude-haiku-5-5',
+        calls: 0,
+        failed: 1,
+        reason: "QuotaExhausted: claude-haiku-5-5 skipped: today's triage cap is spent",
+      },
+      { part: 'triage', provider: 'gemini', model: 'm', calls: 4, failed: 0, reason: null },
+    ];
+    await put([type, { ...v1, schema_version: 2, verdict: 'real', models }]);
+    const { investigationId: old } = await group();
+    const v1Report = investigation(old)[4];
+    await put(v1Report);
+    const stored = async (id: string) => {
+      const [row] = await db.sql<{ verdict: string | null; models: unknown; report: unknown }[]>`
+        SELECT verdict, models, report FROM gateway.investigation_reports
+        WHERE investigation_id = ${id}`;
+      return row;
+    };
+    expect(await stored(live)).toEqual({ verdict: 'real', models, report: v1.report });
+    expect(await stored(old)).toEqual({ verdict: null, models: null, report: v1Report[1].report });
+    expect((await mirror(live)).actions).toHaveLength(1);
+  });
+
   it('keeps the first report: a second, different one adds no actions and moves no group', async () => {
     const { investigationId: id } = await group();
     const [, , , , report] = investigation(id);

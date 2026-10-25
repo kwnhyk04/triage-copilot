@@ -2,6 +2,7 @@
 //   pnpm --filter @triage/gateway tenant:token <tenant name>   issues the tenant's webhook token
 //   pnpm --filter @triage/gateway outbox:replay                re-queues parked outbox messages
 //   pnpm --filter @triage/gateway events:replay                moves the agent events DLQ back
+//   pnpm --filter @triage/gateway digest [YYYY-MM-DD]           a UTC day's uninvestigated groups
 import { randomBytes } from 'node:crypto';
 
 import { loadConfig, z } from '@triage/ts-config';
@@ -9,6 +10,7 @@ import { loadConfig, z } from '@triage/ts-config';
 import { connectDb } from './db.ts';
 import { replayDeadLetters } from './events.ts';
 import { sha256 } from './intake.ts';
+import { createDigest } from './investigations.ts';
 import { replayParked, sqsClient } from './outbox.ts';
 
 const settings = z.object({
@@ -44,6 +46,10 @@ try {
     } finally {
       sqs.destroy();
     }
+  } else if (command === 'digest' && (name === undefined || /^\d{4}-\d\d-\d\d$/.test(name))) {
+    // Today (UTC) unless a day is given.
+    const day = name ?? new Date().toISOString().slice(0, 10);
+    console.log(JSON.stringify(await createDigest(sql)(day), null, 2));
   } else if (command === 'tenant-token' && name) {
     // Creates the tenant if it is new and replaces any earlier token; only the hash is stored.
     const token = randomBytes(32).toString('base64url');
@@ -55,7 +61,8 @@ try {
     console.log(token);
   } else {
     console.error(
-      'usage: node src/cli.ts tenant-token <tenant name> | outbox-replay | events-replay',
+      'usage: node src/cli.ts tenant-token <tenant name> | outbox-replay | events-replay' +
+        ' | digest [YYYY-MM-DD]',
     );
     process.exitCode = 2;
   }
