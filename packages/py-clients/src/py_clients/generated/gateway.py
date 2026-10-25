@@ -71,13 +71,22 @@ class InvestigationStatus(StrEnum):
     cancelled = "cancelled"
 
 
-class InvestigationSummary(BaseModel):
-    id: UUID
-    group_id: Annotated[UUID, Field(description="Alert group that triggered the investigation.")]
-    title: str
-    status: InvestigationStatus
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
+class Verdict(StrEnum):
+    """
+    Whether a live alert shows an incident a human must look at.
+    """
+
+    real = "real"
+    not_real = "not_real"
+
+
+class ModelPart(StrEnum):
+    """
+    triage: the investigation's turns; summary: log page summaries.
+    """
+
+    triage = "triage"
+    summary = "summary"
 
 
 class RootCauseClass(StrEnum):
@@ -102,7 +111,13 @@ class Evidence(BaseModel):
     """
 
     tool_call_id: Annotated[str, Field(description="Id of the tool result the excerpt comes from.")]
-    excerpt: Annotated[str, Field(max_length=2000)]
+    excerpt: Annotated[
+        str,
+        Field(
+            description="The start of the tool result; empty when the gateway has no result for the id, as once a live investigation's steps are purged after 30 days.",
+            max_length=2000,
+        ),
+    ]
 
 
 class ActionKind(StrEnum):
@@ -241,17 +256,50 @@ class StoredAlert(BaseModel):
     status: AlertStatus
 
 
-class InvestigationPage(BaseModel):
-    items: list[InvestigationSummary]
-    next_cursor: Annotated[
+class InvestigationSummary(BaseModel):
+    id: UUID
+    group_id: Annotated[UUID, Field(description="Alert group that triggered the investigation.")]
+    title: str
+    status: InvestigationStatus
+    verdict: Annotated[
+        Verdict | None,
+        Field(
+            description="A live triage's verdict; null until the report, for a simulated incident, for a report the agent wrote itself after a stop, and for reports recorded before verdicts existed. not_real never hides the alert."
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class ModelUse(BaseModel):
+    """
+    A model asked during an investigation, for one part of the work.
+    """
+
+    part: ModelPart
+    provider: Annotated[str, Field(max_length=100, min_length=1)]
+    model: Annotated[str, Field(max_length=200, min_length=1)]
+    calls: Annotated[int, Field(description="Requests it answered.", ge=0)]
+    failed: Annotated[
+        int,
+        Field(
+            description="Requests it did not answer, and requests the agent skipped before they reached it.",
+            ge=0,
+        ),
+    ]
+    reason: Annotated[
         str | None,
-        Field(description="Pass as cursor to read the next page; null on the last page."),
+        Field(
+            description="Why the last of those failed or was skipped; null when it answered every request.",
+            max_length=500,
+        ),
     ]
 
 
 class Hypothesis(BaseModel):
     rank: Annotated[int, Field(description="1 is the most likely root cause.", ge=1)]
     root_cause_class: RootCauseClass
+    service: Annotated[str, Field(description="The service where the root cause lives.")]
     summary: str
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
     evidence: list[Evidence]
@@ -329,6 +377,14 @@ class AlertContext(BaseModel):
     alerts: Annotated[list[StoredAlert], Field(description="Oldest first, at most 200.")]
 
 
+class InvestigationPage(BaseModel):
+    items: list[InvestigationSummary]
+    next_cursor: Annotated[
+        str | None,
+        Field(description="Pass as cursor to read the next page; null on the last page."),
+    ]
+
+
 class Step(BaseModel):
     """
     One step of the agent loop.
@@ -337,7 +393,9 @@ class Step(BaseModel):
     seq: Annotated[int, Field(description="Position in the investigation, starting at 1.", ge=1)]
     kind: StepKind
     summary: str
-    tool_call: Annotated[ToolCall | None, Field(description="Set on tool_call steps only.")]
+    tool_call: Annotated[
+        ToolCall | None, Field(description="Set on tool_call steps once the call has returned.")
+    ]
     recorded_at: AwareDatetime
 
 
@@ -346,8 +404,30 @@ class Investigation(InvestigationSummary):
         str | None, Field(description="Final report summary; null until the investigation ends.")
     ]
     tokens_used: Annotated[
-        int, Field(description="Model tokens spent so far, input and output combined.", ge=0)
+        int,
+        Field(
+            description="Model tokens of the investigation's turns, input and output combined, as its stored steps record them.",
+            ge=0,
+        ),
     ]
     hypotheses: Annotated[list[Hypothesis], Field(description="Best first.")]
+    missing_evidence: Annotated[
+        list[str],
+        Field(
+            description="Evidence the agent could not get, such as a tool that failed; empty until the report."
+        ),
+    ]
+    partial: Annotated[
+        bool,
+        Field(
+            description="True when the agent stopped before the model reported, at a limit, and wrote the report itself; false until the report."
+        ),
+    ]
+    models: Annotated[
+        list[ModelUse],
+        Field(
+            description="Every model asked, per part of the work, in the order first asked; empty until the report, and for reports recorded before models were listed."
+        ),
+    ]
     proposed_actions: list[ProposedAction]
     steps: Annotated[list[Step], Field(description="In execution order.")]

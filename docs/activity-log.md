@@ -19,6 +19,76 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-25: P1.10 and P1.11 (report view, retention) and TC's monthly Claude cap on branch p1-10-reports
+
+- What happened: The user asked for P1.10 and P1.11 together on a new branch `p1-10-reports` from the updated main, with one report at the end and one PR:
+  - P1.10: serve `GET /v1/investigations/{id}`, and a minimal read-only web list and detail (verdict, cause, evidence, models, fallback notes), behind the existing auth.
+  - P1.11: purge live snapshots and steps after 30 days.
+  - TC's $15 monthly Claude cap beside the daily caps, if small; otherwise listed for P2.1. It was small, so it is built.
+  - Their rules: tests first; no live model call and no eval run; the frozen sim prompt and the eval cache-key tests stay green; the `live` switch stays off; the real FA and FL untouched; files edited with the editing tools only; small decisions taken and listed (docs/memory.md, 2026-10-25); every check, then `make infra-down`.
+- Why: phase 1 of the real-incident plan (docs/todo.md). The monthly cap was the open P1.8 follow-up.
+- What we did:
+  1. Checked and branched: `git fetch origin`; `git status --short --branch` was clean on main, and `git rev-parse main origin/main` printed `26d7d6e` (#15, the P1.7 to P1.9 merge) for both. Then `git switch -c p1-10-reports`.
+  2. Contract, tests first: type-level checks in `contracts.test.ts` that REST's `Verdict`, `ModelPart` and `ModelUse` equal the message's. RED: `Property 'Verdict' does not exist`. GREEN: gateway API 0.6.0 in `contracts/openapi/gateway.yaml`, then `make codegen`. `make contracts-breaking`: "No breaking changes to report".
+  3. P1.10 in the gateway, tests first.
+     - A route test in `app.test.ts`: 200, 404, and a 400 for an id that is no uuid, which never reaches the store.
+     - Two store tests in `investigations.int.test.ts`. The first stores a live triage through `storeEvent` and checks the verdict, ranked hypotheses with their service and excerpts, an empty excerpt for a call that timed out, the models, missing evidence, steps with their calls, and tokens. The second covers an investigation still running, a v1 report with a rejected proposal, and a 404.
+     - RED: a 404 for want of the route, then `createGetInvestigation is not a function`.
+     - GREEN: `createGetInvestigation` and the list's verdict in `investigations.ts`, the route in `app.ts`, `main.ts`, and the new dependency in four suites.
+  4. P1.11, tests first.
+     - `config.test.ts`: `LIVE_TENANTS` parsed, and four bad forms refused with the variable named.
+     - `retention.int.test.ts`: old live rows purged; newer rows, the sim's rows and reports kept; the loop purges at start and stops when asked.
+     - The agent's `test_retention_int.py`: the same in the agent schema, through the real job on ScriptedModel, plus an unfinished investigation kept, the tenant recorded at start, and the thread.
+     - RED: `LIVE_TENANTS` undefined, `Cannot find module './retention.ts'`, and `No module named 'agent.retention'`.
+     - GREEN: `config.ts` and `retention.ts` with its loop in `main.ts`; `agent/retention.py` with its thread in `main.py`; and `_load` in `job.py` writing `tenant_id`.
+     - A second RED check: with `_load`'s change undone, the purge found nothing and the tenants read `None`. Then restored.
+  5. The monthly cap, tests first.
+     - `test_live_int.py`: with $14.99 spent, a $0.02 worst case is refused with the cap named, $0.005 gets through, and last month's spend does not count. A chain of Claude alone is unavailable at $14.99 and available at $14.95.
+     - `test_llm.py`: a role with only the monthly cap gets each call's worst case, and `LARGEST_CALL` is the prompt limit with the forced report's output.
+     - `test_agent_api.py`: every Anthropic role carries $15, and an unpriced Claude model is refused.
+     - RED: `Role.__init__() got an unexpected keyword argument 'monthly_usd'`, `'Role' object has no attribute 'monthly_usd'`, and `cannot import name 'LARGEST_CALL'`.
+     - GREEN: `settings.py` and `llm.py`.
+  6. P1.10 in the web, tests first: `lib/investigations.test.ts`, `lib/report.test.ts` and `components/report.test.tsx`. RED: three "Cannot find module". GREEN, after reading Next 16's bundled docs (`params` and `searchParams` are promises; `notFound()`; `connection()`): `lib/investigations.ts`, `lib/report.ts`, `components/report.tsx`, the two pages, and a link on the home page.
+  7. Docs: `.env.example`, README, and docs/ (todo, context, memory, migrations, this entry).
+  - Why this was the best option: each done check is a test that failed first, and nothing touched a real app, key or model. The sim's prompt, tools and eval keys are unchanged, and no schema migration was needed.
+- Small events:
+  - GateGuard asked for facts before the first Bash call and the first edit of each file; stating them cleared each. Not counted as a stop.
+  - Running one suite: a bare `jest` call hit an ESM error (`createRequireEsmError`), since the package scripts set `--experimental-vm-modules`, so I ran them through `pnpm run`. The integration suite then stopped at "GATEWAY_DATABASE_URL is required", since it needs the `.env` variables only make loads. I ran it as `make -s --eval='one: ; ...' one` (docs/memory.md).
+  - The first RED run of `investigations.int.test.ts` hung past the 300 s tool timeout.
+    - Why: its `beforeAll` threw (`createGetInvestigation is not a function`), so `afterAll` failed before closing the database, and Jest waited on the open handles. The next run's output confirmed the throw; the wait itself is not confirmed by a trace.
+    - What we did: I stopped the task and looked for a stray Jest process. Claude Code's auto-mode classifier refused a PowerShell listing of node processes with their command lines. `tasklist` then showed 16 `node.exe` that I could not attribute, and I killed none.
+    - In this project's Postgres, `pg_stat_activity` showed no connection to the leftover scratch database `triage_test_1792940724_85a847_5b945a41`, which the suites' own cleanup drops once it is over an hour old.
+    - RED checks then ran with `--forceExit`, for that run only.
+  - My own test mistakes, each fixed in the test:
+    - tool call ids one character too long for the contract's pattern (caught before the run);
+    - a proposed action with empty `evidence_ids`, which the contract refuses (caught by the run);
+    - `expect.any(String)`, which ESLint refuses (`no-unsafe-assignment`), replaced by the stored values;
+    - a `match=` pattern with an unescaped dot (ruff RUF043);
+    - a deprecated `Result.tuples()`;
+    - dict merges that pyright widened to `Any | int`;
+    - the cap loop's `period` typed `str`.
+  - Formatting: Prettier's changes in three files and ruff format's in one were applied by hand with the editing tools, after printing each diff (`prettier <file> | diff`), so no formatter wrote a project file.
+  - After `make codegen`, `git status` listed two generated message models as modified. Their content equals HEAD's apart from CRLF line ends (md5 equal after stripping CR), so they add nothing to a commit.
+  - Found while documenting: docs/context.md said nothing but the seed wrote `proposed_actions`, but `events.ts` has copied the report's proposals there since step 6a. Corrected in Known Limitations.
+  - Infra: `make infra-up` started this project's three containers, and `make infra-down` removed them at the end; the volumes stay, and no other project was touched.
+- Files:
+  - Contracts: `contracts/openapi/gateway.yaml` and the regenerated clients; `packages/ts-clients/src/contracts.test.ts`.
+  - Gateway: `src/{investigations,app,main,config}.ts`, `src/retention.ts` (new), tests `config.test.ts` and `retention.int.test.ts` (new), `app.test.ts`, `investigations.int.test.ts`, and the new dependency in `db.int.test.ts`, `decisions.int.test.ts` and `intake.int.test.ts`.
+  - Agent: `src/agent/retention.py` (new), `{job,db,llm,settings,main}.py`; tests `test_retention_int.py` (new), `test_live_int.py`, `test_llm.py`, `test_agent_api.py`.
+  - Web: `src/lib/{investigations,report,testing}.ts`, `src/components/report.tsx`, `src/app/investigations/page.tsx` and `[id]/page.tsx` (all new), their tests, and `src/app/page.tsx`.
+  - Root: `.env.example`, `README.md`.
+- Validation, final run:
+  - `make lint` and `make typecheck`: exit 0 (lint rerun after the docs).
+  - `make test`: exit 0. pytest 579 passed (576 before); Jest gateway 49 (43), ts-clients 43, web 12 (3), ts-config 2.
+  - The frozen prompt and eval cache-key tests by name (`test_the_prompt_is_frozen`, `test_the_prompt_hash_covers_the_system_prompt`, `test_a_token_cap_off_the_default_changes_the_key_and_the_report_name`, `test_a_run_counts_only_under_the_prompt_its_calls_used`, among 6): passed.
+  - `make test-int`: exit 0. Jest 8 suites and 40 tests (7 and 36 before); pytest 64 passed (59) in 161.48 s.
+  - `make contracts-check` and `make contracts-breaking`: exit 0. `make build`: exit 0, with `/investigations` and `/investigations/[id]` rendered per request.
+  - No model call, no eval, and no watch or agent run against a real app. The `live` switch was on only inside scratch databases.
+- Outstanding:
+  - P1.12, the go-live, is the user's (docs/todo.md).
+  - The report view and retention follow-ups in docs/todo.md: no login until step 9, the list spanning eval runs, GraphQL lagging REST 0.6.0, and older live investigations without a recorded tenant (none exists).
+  - Nothing is committed.
+
 ### 2026-10-25: P1.7 to P1.9 (ReportRecorded v2, live triage, flood guard) on branch p1-7-live-triage
 
 - What happened: The user asked for P1.7, P1.8 and P1.9 together on a new branch `p1-7-live-triage` from the updated main, one report at the end and one PR. Their rules: tests first with ScriptedModel and fixtures only; no live model call and no eval run; the frozen sim prompt test and the eval cache-key tests stay green; the `live` switch stays off; watch and the agent never run against the real FA or FL; files are edited with the editing tools only; take the recommended option on small decisions and list them (docs/memory.md, 2026-10-25); stop on a hook refusal, a needed key or a live model call (none came up); every check, then `make infra-down`.

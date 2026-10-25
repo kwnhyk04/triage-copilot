@@ -62,6 +62,27 @@ def test_the_free_chain_is_the_default_and_claude_needs_its_key() -> None:
     assert (claude.until, claude.api_key) == (date(2026, 11, 10), "sk-ant-test")
 
 
+def test_every_claude_role_has_tc_s_monthly_cap_and_needs_a_priced_model() -> None:
+    keyed: dict[str, Any] = {
+        **OFFLINE.model_dump(),
+        "anthropic_api_key": SecretStr("sk-ant-test"),
+        "llm_claude_fallback": True,
+        "llm_small_provider": "anthropic",
+        "llm_small_model": "claude-haiku-5-5",
+    }
+    settings = Settings(**keyed)
+    claude, triage = settings.claude(), settings.triage()
+    assert claude is not None and triage is not None
+    # Evals included: any role on Anthropic counts against the same $15 a month.
+    assert [r.monthly_usd for r in (claude, triage, settings.role("small"))] == [15.0] * 3
+    assert settings.role("primary").monthly_usd is None
+    lower: dict[str, Any] = {**keyed, "llm_claude_monthly_usd": 5}
+    assert Settings(**lower).role("small").monthly_usd == 5
+    unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-opus-5-5"}
+    with pytest.raises(ValidationError, match=r"claude-opus-5-5 has no prices in agent/pricing\."):
+        Settings(**unpriced)
+
+
 def test_live_tenants_map_each_tenant_to_its_app(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_DATABASE_URL", OFFLINE.agent_database_url)
     monkeypatch.setenv("AGENT_SERVICE_TOKEN", TOKEN)

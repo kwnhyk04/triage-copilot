@@ -81,7 +81,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** One investigation with its hypotheses, proposed actions and steps. */
+        /**
+         * One investigation with its hypotheses, proposed actions and steps.
+         * @description The investigation as its alert group, report and steps hold it. A live tenant's steps, and with them its evidence excerpts and step tokens, are purged 30 days after they were stored; the report, verdict and models stay.
+         */
         get: operations["getInvestigation"];
         put?: never;
         post?: never;
@@ -317,26 +320,58 @@ export interface components {
             group_id: string;
             title: string;
             status: components["schemas"]["InvestigationStatus"];
+            /** @description A live triage's verdict; null until the report, for a simulated incident, for a report the agent wrote itself after a stop, and for reports recorded before verdicts existed. not_real never hides the alert. */
+            verdict: components["schemas"]["Verdict"] | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description Whether a live alert shows an incident a human must look at.
+         * @enum {string}
+         */
+        Verdict: "real" | "not_real";
         Investigation: components["schemas"]["InvestigationSummary"] & {
             /** @description Final report summary; null until the investigation ends. */
             summary: string | null;
-            /** @description Model tokens spent so far, input and output combined. */
+            /** @description Model tokens of the investigation's turns, input and output combined, as its stored steps record them. */
             tokens_used: number;
             /** @description Best first. */
             hypotheses: components["schemas"]["Hypothesis"][];
+            /** @description Evidence the agent could not get, such as a tool that failed; empty until the report. */
+            missing_evidence: string[];
+            /** @description True when the agent stopped before the model reported, at a limit, and wrote the report itself; false until the report. */
+            partial: boolean;
+            /** @description Every model asked, per part of the work, in the order first asked; empty until the report, and for reports recorded before models were listed. */
+            models: components["schemas"]["ModelUse"][];
             proposed_actions: components["schemas"]["ProposedAction"][];
             /** @description In execution order. */
             steps: components["schemas"]["Step"][];
         };
+        /** @description A model asked during an investigation, for one part of the work. */
+        ModelUse: {
+            part: components["schemas"]["ModelPart"];
+            provider: string;
+            model: string;
+            /** @description Requests it answered. */
+            calls: number;
+            /** @description Requests it did not answer, and requests the agent skipped before they reached it. */
+            failed: number;
+            /** @description Why the last of those failed or was skipped; null when it answered every request. */
+            reason: string | null;
+        };
+        /**
+         * @description triage: the investigation's turns; summary: log page summaries.
+         * @enum {string}
+         */
+        ModelPart: "triage" | "summary";
         Hypothesis: {
             /** @description 1 is the most likely root cause. */
             rank: number;
             root_cause_class: components["schemas"]["RootCauseClass"];
+            /** @description The service where the root cause lives. */
+            service: string;
             summary: string;
             confidence: number;
             evidence: components["schemas"]["Evidence"][];
@@ -350,6 +385,7 @@ export interface components {
         Evidence: {
             /** @description Id of the tool result the excerpt comes from. */
             tool_call_id: string;
+            /** @description The start of the tool result; empty when the gateway has no result for the id, as once a live investigation's steps are purged after 30 days. */
             excerpt: string;
         };
         /** @description A remediation the agent proposes. Only the executor runs it, and only after a human approves it. */
@@ -433,7 +469,7 @@ export interface components {
             seq: number;
             kind: components["schemas"]["StepKind"];
             summary: string;
-            /** @description Set on tool_call steps only. */
+            /** @description Set on tool_call steps once the call has returned. */
             tool_call: components["schemas"]["ToolCall"] | null;
             /** Format: date-time */
             recorded_at: string;

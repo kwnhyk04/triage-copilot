@@ -2,7 +2,8 @@
 credits last and the free fallback, on a 429, a spent quota, a rejected key or a refusal; the
 small role for log-page summaries, with Claude after it too; and a limiter that keeps each role
 under its requests per minute and per day, and off any model whose provider said it is spent.
-Live triage's router asks Claude first, under its daily dollar cap, then the same free chain.
+Live triage's router asks Claude first, under its daily dollar cap, then the same free chain. Every
+Claude call also stays within TC's monthly dollar cap, evals included.
 
 Every request is returned as a ModelCall, with its outcome, usage and prompt sha, for the job to
 record; a skipped one says why. Provider text is masked (watch.scrub) before it is kept or logged.
@@ -15,7 +16,7 @@ from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 from sqlalchemy import Connection, text
@@ -53,6 +54,9 @@ log = logging.getLogger(__name__)
 # Claude's 429 with a retry-after up to this many seconds is waited out by the job; a longer one,
 # or none, moves the turn down the chain.
 MAX_WAIT = 60
+# The largest call a turn makes: a prompt at the limit, and the forced report's output allowance
+# (job.REPORT_OUTPUT_CAP; a test keeps the two equal).
+LARGEST_CALL = (PROMPT_LIMIT, 4_096)
 SUMMARY_OUTPUT_CAP = 400
 SUMMARY_MIN_OUTPUT = 64
 SUMMARY_SYSTEM = (
@@ -88,13 +92,13 @@ STOPPED = text("""
     ORDER BY CASE outcome WHEN 'credits_exhausted' THEN 0 WHEN 'model_exhausted' THEN 1 ELSE 2 END
     LIMIT 1
 """)
-# Claude's tokens since midnight UTC, per model, for live triage's dollar cap.
-SPEND_TODAY = text("""
+# Claude's tokens per model since this UTC day or month began (:period), for the dollar caps.
+SPEND_SINCE = text("""
     SELECT model, sum(input_tokens)::bigint AS input, sum(cached_tokens)::bigint AS cached,
            sum(cache_write_tokens)::bigint AS writes, sum(output_tokens)::bigint AS output
     FROM agent.model_calls
     WHERE provider = 'anthropic'
-      AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      AND created_at >= date_trunc(:period, now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
     GROUP BY model
 """)
 STOP_REASONS = {
@@ -111,11 +115,11 @@ def calls_today(conn: Connection, model: str) -> int:
         return conn.execute(CALLS_TODAY, {"model": model}).scalar_one()
 
 
-def claude_spend_today(conn: Connection) -> float | str:
-    """What Claude cost since midnight UTC in US dollars, every model priced by its own rates; or
-    the name of a model with no rates, whose cost cannot be known."""
+def claude_spend(conn: Connection, period: Literal["day", "month"]) -> float | str:
+    """What Claude cost since this UTC day or month began, in US dollars, every model priced by its
+    own rates; or the name of a model with no rates, whose cost cannot be known."""
     with conn.begin():
-        rows = conn.execute(SPEND_TODAY).all()
+        rows = conn.execute(SPEND_SINCE, {"period": period}).all()
     total = 0.0
     for row in rows:
         rates = RATES.get(row.model)
@@ -129,22 +133,28 @@ def claude_spend_today(conn: Connection) -> float | str:
 
 def spent(conn: Connection, role: Role, worst_usd: float = 0.0) -> str | None:
     """Why no request to the role's model can get through now, or None: Claude's credits have
-    expired, it is switched off, today's spend plus the call's worst case (worst_usd) passes the
-    role's dollar cap, today's requests are used up, or the provider said so. Parked
-    investigations then stay parked instead of trying again every sweep, and the skipped call
-    records the reason."""
+    expired, it is switched off, today's or this month's Claude spend plus the call's worst case
+    (worst_usd) passes the role's dollar cap, today's requests are used up, or the provider said
+    so. Parked investigations then stay parked instead of trying again every sweep, and the
+    skipped call records the reason."""
     if role.until is not None and datetime.now(UTC).date() >= role.until:
         return f"its credits ended on {role.until.isoformat()} (UTC)"
     if role.provider == "anthropic" and not is_on(conn, "claude"):
         return "Claude is switched off (agent.switches)"
-    if role.daily_usd is not None:
-        today = claude_spend_today(conn)
-        if isinstance(today, str):
-            return f"{today} has no price in agent/pricing.py, so the triage cap cannot be checked"
-        if today + worst_usd > role.daily_usd:
+    caps: tuple[tuple[Literal["day", "month"], str, float | None, str], ...] = (
+        ("day", "today's", role.daily_usd, "the triage cap"),
+        ("month", "this month's", role.monthly_usd, "TC's monthly Claude cap"),
+    )
+    for period, when, cap, name in caps:
+        if cap is None:
+            continue
+        spend = claude_spend(conn, period)
+        if isinstance(spend, str):
+            return f"{spend} has no price in agent/pricing.py, so {name} cannot be checked"
+        if spend + worst_usd > cap:
             return (
-                f"today's Claude spend of ${today:.4f} plus this call's worst case of "
-                f"${worst_usd:.4f} passes the triage cap of ${role.daily_usd:.2f} (UTC)"
+                f"{when} Claude spend of ${spend:.4f} plus this call's worst case of "
+                f"${worst_usd:.4f} passes {name} of ${cap:.2f} (UTC)"
             )
     if role.rpd > 0 and calls_today(conn, role.model) >= role.rpd:
         return f"it made its {role.rpd} requests for today (Pacific)"
@@ -255,8 +265,12 @@ class Router:
             raise
 
     def available(self, conn: Connection) -> bool:
-        """Whether some model of the turn's chain can answer now."""
-        return any(spent(conn, binding.role) is None for binding in self._turns())
+        """Whether some model of the turn's chain can answer now, judged on the largest call: a
+        Claude with less of its dollar cap left waits for the cap to reset, not for every sweep."""
+        return any(
+            spent(conn, binding.role, _worst(binding.role, *LARGEST_CALL)) is None
+            for binding in self._turns()
+        )
 
     async def summarize(
         self, page: str, remaining: int, prompt_sha: str
@@ -353,7 +367,9 @@ class Router:
 
 def _worst(role: Role, bound: int, max_output: int) -> float:
     """The call's worst-case cost in US dollars, for a role with a dollar cap; 0 for the others."""
-    return 0.0 if role.daily_usd is None else worst(RATES[role.model], bound, max_output)
+    if role.daily_usd is None and role.monthly_usd is None:
+        return 0.0
+    return worst(RATES[role.model], bound, max_output)
 
 
 def _action(

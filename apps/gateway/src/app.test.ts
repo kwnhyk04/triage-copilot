@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { type AppDeps, buildApp, createUpdates, type Decide, REQUEST_TIMEOUT_MS } from './app.ts';
 import { loadGatewayConfig } from './config.ts';
 import { type FindTenant, type Intake, sha256, type Webhook } from './intake.ts';
-import type { ListInvestigations } from './investigations.ts';
+import type { GetInvestigation, ListInvestigations } from './investigations.ts';
 
 const APPROVER_KEY = 'approver-test-key-000000000000000';
 const API_KEY = 'gateway-api-test-key-0000000000000';
@@ -34,6 +34,59 @@ const HEALTH_QUERY = {
   headers: { 'x-api-key': API_KEY },
   payload: { query: '{ health { status } }' },
 } as const;
+/** A live triage as the store returns it: Claude skipped, Gemini answered. */
+const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
+  id: '3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68',
+  group_id: ACCEPTED.group_id,
+  title: 'ApiReadinessFailing on api',
+  status: 'resolved',
+  verdict: 'real',
+  created_at: '2026-10-25T09:52:30.000Z',
+  updated_at: '2026-10-25T09:54:10.000Z',
+  summary: "freight-audit's api fails its readiness check: postgres restarts.",
+  tokens_used: 6240,
+  hypotheses: [
+    {
+      rank: 1,
+      root_cause_class: 'database',
+      service: 'postgres',
+      summary: 'The readiness check fails on postgres, whose container restarts.',
+      confidence: 0.8,
+      evidence: [{ tool_call_id: 'tc_01J9ZK3Q7M', excerpt: 'postgres: restarting (exit 137)' }],
+    },
+  ],
+  missing_evidence: [],
+  partial: false,
+  models: [
+    {
+      part: 'triage',
+      provider: 'anthropic',
+      model: 'claude-haiku-5-5',
+      calls: 0,
+      failed: 1,
+      reason: 'claude-haiku-5-5 skipped: Claude is switched off (agent.switches)',
+    },
+    {
+      part: 'triage',
+      provider: 'gemini',
+      model: 'gemini-3.5-flash-lite',
+      calls: 2,
+      failed: 0,
+      reason: null,
+    },
+  ],
+  proposed_actions: [],
+  steps: [
+    {
+      seq: 1,
+      kind: 'tool_call',
+      summary: 'read_snapshot of alert 1',
+      tool_call: { id: 'tc_01J9ZK3Q7M', name: 'read_snapshot', status: 'ok', duration_ms: 12 },
+      recorded_at: '2026-10-25T09:53:02.000Z',
+    },
+  ],
+};
+const noInvestigation: GetInvestigation = () => Promise.resolve(undefined);
 
 /** Fake store in which every action is pending, so any decision is recorded. */
 const record: Decide = (actionId, verdict, decision) =>
@@ -76,6 +129,7 @@ describe('gateway', () => {
       findTenant,
       intake,
       listInvestigations,
+      getInvestigation: noInvestigation,
       ...deps,
     });
     return app;
@@ -317,6 +371,30 @@ describe('gateway', () => {
       const response = await get('?cursor=forged');
       expect(response.statusCode).toBe(400);
       expect(response.json<{ detail: string }>().detail).toContain('cursor');
+    });
+  });
+
+  describe('investigation detail', () => {
+    const get = (id: string) =>
+      app.inject({ url: `/v1/investigations/${id}`, headers: { 'x-api-key': API_KEY } });
+
+    it('serves one investigation, 404 for an id it does not know, 400 for one that is no uuid', async () => {
+      const asked: string[] = [];
+      await start({
+        getInvestigation: (id) => {
+          asked.push(id);
+          return Promise.resolve(id === DETAIL.id ? DETAIL : undefined);
+        },
+      });
+      const found = await get(DETAIL.id);
+      expect(found.statusCode).toBe(200);
+      expect(found.json()).toEqual(DETAIL);
+      const unknown = await get(ACTION_ID);
+      expect(unknown.statusCode).toBe(404);
+      expect(unknown.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect((await get('not-a-uuid')).statusCode).toBe(400);
+      // A bad id never reaches the store.
+      expect(asked).toEqual([DETAIL.id, ACTION_ID]);
     });
   });
 

@@ -17,7 +17,7 @@ import {
   webhookSchema,
   withComputedFingerprints,
 } from './intake.ts';
-import type { ListInvestigations } from './investigations.ts';
+import type { GetInvestigation, ListInvestigations } from './investigations.ts';
 
 type Schemas = components['schemas'];
 
@@ -46,6 +46,7 @@ export interface AppDeps {
   findTenant: FindTenant;
   intake: Intake;
   listInvestigations: ListInvestigations;
+  getInvestigation: GetInvestigation;
 }
 
 // Routes that take no X-API-Key: the probes, and the routes with a credential of their own.
@@ -114,6 +115,7 @@ export async function buildApp({
   findTenant,
   intake,
   listInvestigations,
+  getInvestigation,
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL, base: { service: 'gateway' } },
@@ -264,6 +266,16 @@ export async function buildApp({
       return problem(reply, 400, 'Bad Request', 'cursor: pass a next_cursor this API returned');
     }
     return page;
+  });
+
+  app.get<{ Params: { id: string } }>('/v1/investigations/:id', async (request, reply) => {
+    const id = z.guid().safeParse(request.params.id);
+    if (!id.success) return badRequest(reply, id.error.issues);
+    const investigation = await getInvestigation(id.data);
+    if (investigation === undefined) {
+      return problem(reply, 404, 'Not Found', 'No investigation has this id.');
+    }
+    return investigation;
   });
 
   const resolvers: Resolvers = {

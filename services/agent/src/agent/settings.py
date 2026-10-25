@@ -40,6 +40,8 @@ class Role:
     until: date | None = None
     # Live triage's Claude only: what it may spend in a UTC day, in US dollars (agent.pricing).
     daily_usd: float | None = None
+    # Every Claude role: what all of TC's Claude calls may spend in a UTC month, evals included.
+    monthly_usd: float | None = None
 
 
 class Settings(EnvSettings):
@@ -109,6 +111,9 @@ class Settings(EnvSettings):
     # worst case stays within LLM_TRIAGE_DAILY_USD.
     llm_triage_model: str = "claude-haiku-5-5"
     llm_triage_daily_usd: Annotated[float, Field(ge=0)] = 0.40
+    # TC's share of the Anthropic account a calendar month (UTC), evals included: any Claude call
+    # runs only if this month's Claude spend plus the call's worst case stays within it.
+    llm_claude_monthly_usd: Annotated[float, Field(ge=0)] = 15.0
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None
@@ -125,6 +130,21 @@ class Settings(EnvSettings):
         if model not in RATES:
             raise ValueError(f"takes a model agent/pricing.py has prices for: {', '.join(RATES)}")
         return model
+
+    @model_validator(mode="after")
+    def _claude_priced(self) -> "Settings":
+        """TC's monthly Claude cap needs the prices of every Claude model a role may call."""
+        models = [
+            getattr(self, f"llm_{name}_model")
+            for name in ROLES
+            if getattr(self, f"llm_{name}_provider") == "anthropic"
+        ]
+        if self.llm_claude_fallback:
+            models.append(self.llm_claude_model)
+        for model in models:
+            if model not in RATES:
+                raise ValueError(f"{model} has no prices in agent/pricing.py: {', '.join(RATES)}")
+        return self
 
     @model_validator(mode="after")
     def _needs_for_model_calls(self) -> "Settings":
@@ -154,6 +174,7 @@ class Settings(EnvSettings):
             rpd=getattr(self, f"llm_{name}_rpd"),
             api_key=secret.get_secret_value() if secret else None,
             until=self.llm_claude_until if provider == "anthropic" else None,
+            monthly_usd=self.llm_claude_monthly_usd if provider == "anthropic" else None,
         )
 
     def triage(self) -> Role | None:
@@ -171,10 +192,11 @@ class Settings(EnvSettings):
             api_key=secret.get_secret_value(),
             until=self.llm_claude_until,
             daily_usd=self.llm_triage_daily_usd,
+            monthly_usd=self.llm_claude_monthly_usd,
         )
 
     def claude(self) -> Role | None:
-        """The Claude fallback, when LLM_CLAUDE_FALLBACK turns it on; it has no daily cap."""
+        """The Claude fallback, when LLM_CLAUDE_FALLBACK is on: TC's monthly cap, no daily one."""
         if not self.llm_claude_fallback:
             return None
         secret = self.anthropic_api_key
@@ -187,4 +209,5 @@ class Settings(EnvSettings):
             rpd=0,
             api_key=secret.get_secret_value() if secret else None,
             until=self.llm_claude_until,
+            monthly_usd=self.llm_claude_monthly_usd,
         )

@@ -53,7 +53,14 @@ const enumsAgree: [
   Equal<ReportRecordedV2['report'], Reported>,
   Equal<Uppercase<NonNullable<ReportRecordedV2['verdict']>>, GraphQL.Verdict>,
   Equal<Uppercase<ModelUse['part']>, GraphQL.ModelPart>,
+  Equal<Rest['Verdict'], NonNullable<ReportRecordedV2['verdict']>>,
+  Equal<Rest['ModelPart'], ModelUse['part']>,
+  // The detail route serves the report's models as the message carried them.
+  Equal<Rest['ModelUse'], ModelUse>,
 ] = [
+  true,
+  true,
+  true,
   true,
   true,
   true,
