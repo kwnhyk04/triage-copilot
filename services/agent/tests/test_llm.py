@@ -12,7 +12,8 @@ import httpx2
 import pytest
 from sqlalchemy import Connection
 
-from agent.llm import Binding, Limiter, Router, spent
+from agent.job import REPORT_OUTPUT_CAP
+from agent.llm import LARGEST_CALL, Binding, Limiter, Router, spent
 from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
@@ -528,6 +529,35 @@ def test_the_triage_cap_is_checked_against_each_call_s_worst_case() -> None:
         ("primary-model", "ok"),
     ]
     assert claude.max_outputs == []
+
+
+def test_every_claude_role_is_held_to_tc_s_monthly_cap_by_each_call_s_worst_case() -> None:
+    asked: list[tuple[str, float]] = []
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        asked.append((role.model, worst_usd))
+        return None
+
+    # An eval's Claude: no daily cap, only TC's monthly one.
+    claude = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, monthly_usd=15.0)
+    pinned = Router(
+        Binding(claude, Fake("claude")),
+        None,
+        Binding(role("small", "small-model"), Fake("small")),
+        fallback_on_rate_limit=False,
+        limiter=Limiter(is_spent),
+    )
+    asyncio.run(pinned.turn(REQUEST))
+
+    limits = REQUEST.budget.limits("claude-haiku-5-5")
+    assert limits is not None
+    expected = worst(RATES["claude-haiku-5-5"], *limits)
+    assert asked == [("claude-haiku-5-5", pytest.approx(expected))]
+
+
+def test_availability_is_judged_on_the_largest_call_a_turn_can_make() -> None:
+    # A prompt at the limit and the forced report's output allowance.
+    assert LARGEST_CALL == (PROMPT_LIMIT, REPORT_OUTPUT_CAP)
 
 
 def test_provider_text_is_masked_before_it_is_recorded_or_logged(

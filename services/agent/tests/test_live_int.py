@@ -383,3 +383,45 @@ def test_the_triage_cap_counts_today_s_claude_spend_and_each_call_s_worst_case(
     with engine.connect() as conn:
         # A model without a price cannot be checked against the cap, so Claude waits.
         assert "claude-opus-5-5" in (spent(conn, TRIAGE, 0.0) or "")
+
+
+# A Claude role with TC's monthly cap and no daily one, as an eval's Claude has.
+MONTHLY = replace(TRIAGE, daily_usd=None, monthly_usd=15.0)
+
+
+def test_tc_s_monthly_claude_cap_counts_this_month_s_claude_spend(engine: Engine) -> None:
+    claude_spend(engine, "claude-haiku-5-5", 29_980_000)  # $14.99 at $0.50 per million out
+    with engine.connect() as conn:
+        assert "TC's monthly Claude cap of $15.00" in (spent(conn, MONTHLY, 0.02) or "")
+        assert spent(conn, MONTHLY, 0.005) is None
+        assert spent(conn, replace(MONTHLY, monthly_usd=None), 1.0) is None
+    with engine.begin() as conn:
+        # 32 days back is always before this month began (UTC).
+        conn.execute(update(ModelCall).values(created_at=ModelCall.created_at - timedelta(days=32)))
+    with engine.connect() as conn:
+        assert spent(conn, MONTHLY, 0.02) is None
+
+
+def test_a_claude_only_chain_waits_once_no_call_can_fit_this_month_s_cap(engine: Engine) -> None:
+    """An eval pinned to Claude parks until the month ends instead of waking at every sweep."""
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        with engine.connect() as conn:
+            return spent(conn, role, worst_usd)
+
+    unused = cast("Provider", object())
+    pinned = Router(
+        Binding(MONTHLY, unused),
+        None,
+        Binding(SMALL, unused),
+        fallback_on_rate_limit=False,
+        limiter=Limiter(is_spent),
+    )
+    # $14.99: a prompt at the limit with the forced report's output would pass $15.
+    claude_spend(engine, "claude-haiku-5-5", 29_980_000)
+    with engine.connect() as conn:
+        assert not pinned.available(conn)
+    with engine.begin() as conn:
+        conn.execute(update(ModelCall).values(output_tokens=29_900_000))  # $14.95
+    with engine.connect() as conn:
+        assert pinned.available(conn)

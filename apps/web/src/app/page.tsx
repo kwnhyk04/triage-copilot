@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { loadWebConfig } from '../lib/config.ts';
@@ -11,6 +12,9 @@ export default async function Home() {
     <main>
       <h1>Triage Copilot</h1>
       <p>Gateway: {status}</p>
+      <p>
+        <Link href="/investigations">Investigations</Link>
+      </p>
     </main>
   );
 }

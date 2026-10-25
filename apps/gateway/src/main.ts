@@ -6,8 +6,13 @@ import { startEventsConsumer, storeEvent } from './events.ts';
 import { createClaim, createReport } from './executions.ts';
 import { createFindTenant, createIntake } from './intake.ts';
 import { buildInternalApp } from './internal.ts';
-import { createAlertContext, createListInvestigations } from './investigations.ts';
+import {
+  createAlertContext,
+  createGetInvestigation,
+  createListInvestigations,
+} from './investigations.ts';
 import { sqsClient, sqsSender, startRelay } from './outbox.ts';
+import { startRetention } from './retention.ts';
 import { agentStates, startSweeper } from './sweeper.ts';
 
 let config: GatewayConfig;
@@ -41,6 +46,7 @@ const app = await buildApp({
     config.MAX_DAILY_INVESTIGATIONS,
   ),
   listInvestigations: createListInvestigations(db.sql),
+  getInvestigation: createGetInvestigation(db.sql),
 });
 const internal = buildInternalApp({
   config,
@@ -70,6 +76,7 @@ const events = startEventsConsumer(
   (type, body) => storeEvent(db.sql, type, body),
   app.log,
 );
+const retention = startRetention(db.sql, config.LIVE_TENANTS, app.log);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
@@ -77,6 +84,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       await sweeper.stop();
       await relay.stop();
       await events.stop();
+      await retention.stop();
       sqs.destroy();
       eventsSqs.destroy();
       await db.sql.end({ timeout: 5 });

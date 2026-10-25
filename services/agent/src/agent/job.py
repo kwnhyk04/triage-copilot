@@ -1030,8 +1030,11 @@ def _load(conn: Connection, request: Request, cap: int, app: str | None) -> tupl
     A live tenant's app (or None for the sim) picks the prompt."""
     prompt = SIM if app is None else LIVE
     inv = request.investigation_id
+    tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
     with conn.begin():
-        conn.execute(pg_insert(Investigation).values(id=inv).on_conflict_do_nothing())
+        # Kept from the start: retention finds a live tenant's investigations by it.
+        new = pg_insert(Investigation).values(id=inv, tenant_id=tenant)
+        conn.execute(new.on_conflict_do_nothing())
         found = select(Investigation.status, Investigation.budget_tokens_used)
         status, used = conn.execute(found.where(Investigation.id == inv)).one()
         steps = replay(conn, inv)

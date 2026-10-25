@@ -7,6 +7,8 @@ const CREDENTIALS = [
   'AGENT_SERVICE_TOKEN',
   'EXECUTOR_SERVICE_TOKEN',
 ] as const;
+// The agent's LIVE_TENANTS, {"<tenant uuid>": "freight-audit"}; the gateway needs the tenants only.
+const liveTenants = z.record(z.guid(), z.enum(['freight-audit', 'filing-lens']));
 
 export const loadGatewayConfig = (env?: Env) =>
   loadConfig(
@@ -38,6 +40,23 @@ export const loadGatewayConfig = (env?: Env) =>
         MAX_NEW_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(5),
         // And within one UTC day: 30 triages a day per app (each app is one tenant).
         MAX_DAILY_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(30),
+        // Tenants whose alerts are real incidents: their snapshots and steps go after 30 days.
+        LIVE_TENANTS: z
+          .string()
+          .default('{}')
+          .transform((text, ctx) => {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = undefined;
+            }
+            const tenants = liveTenants.safeParse(parsed);
+            if (tenants.success) return Object.keys(tenants.data);
+            const message = 'must map tenant uuids to freight-audit or filing-lens, as JSON';
+            ctx.addIssue({ code: 'custom', message });
+            return z.NEVER;
+          }),
         // The agent's internal API, which the recovery sweeper asks with the service token.
         AGENT_URL: z.url().default('http://127.0.0.1:4210'),
         AGENT_SERVICE_TOKEN: z.string().min(32),

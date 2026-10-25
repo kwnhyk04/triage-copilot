@@ -71,7 +71,8 @@ class Investigation(Base):
     final_report: Mapped[dict[str, Any] | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    # From InvestigationRequested v2 (null for v1), recorded when the investigation parks.
+    # From InvestigationRequested v2 (null for v1), recorded when the investigation starts (before
+    # 2026-10-25 only when it parked); retention and the tenant cap read it.
     tenant_id: Mapped[UUID | None]
     # Set while parked: its message is deleted, and the gateway's recovery sweeper re-queues it.
     waiting_reason: Mapped[str | None] = mapped_column(

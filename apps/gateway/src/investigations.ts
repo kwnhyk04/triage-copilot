@@ -1,4 +1,5 @@
 import type { components } from '@triage/ts-clients/gateway';
+import type { ReportRecordedV2 } from '@triage/ts-clients/messages';
 import { z } from '@triage/ts-config';
 import type { Sql } from 'postgres';
 
@@ -8,17 +9,22 @@ export type ListInvestigations = (query: {
   limit: number;
   cursor?: string | undefined;
 }) => Promise<Schemas['InvestigationPage'] | 'bad_cursor'>;
+/** One investigation; undefined when no alert group has its id. */
+export type GetInvestigation = (id: string) => Promise<Schemas['Investigation'] | undefined>;
 
-interface Row {
+interface Group {
   id: string;
   group_id: string;
   group_key: string;
   status: Schemas['InvestigationStatus'];
+  verdict: Schemas['Verdict'] | null;
   created_at: Date;
   updated_at: Date;
-  cursor_at: string;
   labels: Record<string, string> | null;
 }
+type Row = Group & { cursor_at: string };
+// The contract's Evidence.excerpt cap: the start of the cited result.
+const EXCERPT_CHARS = 2000;
 
 // A position is (created_at, id). created_at travels as text with its microseconds: a JS Date keeps
 // only milliseconds, so rows created within one millisecond would be skipped or repeated.
@@ -48,7 +54,7 @@ export function decodeCursor(cursor: string): [string, string] | undefined {
 }
 
 // The first alert's name and service, as people say it; the group key when it has no alertname.
-const title = ({ labels, group_key }: Row) => {
+const title = ({ labels, group_key }: Group) => {
   const name = labels?.alertname;
   if (name === undefined) return group_key;
   const service = labels?.service;
@@ -169,12 +175,13 @@ export const createListInvestigations =
     // ponytail: sorts every tenant's investigated groups; index (created_at, investigation_id)
     // past ~100k groups.
     const rows = await sql<Row[]>`
-      SELECT g.investigation_id AS id, g.id AS group_id, g.group_key, g.status, g.created_at,
-             g.updated_at,
+      SELECT g.investigation_id AS id, g.id AS group_id, g.group_key, g.status, r.verdict,
+             g.created_at, g.updated_at,
              to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,
              (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
               ORDER BY a.created_at, a.id LIMIT 1) AS labels
       FROM gateway.alert_groups g
+      LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
       WHERE g.investigation_id IS NOT NULL ${
         after === undefined
           ? sql``
@@ -188,15 +195,137 @@ export const createListInvestigations =
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     return {
-      items: page.map((row) => ({
-        id: row.id,
-        group_id: row.group_id,
-        title: title(row),
-        status: row.status,
-        created_at: row.created_at.toISOString(),
-        updated_at: row.updated_at.toISOString(),
-      })),
+      items: page.map(investigationSummary),
       next_cursor:
         rows.length > limit && last !== undefined ? encodeCursor(last.cursor_at, last.id) : null,
+    };
+  };
+
+const investigationSummary = (group: Group): Schemas['InvestigationSummary'] => ({
+  id: group.id,
+  group_id: group.group_id,
+  title: title(group),
+  status: group.status,
+  verdict: group.verdict,
+  created_at: group.created_at.toISOString(),
+  updated_at: group.updated_at.toISOString(),
+});
+
+/**
+ * The investigation as its alert group, report and mirrored steps hold it. Evidence quotes the start
+ * of each cited result, so a result the gateway no longer keeps (live steps go after 30 days, see
+ * retention.ts) leaves an empty excerpt; the report itself stays.
+ */
+export const createGetInvestigation =
+  (sql: Sql): GetInvestigation =>
+  async (id) => {
+    const [group] = await sql<
+      (Group & {
+        report: ReportRecordedV2['report'] | null;
+        models: ReportRecordedV2['models'] | null;
+      })[]
+    >`
+      SELECT g.investigation_id AS id, g.id AS group_id, g.group_key, g.status, r.verdict,
+             g.created_at, g.updated_at, r.report, r.models,
+             (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
+              ORDER BY a.created_at, a.id LIMIT 1) AS labels
+      FROM gateway.alert_groups g
+      LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
+      WHERE g.investigation_id = ${id}`;
+    if (group === undefined) return undefined;
+    const steps = await sql<
+      {
+        seq: number;
+        kind: Schemas['StepKind'];
+        summary: string;
+        tool_name: string | null;
+        tool_call_id: string | null;
+        excerpt: string | null;
+        tokens: number;
+        tool_status: Schemas['ToolCallStatus'] | null;
+        duration_ms: number | null;
+        recorded_at: Date;
+      }[]
+    >`
+      SELECT seq, kind, summary, tool_name, tool_call_id, left(result, ${EXCERPT_CHARS}) AS excerpt,
+             coalesce(tokens_input, 0) + coalesce(tokens_output, 0) AS tokens, tool_status,
+             duration_ms, recorded_at
+      FROM gateway.investigation_steps WHERE investigation_id = ${id} ORDER BY seq`;
+    const actions = await sql<
+      {
+        id: string;
+        investigation_id: string;
+        kind: Schemas['ActionKind'];
+        target: string;
+        parameters: Schemas['ProposedAction']['parameters'];
+        rationale: string;
+        proposed_at: Date;
+        decision: 'approved' | 'rejected' | null;
+        approver: string | null;
+        decided_at: Date | null;
+        reason: string | null;
+      }[]
+    >`
+      SELECT a.id, a.investigation_id, a.kind, a.target, a.parameters, a.rationale, a.proposed_at,
+             p.decision, p.approver, p.decided_at, p.reason
+      FROM gateway.proposed_actions a LEFT JOIN gateway.approvals p ON p.action_id = a.id
+      WHERE a.investigation_id = ${id} ORDER BY a.proposed_at, a.id`;
+    const results = new Map<string, string>();
+    for (const step of steps) {
+      if (step.tool_call_id !== null && step.excerpt !== null) {
+        results.set(step.tool_call_id, step.excerpt);
+      }
+    }
+    const { report } = group;
+    return {
+      ...investigationSummary(group),
+      summary: report?.summary ?? null,
+      tokens_used: steps.reduce((sum, step) => sum + step.tokens, 0),
+      hypotheses: (report?.hypotheses ?? []).map((hypothesis, i) => ({
+        rank: i + 1,
+        root_cause_class: hypothesis.root_cause_class,
+        service: hypothesis.service,
+        summary: hypothesis.summary,
+        confidence: hypothesis.confidence,
+        evidence: hypothesis.evidence_ids.map((cited) => ({
+          tool_call_id: cited,
+          excerpt: results.get(cited) ?? '',
+        })),
+      })),
+      missing_evidence: report?.missing_evidence ?? [],
+      partial: report?.partial ?? false,
+      models: group.models ?? [],
+      proposed_actions: actions.map((action) => ({
+        id: action.id,
+        investigation_id: action.investigation_id,
+        kind: action.kind,
+        target: action.target,
+        parameters: action.parameters,
+        rationale: action.rationale,
+        status: action.decision ?? 'pending',
+        proposed_at: action.proposed_at.toISOString(),
+        decided_by: action.approver,
+        decided_at: action.decided_at?.toISOString() ?? null,
+        decision_reason: action.reason,
+      })),
+      steps: steps.map((step) => ({
+        seq: step.seq,
+        kind: step.kind,
+        summary: step.summary,
+        // A call is shown once it has returned: its status and duration come from its result.
+        tool_call:
+          step.tool_call_id === null ||
+          step.tool_name === null ||
+          step.tool_status === null ||
+          step.duration_ms === null
+            ? null
+            : {
+                id: step.tool_call_id,
+                name: step.tool_name,
+                status: step.tool_status,
+                duration_ms: step.duration_ms,
+              },
+        recorded_at: step.recorded_at.toISOString(),
+      })),
     };
   };

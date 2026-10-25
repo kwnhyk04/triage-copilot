@@ -20,6 +20,7 @@ from agent.model import Model, ScriptedModel
 from agent.outbox import Relay, sqs_sender
 from agent.partitions import maintain_partitions
 from agent.providers import make_provider
+from agent.retention import maintain_retention
 from agent.runbooks import FastEmbedder, RunbookSearch
 from agent.settings import Role, Settings
 from agent.tools import Tools
@@ -121,18 +122,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stopping = asyncio.Event()
         consuming = asyncio.create_task(consumer.run(stopping))
         relaying = asyncio.create_task(relay.run(stopping))
-        stop_partitions = threading.Event()
+        stop_maintenance = threading.Event()
         threading.Thread(
             target=maintain_partitions,
-            args=(engine, stop_partitions),
+            args=(engine, stop_maintenance),
             name="partitions",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=maintain_retention,
+            args=(engine, set(settings.live_tenants), stop_maintenance),
+            name="retention",
             daemon=True,
         ).start()
         yield
         # Uvicorn ends the lifespan on SIGTERM. Each job finishes and records its current step,
         # then exits without deleting its message, which redelivers once its visibility lapses.
         stopping.set()
-        stop_partitions.set()
+        stop_maintenance.set()
         await consuming
         await relaying
         await sim.aclose()

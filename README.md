@@ -197,6 +197,8 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
+Reports: with `make dev` running, `http://127.0.0.1:3200/investigations` lists every investigation, newest first, each linked to its report (the verdict, the cause with its evidence, the models asked and any fallback). The web server reads them from the gateway with its own API key; the pages have no login yet (step 9) and listen on 127.0.0.1 only. A live tenant's snapshots and steps are purged after 30 days, by the gateway and the agent each; its reports stay.
+
 Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:
 
 ```sh
