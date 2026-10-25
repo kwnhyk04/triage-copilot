@@ -181,7 +181,7 @@ export interface paths {
         };
         /**
          * The alert group behind an investigation, for the agent's get_alert_context tool.
-         * @description Read only. Returns the group's 200 oldest alerts as the gateway stored them (labels, start and status; annotations are not stored) and how many it holds in all.
+         * @description Read only. Returns the group's 200 oldest alerts as the gateway stored them (labels, annotations from 0.5.0 on, start and status) and how many it holds in all.
          */
         get: operations["getAlertContext"];
         put?: never;

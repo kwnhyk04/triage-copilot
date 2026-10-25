@@ -9,10 +9,12 @@ unexport APPROVER_API_KEY
 unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
 # Only the eval harness gets the sim's admin address: its state names each scenario's answer.
 unexport SIM_ADMIN_URL
+# Only watch gets the apps' webhook tokens.
+unexport WATCH_FA_TOKEN WATCH_FL_TOKEN
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
-.PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
+.PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
 	scenarios-check dlq-replay embed-model runbooks smoke switch
 
@@ -47,6 +49,14 @@ dev-agent:
 
 dev-executor:
 	uv run executor --reload
+
+# Polls FreightAudit and FilingLens (docker ps and logs, git log, health URLs) and posts their
+# state changes to the gateway's webhook. Not part of make dev: it reads the real apps. No
+# reloader, which would restart it and lose the alerts it is holding.
+dev-watch: export WATCH_FA_TOKEN := $(WATCH_FA_TOKEN)
+dev-watch: export WATCH_FL_TOKEN := $(WATCH_FL_TOKEN)
+dev-watch:
+	uv run watch
 
 dev-sim:
 	uv run sim --reload
@@ -143,13 +153,13 @@ smoke: export SIM_ADMIN_URL := $(SIM_ADMIN_URL)
 smoke:
 	uv run python evals/harness/run.py $(SCENARIO)
 
-# Replays every failure store: parked gateway outbox messages (the running gateway sends them),
-# agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then
-# investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
 # The kill switches (live off and claude on by default): make switch, or make switch NAME=live STATE=on.
 switch:
 	uv run python -m agent.switches $(if $(NAME),set $(NAME) $(STATE),show)
 
+# Replays every failure store: parked gateway outbox messages (the running gateway sends them),
+# agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then
+# investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
 dlq-replay:
 	pnpm --filter @triage/gateway outbox:replay
 	pnpm --filter @triage/gateway events:replay

@@ -147,6 +147,7 @@ With room to finish, Haiku found the cause more often (top-1 0.85 against 0.75) 
 | `apps/web` | Next.js UI and backend-for-frontend | 3200 |
 | `services/agent` | SQS consumer + internal FastAPI | 4210 |
 | `services/executor` | Runs approved, allowlisted actions only | 4220 |
+| `services/watch` | Polls FreightAudit and FilingLens and posts their state changes as alerts (read-only: `docker ps` and `logs`, `git log`, HTTP GET) | 4240 |
 | `sim/` | Scenario engine for scripted incidents; admin port for the eval harness only | 4230, 4231 |
 | `contracts/` | OpenAPI, GraphQL and SQS message schemas | |
 | `packages/ts-*`, `packages/py-*` | Shared config, telemetry and generated clients | |
@@ -190,6 +191,8 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `make runbooks` | Embeds `runbooks/*.md` into `agent.runbook_chunks` for `search_runbooks` |
 | `make smoke` | One scenario (`SCENARIO=bad-deploy-1`) against the running stack; needs `make dev` with `AI_ENABLED=true` and the provider keys in `.env`. Prints the report, each tool call, tokens and latency per model turn, and the gateway's copy; results go to `evals/reports/runs/` |
 | `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `agent-events-dlq.fifo`, `investigations-dlq.fifo`, and the agent's `dead_letters` |
+| `make switch` | Shows the kill switches; `NAME=live\|claude STATE=on\|off` flips one (live is off and claude on by default) |
+| `make dev-watch` | Runs `watch` against the apps whose `WATCH_*_TOKEN` is set in `.env` (none by default; see `.env.example`). It reads the real apps, so it is not part of `make dev` |
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
