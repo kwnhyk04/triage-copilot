@@ -231,6 +231,12 @@ class StoredAlert(BaseModel):
         str, Field(description="The fingerprint the gateway computed from the labels.")
     ]
     labels: Labels
+    annotations: Annotated[
+        Labels | None,
+        Field(
+            description="The annotations the alert arrived with; absent for alerts stored before they were kept (0.5.0)."
+        ),
+    ] = None
     starts_at: AwareDatetime
     status: AlertStatus
 

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, model_validator
 
@@ -10,6 +11,8 @@ from py_telemetry import LogLevel
 
 Provider = Literal["gemini", "anthropic", "nvidia", "openrouter", "ollama"]
 RoleName = Literal["primary", "fallback", "small"]
+# The apps whose real incidents TC triages (docs/context.md, Real Incidents).
+LiveApp = Literal["freight-audit", "filing-lens"]
 ROLES: tuple[RoleName, ...] = ("primary", "fallback", "small")
 # Each provider's key setting; ollama runs locally without one.
 KEY_SETTINGS: dict[Provider, str | None] = {
@@ -60,6 +63,9 @@ class Settings(EnvSettings):
     # Model tokens one investigation may use, cached input included, in thousands (report names
     # carry it); below 60,000 the final report's reserve stops it before its first turn.
     investigation_token_cap: Annotated[int, Field(ge=60_000, multiple_of=1_000)] = 150_000
+    # Tenants whose alerts are real incidents, each with the app it watches, as JSON
+    # {"<tenant uuid>": "freight-audit"}; every other tenant's alerts come from the sim.
+    live_tenants: dict[UUID, LiveApp] = Field(default_factory=dict[UUID, LiveApp])
     # Also write steps to investigation_steps_p while it is partitioned online (docs/migrations.md).
     steps_dual_write: bool = False
     log_level: LogLevel = "info"

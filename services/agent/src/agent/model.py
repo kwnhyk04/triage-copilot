@@ -28,7 +28,9 @@ RootCause = Literal[
     "certificate_expiry",
     "unknown",
 ]
-Outcome = Literal["ok", "rate_limited", "quota_exhausted", "credits_exhausted", "error"]
+Outcome = Literal[
+    "ok", "rate_limited", "quota_exhausted", "model_exhausted", "credits_exhausted", "error"
+]
 # Framing a provider adds around each message and tool definition, in tokens.
 MESSAGE_OVERHEAD = 16
 PROMPT_OVERHEAD = 256
@@ -95,6 +97,8 @@ class ModelCall:
     max_output_tokens: int | None = None
     latency_ms: int = 0
     error: str | None = None
+    # sha256 of the prompt the call was made with, from its TurnRequest or ToolContext.
+    prompt_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,12 +135,34 @@ class RateLimited(ModelError):
     """A 429 for requests or tokens per minute."""
 
 
+class KeyRejected(ModelError):
+    """The provider rejected the API key (401 or 403): never retried; the call goes on down the
+    chain."""
+
+    def __init__(self, message: str, *, usage: Usage = NO_USAGE) -> None:
+        super().__init__(message, retryable=False, usage=usage)
+
+
+class Refused(ModelError):
+    """The model declined the request (Claude's stop reason "refusal"): never retried; the call
+    goes on down the chain."""
+
+    def __init__(self, message: str, *, usage: Usage = NO_USAGE) -> None:
+        super().__init__(message, retryable=False, usage=usage)
+
+
 class QuotaExhausted(ModelError):
     """The model's requests for the day are spent, by the limiter's count or the provider's."""
 
 
+class ModelExhausted(QuotaExhausted):
+    """Anthropic answered this model with a 429 and no retry-after: no call to it until the month
+    ends, while its other models go on."""
+
+
 class CreditsExhausted(QuotaExhausted):
-    """Claude's API credits or spend limit are used up: no call to it until the month ends."""
+    """Anthropic's credits or spend limit are used up: no call to any of its models until the
+    month ends."""
 
 
 class BudgetRefused(Exception):
@@ -221,6 +247,8 @@ class TurnRequest:
     messages: Sequence[Message]
     tools: Sequence[ToolSpec]
     budget: TurnBudget
+    # sha256 of the prompt (agent.job.prompt_sha): every call made for the turn records it.
+    prompt_sha: str
     # None allows every tool; the forced final report allows submit_report only.
     allowed: tuple[str, ...] | None = None
 
@@ -269,7 +297,18 @@ class ScriptedModel:
             input=min(self.tokens.input, bound), output=min(self.tokens.output, max_output)
         )
         usage = Usage(input=tokens.input, output=tokens.output)
-        call = ModelCall("primary", "scripted", "scripted", "ok", usage, bound, max_output)
+        call = ModelCall(
+            "primary",
+            "scripted",
+            "scripted",
+            "ok",
+            usage,
+            bound,
+            max_output,
+            0,
+            None,
+            request.prompt_sha,
+        )
         return ModelTurn(action=action, tokens=tokens, calls=[call])
 
     def available(self, conn: Connection) -> bool:

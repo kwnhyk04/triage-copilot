@@ -281,6 +281,8 @@ export interface components {
             /** @description The fingerprint the gateway computed from the labels. */
             fingerprint: string;
             labels: components["schemas"]["Labels"];
+            /** @description The annotations the alert arrived with; absent for alerts stored before they were kept (0.5.0). */
+            annotations?: components["schemas"]["Labels"];
             /** Format: date-time */
             starts_at: string;
             status: components["schemas"]["AlertStatus"];

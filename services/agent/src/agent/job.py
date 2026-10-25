@@ -71,6 +71,7 @@ from agent.prompt import (
     prompt_bytes,
 )
 from agent.steps import StepRecordedV2, TokenUsage, record_step, replay
+from agent.switches import is_on
 from agent.tools import (
     TOOL_SPECS,
     MetricsArgs,
@@ -96,7 +97,8 @@ WaitReason = Literal["tenant_cap", "budget"]
 
 def prompt_sha() -> str:
     """Of everything the model is told: the system, forced-report and log-summary prompts, the
-    brief and the tool definitions. Every model call records the one its process runs."""
+    brief and the tool definitions. The job sends it with every turn (TurnRequest) and tool call
+    (ToolContext), and each model call records the one it was made with."""
     tools = json.dumps([asdict(t) for t in TOOL_SPECS], sort_keys=True)
     template = brief("{group_key}", datetime(2000, 1, 1, tzinfo=UTC))
     parts = [SYSTEM, FORCED, SUMMARY_SYSTEM, template, tools]
@@ -229,10 +231,16 @@ class Job:
         token_cap: int,
         dual_write: bool = False,
         on_commit: Callable[[], None] | None = None,
+        live_tenants: Mapping[UUID, str] | None = None,
+        live_tools: Mapping[str, Tool] | None = None,
     ) -> None:
         self.engine = engine
         self.model = model
         self.tools = tools
+        # Live tenants' investigations run only while the live switch is on, and with their own
+        # tools (none until the live tools exist), so they never reach the sim.
+        self.live_tenants = dict(live_tenants or {})
+        self.live_tools = dict(live_tools or {})
         self.ai_enabled = ai_enabled
         self.daily_token_budget = daily_token_budget
         self.tenant_cap = tenant_cap
@@ -262,8 +270,10 @@ class Job:
         if status in FINISHED:
             return "done"
         tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
+        tools = self.live_tools if tenant in self.live_tenants else self.tools
         # The budget check comes before the tenant slot, so parking for budget never held a slot.
-        if not state.steps and not await asyncio.to_thread(self._model_available, conn, True):
+        available = self._model_available
+        if not state.steps and not await asyncio.to_thread(available, conn, True, tenant):
             return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
         if not await asyncio.to_thread(_take_tenant_slot, conn, tenant, self.tenant_cap):
             return await asyncio.to_thread(_park, conn, inv, "tenant_cap", tenant)
@@ -272,10 +282,11 @@ class Job:
             while not stopping.is_set():
                 last = state.steps[-1] if state.steps else None
                 if last is not None and last.kind == "tool_call" and is_model_turn(last):
-                    await self._call_tool(conn, inv, state, last, stopping)
+                    await self._call_tool(conn, inv, state, last, stopping, tools)
                     continue
-                # With AI_ENABLED=false even a resumed investigation parks at its next model turn.
-                if not await asyncio.to_thread(self._model_available, conn, not state.steps):
+                # With AI_ENABLED=false, or the live switch off for a live tenant, even a resumed
+                # investigation parks at its next model turn.
+                if not await asyncio.to_thread(available, conn, not state.steps, tenant):
                     return await asyncio.to_thread(_park, conn, inv, "budget", tenant)
                 messages = history(state.opening, state.steps, state.calls)
                 reason = _stop_reason(state, messages)
@@ -284,7 +295,9 @@ class Job:
 
                 def build(messages: list[Message] = messages) -> TurnRequest:
                     budget = _budget(state, messages, TURN_OUTPUT_CAP, MIN_OUTPUT)
-                    return TurnRequest(state.steps, SYSTEM, messages, TOOL_SPECS, budget)
+                    return TurnRequest(
+                        state.steps, SYSTEM, messages, TOOL_SPECS, budget, PROMPT_SHA
+                    )
 
                 try:
                     turn = await self._model_turn(conn, inv, state, build, stopping)
@@ -302,10 +315,12 @@ class Job:
             pass
         return "stopped"
 
-    def _model_available(self, conn: Connection, new: bool) -> bool:
-        """Model calls are on, a model has quota today, and, for a new investigation, today's
-        token budget is not spent."""
+    def _model_available(self, conn: Connection, new: bool, tenant: UUID | None) -> bool:
+        """Model calls are on (and the live switch, for a live tenant), a model has quota today,
+        and, for a new investigation, today's token budget is not spent."""
         if not self.ai_enabled:
+            return False
+        if tenant in self.live_tenants and not is_on(conn, "live"):
             return False
         if new and _tokens_today(conn) >= self.daily_token_budget:
             return False
@@ -321,7 +336,7 @@ class Job:
         investigation stays parked until it takes its slot, so it keeps its place in that line.
         """
         if reason == "budget":
-            return self._model_available(conn, new)
+            return self._model_available(conn, new, tenant)
         if reason != "tenant_cap":
             return False
         with conn.begin():
@@ -407,7 +422,7 @@ class Job:
         def build() -> TurnRequest:
             budget = _budget(state, forced, REPORT_OUTPUT_CAP, REPORT_MIN_OUTPUT)
             allowed = (REPORT_TOOL,)
-            return TurnRequest(state.steps, SYSTEM, forced, TOOL_SPECS, budget, allowed)
+            return TurnRequest(state.steps, SYSTEM, forced, TOOL_SPECS, budget, PROMPT_SHA, allowed)
 
         draft: ReportDraft | None = None
         tokens: TokenUsage | None = None
@@ -442,8 +457,10 @@ class Job:
         state: State,
         requested: StepRecordedV2,
         stopping: asyncio.Event,
+        tools: Mapping[str, Tool],
     ) -> None:
-        """Runs the tool call the last step asked for and records its result."""
+        """Runs the tool call the last step asked for, from the investigation's tools, and records
+        its result."""
         call_id = requested.tool_call_id or ""
         row = state.calls[call_id]
         started = time.perf_counter()
@@ -453,8 +470,8 @@ class Job:
         elif row.name == REPORT_TOOL:
             result, error = None, f"ToolInputError: {_report_problems(row.args)}"
         else:
-            ctx = ToolContext(inv, state.fired_at, _tool_allowance(state))
-            out, error = await self._invoke(row.name, row.args, ctx, stopping)
+            ctx = ToolContext(inv, state.fired_at, _tool_allowance(state), PROMPT_SHA)
+            out, error = await self._invoke(tools, row.name, row.args, ctx, stopping)
             result = None if out is None else _clip(out.text)
             if out is not None:
                 await self._record_calls(conn, inv, state, out.calls)
@@ -463,13 +480,18 @@ class Job:
         )
 
     async def _invoke(
-        self, name: str, args: dict[str, Any], ctx: ToolContext, stopping: asyncio.Event
+        self,
+        tools: Mapping[str, Tool],
+        name: str,
+        args: dict[str, Any],
+        ctx: ToolContext,
+        stopping: asyncio.Event,
     ) -> tuple[ToolResult | None, str | None]:
         """(result, None), or (None, error) once retries are spent; the investigation goes on.
 
         A ToolInputError (wrong arguments or query) is not retried: the model has to fix it.
         """
-        tool = self.tools.get(name)
+        tool = tools.get(name)
         if tool is None:
             return None, f"ToolInputError: unknown tool {name}"
         timeout = TOOL_TIMEOUTS.get(name, TOOL_TIMEOUT)
@@ -1058,7 +1080,7 @@ def _store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
                     "max_output_tokens": c.max_output_tokens,
                     "latency_ms": c.latency_ms,
                     "error": c.error,
-                    "prompt_sha": PROMPT_SHA,
+                    "prompt_sha": c.prompt_sha,
                 }
                 for c in calls
             ],

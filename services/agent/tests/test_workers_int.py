@@ -24,7 +24,7 @@ from agent.consumer import Consumer
 from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ToolCall
 from agent.dlq import replay_dead_letters, replay_dlq
 from agent.job import MAX_TOOL_CALLS, UTC_TODAY, Job, Outcome, Request
-from agent.llm import Binding, Limiter, Router
+from agent.llm import Binding, Limiter, Router, spent
 from agent.model import (
     HypothesisDraft,
     Model,
@@ -744,3 +744,51 @@ def test_claude_credits_gone_hold_parked_work_until_the_month_ends(engine: Engin
         assert job.resumable(conn, inv, "budget", TENANT, new=False)
         # From the day the credits expire, Claude is spent whatever the calls say.
         assert not job_until(today).resumable(conn, inv, "budget", TENANT, new=False)
+
+
+LATER = datetime.now(UTC).date() + timedelta(days=60)
+HAIKU = Role("fallback", "anthropic", "claude-haiku-5-5", None, 0, 0, until=LATER)
+OPUS = Role("primary", "anthropic", "claude-opus-5-5", None, 0, 0, until=LATER)
+GEMINI = Role("primary", "gemini", "gemini-3.5-flash-lite", None, 0, 0)
+
+
+def stopped(engine: Engine, model: str, outcome: str, error: str) -> None:
+    """An Anthropic call this month that stopped with the given outcome."""
+    inv = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(insert(Investigation).values(id=inv))
+        conn.execute(
+            insert(ModelCall).values(
+                investigation_id=inv,
+                role="fallback",
+                provider="anthropic",
+                model=model,
+                outcome=outcome,
+                input_tokens=0,
+                output_tokens=0,
+                cached_tokens=0,
+                thought_tokens=0,
+                latency_ms=300,
+                error=error,
+            )
+        )
+
+
+def test_a_credits_stop_holds_every_anthropic_model_until_the_month_ends(engine: Engine) -> None:
+    error = "CreditsExhausted: anthropic 402: credits or spend limit used up"
+    stopped(engine, "claude-haiku-5-5", "credits_exhausted", error)
+
+    with engine.connect() as conn:
+        for role in (HAIKU, OPUS):
+            assert "credits or spend limit" in (spent(conn, role) or ""), role.model
+        assert spent(conn, GEMINI) is None
+
+
+def test_a_429_without_retry_after_stops_only_its_own_model(engine: Engine) -> None:
+    error = "ModelExhausted: anthropic 429 without retry-after"
+    stopped(engine, "claude-opus-5-5", "model_exhausted", error)
+
+    with engine.connect() as conn:
+        assert "429" in (spent(conn, OPUS) or "")
+        # One Opus 429 never stops Haiku's triage.
+        assert spent(conn, HAIKU) is None

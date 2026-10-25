@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -202,6 +203,7 @@ class ModelCall(Base):
             "ok",
             "rate_limited",
             "quota_exhausted",
+            "model_exhausted",
             "credits_exhausted",
             "error",
             name="model_call_outcome",
@@ -220,9 +222,20 @@ class ModelCall(Base):
     max_output_tokens: Mapped[int | None]
     latency_ms: Mapped[int]
     error: Mapped[str | None]
-    # sha256 of the prompt the agent process ran (agent.job.prompt_sha); null before 0008.
+    # sha256 of the prompt the call was made with (agent.job.prompt_sha); null before 0008.
     prompt_sha: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Switch(Base):
+    """An operator's kill switch (agent.switches); a switch with no row is at its default."""
+
+    __tablename__ = "switches"
+    __table_args__ = (CheckConstraint("name IN ('live', 'claude')", name="switches_name_check"),)
+
+    name: Mapped[str] = mapped_column(primary_key=True)
+    enabled: Mapped[bool]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class Outbox(Base):

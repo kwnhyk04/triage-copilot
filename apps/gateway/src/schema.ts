@@ -137,6 +137,8 @@ export const alerts = gateway.table(
       .references(() => alertGroups.id),
     fingerprint: text('fingerprint').notNull(),
     labels: jsonb('labels').$type<Record<string, string>>().notNull(),
+    // As the alert arrived (summary, description, runbook_url, a watch snapshot); null before 0005.
+    annotations: jsonb('annotations').$type<Record<string, string>>(),
     startsAt: timestamptz('starts_at').notNull(),
     status: alertStatus('status').notNull(),
     createdAt: createdAt(),

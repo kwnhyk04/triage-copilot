@@ -35,7 +35,7 @@ SIM_TIMEOUT = 10.0
 def make_router(settings: Settings, engine: Engine) -> Router:
     """The primary, fallback and small roles, and Claude when it is on, each under its limits."""
 
-    def is_spent(role: Role) -> bool:
+    def is_spent(role: Role) -> str | None:
         with engine.connect() as conn:
             return spent(conn, role)
 
@@ -82,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token_cap=settings.investigation_token_cap,
         dual_write=settings.steps_dual_write,
         on_commit=relay.nudge,
+        live_tenants=settings.live_tenants,
     )
     consumer = Consumer(
         sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight

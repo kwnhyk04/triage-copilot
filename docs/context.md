@@ -282,7 +282,7 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 - Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms locally (0.552 s in CI on 2026-10-18; the test allows 3 s). Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
 - Story B (event versioning): replaying stored v1 steps returns v2 objects; a golden snapshot pins the result, and stored rows are never rewritten.
 
-## Real Incidents (planned 2026-10-24, nothing built)
+## Real Incidents (planned 2026-10-24; P1.1 to P1.3 built 2026-10-25)
 
 The plan was approved by the user on 2026-10-24. Its steps are in docs/todo.md (P0, then P1.1 to P4.3), and its decisions in docs/memory.md. The flow:
 - Claude Haiku 5.5 triages every alert: real or not, and the likely cause.
@@ -330,6 +330,7 @@ The agent also scrubs provider error text. Canary tests cover `watch`, gateway, 
 - Live triage runs Claude first until `LLM_CLAUDE_UNTIL` (2026-11-10), then the existing free chain (Gemini 3.5 Flash-Lite, then NIM DeepSeek v4.1 Flash; summaries on Gemini 3.1 Flash-Lite).
 - The sim roles and eval cache keys stay unchanged.
 - **Falls to the free chain, with a reason:** credits or spend limit (now account-wide), a 401 or 403, a refusal (no server-side refusal fallback), a spent dollar cap, or a 429 retry-after over 60 s.
+  - Built in P1.1 (2026-10-25): the account-wide credits stop (`credits_exhausted` per provider), Anthropic's 429 without retry-after as a per-model stop (`model_exhausted`, agent 0010), `KeyRejected` (401/403, every provider) and `Refused` (Claude's refusal) moving a turn or a log summary down the chain, the reason on each skipped call (`spent()` returns it), Claude's summaries recorded as role `small`, and the prompt sha carried per call (`TurnRequest`, `ToolContext`). A key rejection does not stop the model for a day; the next turn asks it again. The dollar caps and the 60 s retry-after rule come with live triage (P1.8).
 - **Planner and coder:** single streamed structured-output calls with no tools. Opus 5.5 and Sonnet 5.5 reject forced `tool_choice` and keep thinking on, so a single call needs no thinking replay.
 - **ReportRecorded v2** adds `verdict` and `models[]` per part, with skip reasons.
 
@@ -387,7 +388,9 @@ Step 6b is done (2026-10-21, once the proposal check merged as `177839d`): the s
 Next, in this order:
 
 1. P0: proposal check version 2 on the sim is built (2026-10-25). The user runs its two dev passes, the Haiku one before 2026-11-10, and ships it (docs/todo.md).
-2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md).
+2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 are built on branch `p1-1-fallback-fixes` (2026-10-25), one PR for the user to ship; P1.4 is next. The dev database needs `make migrate` (agent 0011, gateway 0005) before the agent or gateway from that code starts.
+   - P1.2: `LIVE_TENANTS` maps a tenant to its app. `agent.switches` holds `live` (default off) and `claude` (default on), flipped with `make switch NAME=<name> STATE=on|off`. The job reads `live` before every model turn of a live tenant, which parks as `budget` while it is off, and the limiter reads `claude` before every Claude request. Live tenants get their own tools, none until P1.8, so they never reach the sim. They still get the sim's prompt until then, so `live` stays off.
+   - P1.3: the gateway keeps each alert's annotations (gateway 0005, API 0.5.0). `get_alert_context` shows summary, description and runbook_url only for a tool set built with `annotations=True`. The sim's tools keep their old results, so eval runs stay comparable.
 3. Whether to size the 15-call cap with another Haiku run (the user's call). A test split after version 2 would be a third attempt informed by test failures, not a held-out result.
 4. `EVAL_ENABLED=true`, the user's switch; the `dev-ci-1` floors are set (docs/todo.md, step 7).
 5. The manual quota-stop check on eval.yml, once `EVAL_ENABLED` is on, on a day Google has refused the project's requests.

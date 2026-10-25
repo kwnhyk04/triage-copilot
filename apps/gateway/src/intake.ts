@@ -138,6 +138,7 @@ export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigation
       alerts.map((alert) => ({
         fingerprint: alert.fingerprint,
         labels: alert.labels,
+        annotations: alert.annotations,
         starts_at: alert.startsAt,
         status: alert.status,
       })),
@@ -219,10 +220,12 @@ export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigation
         group = created;
       }
       await tx`
-        INSERT INTO gateway.alerts (tenant_id, group_id, fingerprint, labels, starts_at, status)
-        SELECT ${tenantId}, ${group.id}, fingerprint, labels, starts_at, status
-        FROM jsonb_to_recordset(${rows})
-          AS i(fingerprint text, labels jsonb, starts_at timestamptz, status gateway.alert_status)
+        INSERT INTO gateway.alerts
+          (tenant_id, group_id, fingerprint, labels, annotations, starts_at, status)
+        SELECT ${tenantId}, ${group.id}, fingerprint, labels, annotations, starts_at, status
+        FROM jsonb_to_recordset(${rows}) AS i(
+          fingerprint text, labels jsonb, annotations jsonb, starts_at timestamptz,
+          status gateway.alert_status)
         ON CONFLICT DO NOTHING`;
       return { group_id: group.id, deduped: false, queued };
     });

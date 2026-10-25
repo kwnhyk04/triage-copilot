@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
+import httpx2
 import pytest
 from sqlalchemy import Connection
 
@@ -15,10 +17,12 @@ from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
     CreditsExhausted,
+    KeyRejected,
     Message,
     ModelError,
     QuotaExhausted,
     RateLimited,
+    Refused,
     ReportDraft,
     ToolRequest,
     ToolSpec,
@@ -29,7 +33,8 @@ from agent.model import (
 from agent.prompt import METRICS, SYSTEM
 from agent.providers import ProviderTurn
 from agent.settings import Role, RoleName
-from agent.tools import TOOL_SPECS, DependenciesArgs, ToolInputError, parse
+from agent.tools import TOOL_SPECS, DependenciesArgs, ToolContext, ToolInputError, Tools, parse
+from py_clients.clients import AlertContextClient
 from sim.catalog import CATALOG
 
 BUDGET = TurnBudget(
@@ -41,7 +46,9 @@ BUDGET = TurnBudget(
     output_cap=2_048,
     min_output=256,
 )
-REQUEST = TurnRequest([], "system", [Message("user", text="go")], [], BUDGET)
+# The sha the job sends with its prompt: every call of the turn records it.
+SHA = "sha256-of-the-prompt"
+REQUEST = TurnRequest([], "system", [Message("user", text="go")], [], BUDGET, SHA)
 
 
 class Fake:
@@ -111,7 +118,7 @@ def test_evals_never_fall_back() -> None:
 
 def test_a_turn_whose_input_leaves_too_little_is_refused_before_any_request() -> None:
     primary = Fake("primary")
-    tight = TurnRequest([], "s", [], [], TurnBudget(10_200, 10_000, 0, 0, 0, 2_048, 256))
+    tight = TurnRequest([], "s", [], [], TurnBudget(10_200, 10_000, 0, 0, 0, 2_048, 256), SHA)
 
     with pytest.raises(BudgetRefused):
         asyncio.run(router(primary, Fake("fallback")).turn(tight))
@@ -121,7 +128,7 @@ def test_a_turn_whose_input_leaves_too_little_is_refused_before_any_request() ->
 
 def test_output_is_capped_to_what_the_input_leaves() -> None:
     primary = Fake("primary")
-    request = TurnRequest([], "s", [], [], TurnBudget(11_000, 10_000, 0, 0, 0, 2_048, 256))
+    request = TurnRequest([], "s", [], [], TurnBudget(11_000, 10_000, 0, 0, 0, 2_048, 256), SHA)
 
     asyncio.run(router(primary, Fake("fallback")).turn(request))
 
@@ -155,7 +162,7 @@ def test_a_prompt_past_the_limit_is_refused_whatever_tokens_are_left() -> None:
     primary = Fake("primary")
 
     with pytest.raises(BudgetRefused):
-        asyncio.run(router(primary, Fake("fallback")).turn(TurnRequest([], "s", [], [], over)))
+        asyncio.run(router(primary, Fake("fallback")).turn(TurnRequest([], "s", [], [], over, SHA)))
 
     assert primary.max_outputs == []
 
@@ -179,7 +186,7 @@ def test_the_limiter_waits_out_the_minute_and_refuses_a_spent_day() -> None:
         waits.append(seconds)
         now[0] += seconds
 
-    limiter = Limiter(lambda role: False, clock=lambda: now[0], sleep=sleep)
+    limiter = Limiter(lambda role: None, clock=lambda: now[0], sleep=sleep)
     twice_a_minute = role("primary", "m", rpm=2)
 
     async def three() -> None:
@@ -189,17 +196,18 @@ def test_the_limiter_waits_out_the_minute_and_refuses_a_spent_day() -> None:
     asyncio.run(three())
     assert waits == [60.0]
 
-    spent_day = Limiter(lambda role: True)
-    with pytest.raises(QuotaExhausted):
+    spent_day = Limiter(lambda role: "it made its 500 requests for today (Pacific)")
+    with pytest.raises(QuotaExhausted) as raised:
         asyncio.run(spent_day.acquire(role("primary", "m", rpd=500)))
+    assert str(raised.value) == "m skipped: it made its 500 requests for today (Pacific)"
 
 
 def test_summaries_skip_when_the_page_would_not_fit() -> None:
     small = router(Fake("primary"), Fake("fallback"))
 
-    assert asyncio.run(small.summarize("x" * 5_000, remaining=1_000)) == (None, [])
+    assert asyncio.run(small.summarize("x" * 5_000, 1_000, SHA)) == (None, [])
 
-    summary, calls = asyncio.run(small.summarize("x" * 500, remaining=10_000))
+    summary, calls = asyncio.run(small.summarize("x" * 500, 10_000, SHA))
     assert summary == "- 40 timeouts"
     assert [(c.role, c.outcome, c.usage.input) for c in calls] == [("small", "ok", 500)]
 
@@ -207,7 +215,7 @@ def test_summaries_skip_when_the_page_would_not_fit() -> None:
 def test_summaries_skip_a_page_past_the_prompt_limit() -> None:
     small = router(Fake("primary"), Fake("fallback"))
 
-    assert asyncio.run(small.summarize("x" * PROMPT_LIMIT, remaining=10**6)) == (None, [])
+    assert asyncio.run(small.summarize("x" * PROMPT_LIMIT, 10**6, SHA)) == (None, [])
 
 
 def chain(
@@ -264,7 +272,7 @@ def test_credits_gone_moves_the_turn_down_the_chain_and_says_so(
     ]
     assert any("credits" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
     # Once spent() reads that call, the limiter keeps Claude off without asking it.
-    claude_spent = Limiter(lambda r: r.provider == "anthropic")
+    claude_spent = Limiter(lambda r: "credits used up" if r.provider == "anthropic" else None)
     primary = Fake("primary", QuotaExhausted("day spent"))
     again = chain(primary, claude, Fake("fallback"), limiter=claude_spent)
     turn = asyncio.run(again.turn(REQUEST))
@@ -299,24 +307,88 @@ def test_evals_pin_one_model_and_never_reach_claude() -> None:
     assert claude.max_outputs == fallback.max_outputs == []
 
 
-def test_summaries_go_to_claude_while_the_small_model_is_rate_limited() -> None:
-    small = Fake("small", RateLimited("busy minute"))
-    router = chain(Fake("primary"), Fake("claude"), Fake("fallback"), small=small)
+@pytest.mark.parametrize(
+    "error",
+    [
+        RateLimited("busy minute"),
+        KeyRejected("gemini 401: the API key was rejected"),
+        Refused("the model declined the request"),
+    ],
+)
+def test_summaries_go_to_claude_while_the_small_model_cannot_answer(error: ModelError) -> None:
+    router = chain(Fake("primary"), Fake("claude"), Fake("fallback"), small=Fake("small", error))
 
-    summary, calls = asyncio.run(router.summarize("x" * 500, remaining=10_000))
+    summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, SHA))
 
     assert summary == "- 40 timeouts"
-    assert [(c.model, c.outcome) for c in calls] == [
-        ("small-model", "rate_limited"),
-        ("claude-model", "ok"),
+    # A summary is the small role's work whichever model writes it, so the job's LAST_TURN, which
+    # skips role small, never takes one for the last turn after a resume.
+    assert [(c.role, c.model, c.outcome) for c in calls] == [
+        ("small", "small-model", "rate_limited" if isinstance(error, RateLimited) else "error"),
+        ("small", "claude-model", "ok"),
     ]
+
+
+def test_a_rejected_key_or_a_refusal_moves_the_turn_down_the_chain_with_its_reason() -> None:
+    for error in (
+        KeyRejected("anthropic 401: the API key was rejected"),
+        Refused("anthropic declined the request (category cyber)"),
+    ):
+        claude, fallback = Fake("claude", error), Fake("fallback")
+        primary = Fake("primary", QuotaExhausted("day spent"))
+
+        turn = asyncio.run(chain(primary, claude, fallback).turn(REQUEST))
+
+        assert [(c.model, c.outcome) for c in turn.calls] == [
+            ("primary-model", "quota_exhausted"),
+            ("claude-model", "error"),
+            ("fallback-model", "ok"),
+        ]
+        assert turn.calls[1].error == f"{type(error).__name__}: {error}"
+        assert turn.model == "fallback-model"
+
+
+def test_a_skipped_model_records_why_it_was_skipped() -> None:
+    expired = "its credits ended on 2026-10-01 (UTC)"
+    limiter = Limiter(lambda r: expired if r.provider == "anthropic" else None)
+    claude = Fake("claude")
+    router = chain(
+        Fake("primary", QuotaExhausted("day spent")), claude, Fake("fallback"), limiter=limiter
+    )
+
+    turn = asyncio.run(router.turn(REQUEST))
+
+    assert [(c.model, c.outcome, c.error) for c in turn.calls[1:]] == [
+        ("claude-model", "quota_exhausted", f"claude-model skipped: {expired}"),
+        ("fallback-model", "ok", None),
+    ]
+    assert claude.max_outputs == []
+
+
+def test_every_call_records_the_prompt_sha_it_was_made_with() -> None:
+    skip_primary = Limiter(lambda r: "its day is spent" if r.name == "primary" else None)
+    claude = Fake("claude", RateLimited("busy minute", retry_after=3))
+    router = chain(Fake("primary"), claude, Fake("fallback"), limiter=skip_primary)
+
+    with pytest.raises(RateLimited) as raised:
+        asyncio.run(router.turn(REQUEST))
+    turn = asyncio.run(router.turn(REQUEST))
+    summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, "sha-of-the-log-prompt"))
+
+    assert [(c.outcome, c.prompt_sha) for c in raised.value.calls] == [
+        ("quota_exhausted", SHA),
+        ("rate_limited", SHA),
+    ]
+    assert {c.prompt_sha for c in turn.calls} == {SHA}
+    assert summary is not None
+    assert [c.prompt_sha for c in calls] == ["sha-of-the-log-prompt"]
 
 
 def test_claude_is_spent_from_the_day_its_credits_expire() -> None:
     # The date alone decides, before any query: no connection is needed.
     no_db = cast("Connection", object())
     expired = Role("fallback", "anthropic", "claude-haiku-5-5", None, 0, 0, until=date(2026, 10, 1))
-    assert spent(no_db, expired)
+    assert spent(no_db, expired) == "its credits ended on 2026-10-01 (UTC)"
 
 
 def test_the_system_prompt_lists_the_sims_metric_catalog() -> None:
@@ -334,6 +406,42 @@ def test_tool_definitions_are_plain_json_schema_with_a_reason() -> None:
             assert spec.parameters["required"][0] == "reason"
     report = next(s for s in TOOL_SPECS if s.name == "submit_report")
     assert set(report.parameters["properties"]) == set(ReportDraft.model_fields)
+
+
+def test_alert_context_shows_annotations_only_where_asked() -> None:
+    annotations = {
+        "summary": "checkout 5xx ratio above 5% for 2 minutes",
+        "runbook_url": "https://runbooks.example/5xx",
+        "snapshot": "x" * 5_000,
+    }
+    alert = {"fingerprint": "f", "labels": {"alertname": "CheckoutHighErrorRate"}}
+    context = {
+        "investigation_id": str(uuid.uuid4()),
+        "group_id": str(uuid.uuid4()),
+        "tenant_id": str(uuid.uuid4()),
+        "group_key": '{}:{alertname="CheckoutHighErrorRate"}',
+        "window_start": "2026-10-14T12:00:05Z",
+        "severity": "critical",
+        "alert_count": 1,
+        "alerts": [
+            alert
+            | {"starts_at": "2026-10-14T12:00:05Z", "status": "firing", "annotations": annotations}
+        ],
+    }
+    transport = httpx2.MockTransport(lambda _: httpx2.Response(200, json=context))
+    alerts = AlertContextClient("http://gateway.test", "token", transport=transport)
+    ctx = ToolContext(uuid.uuid4(), datetime(2026, 10, 14, 12, tzinfo=UTC), 0, SHA)
+    sim = cast("httpx2.AsyncClient", None)
+
+    shown = asyncio.run(Tools(sim, alerts, None, None, annotations=True).get_alert_context(ctx, {}))
+    hidden = asyncio.run(Tools(sim, alerts, None, None).get_alert_context(ctx, {}))
+
+    assert "  summary: checkout 5xx ratio above 5% for 2 minutes" in shown.splitlines()
+    assert "  runbook_url: https://runbooks.example/5xx" in shown.splitlines()
+    # Only the standard annotations: a large one, such as a snapshot, has its own tool.
+    assert "snapshot" not in shown
+    # The sim's tools keep their results, so eval runs stay comparable.
+    assert "summary" not in hidden
 
 
 @pytest.mark.parametrize("service", ["../../../admin/state", "..", "a/b", "orders db"])

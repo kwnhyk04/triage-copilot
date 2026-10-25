@@ -31,6 +31,10 @@ SERIES_SHOWN = 10
 SAMPLES_SHOWN = 24
 UNSUMMARIZED_LINES = 40
 SERVICE_NAME = re.compile(r"[A-Za-z0-9._-]+")
+# Alertmanager's standard annotations, which get_alert_context shows when its tools ask for them;
+# anything larger, such as a watch snapshot, gets its own tool.
+SHOWN_ANNOTATIONS = ("summary", "description", "runbook_url")
+ANNOTATION_CHARS = 500
 
 
 class ToolInputError(Exception):
@@ -47,6 +51,8 @@ class ToolContext:
     fired_at: datetime
     # Tokens the tool may spend on model calls without touching the final report's reserve.
     token_allowance: int
+    # The investigation's prompt sha, which the tool's own model calls record.
+    prompt_sha: str
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,8 @@ class ToolResult:
 
 
 Tool = Callable[[ToolContext, dict[str, Any]], Awaitable[str | ToolResult]]
-Summarize = Callable[[str, int], Awaitable[tuple[str | None, list[ModelCall]]]]
+# A log page, the tokens it may spend and the prompt sha its calls record.
+Summarize = Callable[[str, int, str], Awaitable[tuple[str | None, list[ModelCall]]]]
 
 
 class _Args(BaseModel):
@@ -257,11 +264,15 @@ class Tools:
         alerts: AlertContextClient,
         runbooks: RunbookSearch | None,
         summarize: Summarize | None,
+        *,
+        annotations: bool = False,
     ) -> None:
         self.sim = sim
         self.alerts = alerts
         self.runbooks = runbooks
         self.summarize = summarize
+        # The sim's tools leave annotations out, so eval runs stay comparable with the cached ones.
+        self.annotations = annotations
 
     def all(self) -> dict[str, Tool]:
         return {
@@ -289,6 +300,12 @@ class Tools:
             labels = ", ".join(f"{k}={v}" for k, v in sorted(alert.labels.root.items()))
             started = _relative(alert.starts_at, ctx.fired_at)
             lines.append(f"- {alert.status} since {started}: {labels}")
+            notes = alert.annotations.root if self.annotations and alert.annotations else {}
+            lines.extend(
+                f"  {name}: {notes[name][:ANNOTATION_CHARS]}"
+                for name in SHOWN_ANNOTATIONS
+                if name in notes
+            )
         if group.alert_count > 20:
             lines.append(f"(+{group.alert_count - 20} more alerts)")
         return "\n".join(lines)
@@ -357,7 +374,7 @@ class Tools:
         page = "\n".join(rendered)
         if not query.cursor or self.summarize is None:
             return f"{len(rendered)} lines:\n{page}\n{footer}"
-        summary, calls = await self.summarize(page, ctx.token_allowance)
+        summary, calls = await self.summarize(page, ctx.token_allowance, ctx.prompt_sha)
         if summary is None:
             head = "\n".join(rendered[:UNSUMMARIZED_LINES])
             text = f"{len(rendered)} lines, no summary available; the first {UNSUMMARIZED_LINES}:"

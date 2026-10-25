@@ -1,0 +1,1 @@
+ALTER TABLE "gateway"."alerts" ADD COLUMN "annotations" jsonb;
