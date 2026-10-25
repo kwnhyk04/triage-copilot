@@ -57,6 +57,7 @@ Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; c
 | gateway / agent / executor / sim | 4200 / 4210 / 4220 / 4230 |
 | gateway internal listener (executor only) | 4201 |
 | sim admin listener (eval harness only) | 4231 |
+| watch (`make dev-watch`; only its probes listen) | 4240 |
 | web (Next.js) | 3200 |
 | Grafana | 3201 |
 | Jaeger UI | 16688 |
@@ -139,6 +140,12 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 - Gateway credentials (`apps/gateway/src/app.ts`): a `preParsing` hook asks for `GATEWAY_API_KEY` as X-API-Key (constant-time) on every route, unknown ones included, except the probes, the webhook and approve or reject; 401 problem details with `WWW-Authenticate: ApiKey header="X-API-Key"`. The web helpers send it.
 - Gateway internal listener (`apps/gateway/src/internal.ts`, `executions.ts`), on `GATEWAY_INTERNAL_HOST`:`GATEWAY_INTERNAL_PORT` (127.0.0.1:4201), behind `EXECUTOR_SERVICE_TOKEN`: `POST /internal/actions/{id}/execution` claims an approved action (201 new, 200 an earlier claim, 404 no approved decision); `.../execution/result` records succeeded or failed once (409 after). The public listener has no such route. The sweeper logs executions stuck in claimed past `SWEEPER_STUCK_AFTER_MINUTES`.
 - Webhook fingerprints (`apps/gateway/src/intake.ts`): `fingerprint()` ports Prometheus's `LabelSet.Fingerprint`; the webhook replaces each alert's fingerprint with it before deduplication and logs how many differed.
+- Watch (`services/watch/src/watch/`, P1.4 to P1.6, 2026-10-25), on the host, never in a container, through `make dev-watch`:
+  - `catalog.py`: per app (FA, FL) the compose project of each stack, the services with their kind (app, worker, database, queue, cache, storage, proxy), dependencies and stacks, the JSON log fields kept, the log lines that are alerts (`alert` equal to `extract_paused` or `claude_switched_off` in FA; FL's `event` of the Claude switch-offs, a provider out, a failed readiness check or a task failed for good), the dev stack's Prometheus rules with service and severity, and its snapshot queries.
+  - `scrub.py`: allowlisted JSON fields, then masks (PEM, key shapes, JWTs, bearer tokens, URL credentials, query strings, emails, `*.ts.net`, `password=`-style assignments), a traceback cut to its exception line, fields at 500 and lines at 1,000 characters. Every pattern starts only where a run of its characters starts, so a long run costs linear time.
+  - `readers.py`: `docker ps` (label filter on the compose project, names matched exactly, the label checked again) and `docker logs --timestamps --since --until --tail 200 -- <listed name>`; `git log --name-only` of `refs/remotes/origin/main` with hooks, fsmonitor, textconv, external diff, signatures, lazy fetch, system and global config off; HTTP GET to configured URLs only, with no redirect, proxy or cookie and at most 64 KB read. Every argv token passes a charset with nothing a shell reads, each child sees only an allowlist of environment variables (no TC secret), and each call has a timeout (docker and git 10 s, HTTP 5 s).
+  - `poll.py` (`Watcher`): each poll probes the health URLs, reads `docker ps` and each container's new log lines and, with a dev stack's Prometheus, its alerts. An alert fires after 3 failed health checks, 2 down container states or 1 log line or Prometheus alert in a row, and resolves after 2 good polls; a log signal stays bad 10 minutes after its line, and 10 error lines in 5 minutes make an ErrorBurst. Only transitions are posted, one alert per webhook, to the tenant's webhook (`groupKey` `{}:{app="<app>"}`). Labels are always alertname, app, service, severity and source; annotations hold the summary, a description and, on firing, the snapshot (at most 48 KB: health answers, containers, the newest scrubbed log lines of the service and its dependencies, recreations and origin/main's commits of the last 24 hours, Prometheus alerts and queries, reader problems). A refused post is sent again at the next poll.
+  - `main.py`: `WATCH_*` settings (a token, stack, health URLs, repo and Prometheus URL per app; an app is watched only with its token), `/healthz`, and `/readyz`, ready while the last poll, at most three intervals ago, read and posted everything.
 - Executor (`services/executor/src/executor/run.py`): `run_action(message, client, dry_run, effectors)` validates ActionApproved v1, checks `ALLOWED_KINDS` (and the effector) before any call, claims through `py_clients.ExecutionsClient`, checks the approved kind again, then runs the effector or, in a dry run, records the plan, and reports the result. Gateway unreachable or any error: refused. A claim found claimed is never retried. No consumer runs it yet.
 - AI pipeline (step 6a), `services/agent/src/agent/`:
   - `providers.py`: `GeminiProvider` (google-genai 2.27.0 on an httpx2 client; explicit key sent as `x-goog-api-key`, `vertexai=False`; function calling mode ANY, thinking LOW, thought signatures kept in `tool_calls.provider_state`), `AnthropicProvider` and `OpenAICompatibleProvider` (NVIDIA NIM, OpenRouter, Ollama). All return the tool call, usage (input with cached tokens, output with thinking, cache reads and writes) and raise `RateLimited`, `QuotaExhausted` (a per-day 429), `CreditsExhausted` or `ModelError`; none retries.
@@ -282,7 +289,7 @@ Steps 1 (scaffolding), 2 (contracts), 3 (data) and 4 (workers):
 - Story A (online partitioning of `investigation_steps`): expand, dual-write flag, resumable backfill, verified swap, contract, and the partition job. A test runs the whole sequence on 2,000,000 seeded steps while a writer records steps: zero errors, writes in every phase, slowest write under 70 ms locally (0.552 s in CI on 2026-10-18; the test allows 3 s). Two guard tests confirm that the swap refuses before the backfill finishes, and the drop refuses while the old table holds a row the new one lacks.
 - Story B (event versioning): replaying stored v1 steps returns v2 objects; a golden snapshot pins the result, and stored rows are never rewritten.
 
-## Real Incidents (planned 2026-10-24; P1.1 to P1.3 built 2026-10-25)
+## Real Incidents (planned 2026-10-24; P1.1 to P1.6 built 2026-10-25)
 
 The plan was approved by the user on 2026-10-24. Its steps are in docs/todo.md (P0, then P1.1 to P4.3), and its decisions in docs/memory.md. The flow:
 - Claude Haiku 5.5 triages every alert: real or not, and the likely cause.
@@ -325,6 +332,8 @@ It never runs `docker inspect` (the env holds keys), `exec` or `compose config`.
 - keeps an exception's type and last line, and truncates fields.
 
 The agent also scrubs provider error text. Canary tests cover `watch`, gateway, agent steps, the report mirror, TC logs and spans.
+
+**Built in P1.4 to P1.6 (2026-10-25)** as `services/watch` (Important Components): the catalog, the scrubber, the hardened readers and the poller, tested on fakes only (a fake `docker` and `git` as all of PATH, loopback fake servers, a stub webhook). The canary chain so far runs from the fixtures through `watch` to the posted webhook body; the gateway, agent and log links come with P1.8. Not run against the real FA or FL yet.
 
 **Models.**
 - Live triage runs Claude first until `LLM_CLAUDE_UNTIL` (2026-11-10), then the existing free chain (Gemini 3.5 Flash-Lite, then NIM DeepSeek v4.1 Flash; summaries on Gemini 3.1 Flash-Lite).
@@ -388,7 +397,7 @@ Step 6b is done (2026-10-21, once the proposal check merged as `177839d`): the s
 Next, in this order:
 
 1. P0: proposal check version 2 on the sim is built (2026-10-25). The user runs its two dev passes, the Haiku one before 2026-11-10, and ships it (docs/todo.md).
-2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 are built on branch `p1-1-fallback-fixes` (2026-10-25), one PR for the user to ship; P1.4 is next. The dev database needs `make migrate` (agent 0011, gateway 0005) before the agent or gateway from that code starts.
+2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 merged as #13 (`883497d`). P1.4 to P1.6 (`watch`) are built on branch `p1-4-watch` (2026-10-25), one PR for the user to ship; P1.7 is next. The dev database needs `make migrate` (agent 0011, gateway 0005) before the agent or gateway from that code starts.
    - P1.2: `LIVE_TENANTS` maps a tenant to its app. `agent.switches` holds `live` (default off) and `claude` (default on), flipped with `make switch NAME=<name> STATE=on|off`. The job reads `live` before every model turn of a live tenant, which parks as `budget` while it is off, and the limiter reads `claude` before every Claude request. Live tenants get their own tools, none until P1.8, so they never reach the sim. They still get the sim's prompt until then, so `live` stays off.
    - P1.3: the gateway keeps each alert's annotations (gateway 0005, API 0.5.0). `get_alert_context` shows summary, description and runbook_url only for a tool set built with `annotations=True`. The sim's tools keep their old results, so eval runs stay comparable.
 3. Whether to size the 15-call cap with another Haiku run (the user's call). A test split after version 2 would be a third attempt informed by test failures, not a held-out result.
@@ -427,7 +436,8 @@ Next, in this order:
 - Action `parameters` are free-form; per-kind parameter schemas are open (docs/todo.md).
 - The gateway derives a tool call's `timeout` status from the agent's summary text (`failed: ...Timeout...:`), since StepRecorded v3 has no status field (a `ponytail:` note in `events.ts`).
 - The sim serves one active scenario per process, so evals run scenarios one after another.
-- The gateway stores alert labels but not annotations, so `get_alert_context` cannot show an alert's summary text.
+- The gateway keeps an alert's annotations only from its first post (gateway 0005, P1.3), and `get_alert_context` shows them only to live tool sets, so the sim's alerts still show none.
+- `watch` keeps its firing alerts in memory: a restart posts a still-bad one again with a new start, and the old one never resolves in the gateway. Without `docker inspect` an out-of-memory kill shows only as exit 137 (docs/todo.md, watch follow-ups).
 - The rate limiter's minute window lives in the agent process, and its day count sees only recorded calls; several agents sharing one key can pass a limit by a few requests.
 - Agent outbox rows parked after 10 failed sends are not replayed by `make dlq-replay` yet.
 - Older `final_report` rows (seed, step 4 placeholders) keep the previous report shape.

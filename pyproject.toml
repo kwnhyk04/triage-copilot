@@ -6,6 +6,7 @@ members = ["services/*", "sim", "packages/py-*"]
 dev = [
   "agent",
   "executor",
+  "watch",
   "sim",
   "py-clients",
   "py-config",
@@ -25,6 +26,7 @@ dev = [
 [tool.uv.sources]
 agent = { workspace = true }
 executor = { workspace = true }
+watch = { workspace = true }
 sim = { workspace = true }
 py-clients = { workspace = true }
 py-config = { workspace = true }
@@ -38,7 +40,7 @@ target-version = "py312"
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "PTH", "ASYNC", "T20"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["agent", "executor", "sim", "py_clients", "py_config", "py_telemetry"]
+known-first-party = ["agent", "executor", "watch", "sim", "py_clients", "py_config", "py_telemetry"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101"]
@@ -54,6 +56,7 @@ include = ["services", "sim", "packages/py-*", "scripts", "evals"]
 extraPaths = [
   "services/agent/src",
   "services/executor/src",
+  "services/watch/src",
   "sim/src",
   "packages/py-clients/src",
   "packages/py-config/src",

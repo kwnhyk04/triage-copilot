@@ -1,0 +1,10 @@
+2026-10-25T09:50:00.000000000Z {"level":30,"time":1792921800000,"pid":1,"hostname":"7c0f3e9a1b2d","msg":"Server listening at http://0.0.0.0:4000"}
+2026-10-25T09:50:01.000000000Z {"level":30,"time":1792921801000,"pid":1,"hostname":"7c0f3e9a1b2d","reqId":"5b3c8d1e-0000-4000-8000-000000000001","req":{"method":"GET","url":"/v1/invoices?cursor=abc&key=canarycanaryquery10","hostname":"freightaudit.canary-tailnet.ts.net","remoteAddress":"10.231.231.3","remotePort":51234,"headers":{"x-api-key":"canarycanarycanary14"}},"msg":"incoming request"}
+2026-10-25T09:50:01.020000000Z {"level":30,"time":1792921801020,"pid":1,"hostname":"7c0f3e9a1b2d","reqId":"5b3c8d1e-0000-4000-8000-000000000001","res":{"statusCode":200},"responseTime":19.8,"msg":"request completed"}
+2026-10-25T09:52:00.000000000Z {"level":40,"time":1792921920000,"pid":1,"hostname":"7c0f3e9a1b2d","err":{"type":"Error","message":"connect ECONNREFUSED postgres://freightaudit:canarycanarypass09@postgres:5432/freightaudit","stack":"Error: connect ECONNREFUSED 10.0.0.2:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (/app/canary_frame_module.js:1607:16)"},"check":"postgres","msg":"readiness check failed"}
+2026-10-25T09:52:10.000000000Z {"level":30,"time":1792921930000,"pid":1,"hostname":"7c0f3e9a1b2d","msg":"callback to https://freightaudit.canary-tailnet.ts.net/v1/hooks answered 200"}
+2026-10-25T09:54:00.000000000Z {"level":60,"time":1792922040000,"pid":1,"hostname":"7c0f3e9a1b2d","err":{"type":"Error","message":"-----BEGIN PRIVATE KEY-----\nY2FuYXJ5Y2FuYXJ5cGVtMTU=\n-----END PRIVATE KEY-----"},"msg":"tls setup failed"}
+2026-10-25T09:54:30.000000000Z Error: unexpected token ghp_canarycanarycanary05 in the config
+2026-10-25T09:54:30.100000000Z     at parseConfig (/app/canary_frame_module.js:12:5)
+2026-10-25T09:54:30.200000000Z     at main (/app/canary_frame_module.js:40:3)
+2026-10-25T09:54:31.000000000Z node:internal/process/promises:394 password=canarycanarycanary16
