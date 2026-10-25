@@ -14,7 +14,7 @@ COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	scenarios-check dlq-replay embed-model runbooks smoke
+	scenarios-check dlq-replay embed-model runbooks smoke switch
 
 install:
 	pnpm install
@@ -146,6 +146,10 @@ smoke:
 # Replays every failure store: parked gateway outbox messages (the running gateway sends them),
 # agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then
 # investigations-dlq.fifo and the agent's dead_letters rows back into investigations.fifo.
+# The kill switches (live off and claude on by default): make switch, or make switch NAME=live STATE=on.
+switch:
+	uv run python -m agent.switches $(if $(NAME),set $(NAME) $(STATE),show)
+
 dlq-replay:
 	pnpm --filter @triage/gateway outbox:replay
 	pnpm --filter @triage/gateway events:replay

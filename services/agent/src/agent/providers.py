@@ -29,10 +29,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agent.model import (
     CreditsExhausted,
+    KeyRejected,
     Message,
     ModelError,
+    ModelExhausted,
     QuotaExhausted,
     RateLimited,
+    Refused,
     ToolSpec,
     Usage,
 )
@@ -227,7 +230,7 @@ def _gemini_error(error: genai_errors.APIError) -> ModelError:
             return QuotaExhausted("gemini 429: daily quota spent", retry_after=retry_after)
         return RateLimited("gemini 429: rate limited", retry_after=retry_after)
     if code in (401, 403):
-        return ModelError(f"gemini {code}: the API key was rejected", retryable=False)
+        return KeyRejected(f"gemini {code}: the API key was rejected")
     message = f"gemini {code} {error.status}: {error.message}"[:300]
     return ModelError(message, retryable=not 400 <= code < 500)
 
@@ -295,10 +298,7 @@ class AnthropicProvider:
                 max_tokens=max_output_tokens,
             )
         usage = _anthropic_usage(response.usage)
-        if response.stop_reason == "refusal":
-            category = response.stop_details.category if response.stop_details else None
-            message = f"anthropic declined the request (category {category})"
-            raise ModelError(message, retryable=False, usage=usage)
+        _raise_if_refused(response, usage)
         for block in response.content:
             if block.type == "tool_use":
                 return ProviderTurn(block.name, dict(block.input), None, usage)
@@ -315,8 +315,17 @@ class AnthropicProvider:
                 max_tokens=max_output_tokens,
                 thinking={"type": "disabled"},
             )
+        usage = _anthropic_usage(response.usage)
+        _raise_if_refused(response, usage)
         reply = "".join(block.text for block in response.content if block.type == "text")
-        return reply, _anthropic_usage(response.usage)
+        return reply, usage
+
+
+def _raise_if_refused(response: anthropic.types.Message, usage: Usage) -> None:
+    """A refusal is billed and never retried; the router asks the next model of the chain."""
+    if response.stop_reason == "refusal":
+        category = response.stop_details.category if response.stop_details else None
+        raise Refused(f"anthropic declined the request (category {category})", usage=usage)
 
 
 @contextmanager
@@ -361,8 +370,9 @@ def _anthropic_usage(usage: anthropic.types.Usage) -> Usage:
 
 
 def _anthropic_error(error: anthropic.APIStatusError) -> ModelError:
-    """Credits gone (a 402 billing_error, a 400 naming a spend limit, or a 429 without
-    retry-after) is CreditsExhausted: the router stops calling Claude until the month ends."""
+    """Credits gone (a 402 billing_error or a 400 naming a spend limit) is CreditsExhausted: no
+    Anthropic model is called again until the month ends. A 429 without retry-after is
+    ModelExhausted, which stops only the model that got it."""
     code = error.status_code
     detail = _api_message(error)
     if code == 402 or error.type == "billing_error" or (code == 400 and SPEND_LIMIT.search(detail)):
@@ -370,11 +380,11 @@ def _anthropic_error(error: anthropic.APIStatusError) -> ModelError:
     if code == 429:
         header = error.response.headers.get("retry-after")
         if header is None:
-            return CreditsExhausted("anthropic 429 without retry-after: credits used up")
+            return ModelExhausted("anthropic 429 without retry-after: this model is used up")
         delay = float(header) if header.replace(".", "", 1).isdigit() else None
         return RateLimited("anthropic 429: rate limited", retry_after=delay)
     if code in (401, 403):
-        return ModelError(f"anthropic {code}: the API key was rejected", retryable=False)
+        return KeyRejected(f"anthropic {code}: the API key was rejected")
     return ModelError(f"anthropic {code}: {detail}"[:300], retryable=code >= 500)
 
 
@@ -502,7 +512,7 @@ class OpenAICompatibleProvider:
             delay = float(retry_after) if retry_after.isdigit() else None
             raise RateLimited(f"{self.name} 429: rate limited", retry_after=delay)
         if code in (401, 403):
-            raise ModelError(f"{self.name} {code}: the API key was rejected", retryable=False)
+            raise KeyRejected(f"{self.name} {code}: the API key was rejected")
         if code >= 400:
             message = f"{self.name} {code}: {response.text}"[:300]
             raise ModelError(message, retryable=code >= 500)

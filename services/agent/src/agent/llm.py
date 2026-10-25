@@ -1,9 +1,10 @@
 """The Model the job uses in production: the primary role, then outside evals Claude while its
-credits last and the free fallback, on a 429 or a spent quota; the small role for log-page
-summaries, with Claude after it too; and a limiter that keeps each role under its requests per
-minute and per day, and off any model whose provider said it is spent.
+credits last and the free fallback, on a 429, a spent quota, a rejected key or a refusal; the
+small role for log-page summaries, with Claude after it too; and a limiter that keeps each role
+under its requests per minute and per day, and off any model whose provider said it is spent.
 
-Every request is returned as a ModelCall, with its outcome and usage, for the job to record.
+Every request is returned as a ModelCall, with its outcome, usage and prompt sha, for the job to
+record; a skipped one says why.
 """
 
 import asyncio
@@ -11,7 +12,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -24,12 +25,15 @@ from agent.model import (
     PROMPT_OVERHEAD,
     BudgetRefused,
     CreditsExhausted,
+    KeyRejected,
     ModelCall,
     ModelError,
+    ModelExhausted,
     ModelTurn,
     Outcome,
     QuotaExhausted,
     RateLimited,
+    Refused,
     ReportDraft,
     ToolRequest,
     TurnRequest,
@@ -39,6 +43,7 @@ from agent.prompt import REPORT_TOOL
 from agent.providers import REQUEST_TIMEOUT, Provider
 from agent.settings import Role
 from agent.steps import TokenUsage
+from agent.switches import is_on
 
 log = logging.getLogger(__name__)
 
@@ -60,20 +65,30 @@ CALLS_TODAY = text("""
 """)
 
 
-# The provider has said no request gets through: a daily quota until midnight Pacific, Claude's
-# credits or spend limit until the month ends (UTC), when Anthropic resets spend limits.
-EXHAUSTED = text("""
-    SELECT EXISTS (
-        SELECT 1 FROM agent.model_calls
-        WHERE model = :model AND (
-            (outcome = 'quota_exhausted'
-             AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Los_Angeles')
-                               AT TIME ZONE 'America/Los_Angeles')
-            OR (outcome = 'credits_exhausted'
-                AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
-        )
-    )
+# The provider has said no request gets through, the longest stop first: credits or a spend limit
+# for every model of the provider, and a 429 without retry-after for that model, until the month
+# ends (UTC), when Anthropic resets spend limits; a daily quota until midnight Pacific.
+# ponytail: the provider clause scans model_calls; index (provider, created_at) WHERE outcome =
+# 'credits_exhausted' if the table grows large.
+STOPPED = text("""
+    SELECT outcome FROM agent.model_calls
+    WHERE (provider = :provider AND outcome = 'credits_exhausted'
+           AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+       OR (model = :model AND outcome = 'model_exhausted'
+           AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+       OR (model = :model AND outcome = 'quota_exhausted'
+           AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Los_Angeles')
+                             AT TIME ZONE 'America/Los_Angeles')
+    ORDER BY CASE outcome WHEN 'credits_exhausted' THEN 0 WHEN 'model_exhausted' THEN 1 ELSE 2 END
+    LIMIT 1
 """)
+STOP_REASONS = {
+    "credits_exhausted": "its provider's credits or spend limit are used up, for every model until "
+    "the month ends (UTC)",
+    "model_exhausted": "its provider answered it 429 without retry-after, so it is off until the "
+    "month ends (UTC)",
+    "quota_exhausted": "its provider said its daily quota is spent, until midnight Pacific",
+}
 
 
 def calls_today(conn: Connection, model: str) -> int:
@@ -81,16 +96,19 @@ def calls_today(conn: Connection, model: str) -> int:
         return conn.execute(CALLS_TODAY, {"model": model}).scalar_one()
 
 
-def spent(conn: Connection, role: Role) -> bool:
-    """No request to the role's model can get through now: Claude's credits have expired, today's
-    requests are used up, or the provider said so (quota today, credits this month). Parked
-    investigations then stay parked instead of trying again every sweep."""
+def spent(conn: Connection, role: Role) -> str | None:
+    """Why no request to the role's model can get through now, or None: Claude's credits have
+    expired, today's requests are used up, or the provider said so. Parked investigations then
+    stay parked instead of trying again every sweep, and the skipped call records the reason."""
     if role.until is not None and datetime.now(UTC).date() >= role.until:
-        return True
+        return f"its credits ended on {role.until.isoformat()} (UTC)"
+    if role.provider == "anthropic" and not is_on(conn, "claude"):
+        return "Claude is switched off (agent.switches)"
     if role.rpd > 0 and calls_today(conn, role.model) >= role.rpd:
-        return True
+        return f"it made its {role.rpd} requests for today (Pacific)"
     with conn.begin():
-        return bool(conn.execute(EXHAUSTED, {"model": role.model}).scalar_one())
+        stop = conn.execute(STOPPED, {"model": role.model, "provider": role.provider}).scalar()
+    return STOP_REASONS[stop] if stop else None
 
 
 class Limiter:
@@ -103,7 +121,7 @@ class Limiter:
 
     def __init__(
         self,
-        is_spent: Callable[[Role], bool] | None,
+        is_spent: Callable[[Role], str | None] | None,
         *,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -115,9 +133,11 @@ class Limiter:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def acquire(self, role: Role) -> None:
-        """Waits for a free request this minute; raises QuotaExhausted while the role is spent."""
-        if self._is_spent is not None and await asyncio.to_thread(self._is_spent, role):
-            raise QuotaExhausted(f"{role.model}: spent (daily requests, credits or their end date)")
+        """Waits for a free request this minute; raises QuotaExhausted, with spent()'s reason,
+        while the role is spent."""
+        reason = None if self._is_spent is None else await asyncio.to_thread(self._is_spent, role)
+        if reason is not None:
+            raise QuotaExhausted(f"{role.model} skipped: {reason}")
         if not role.rpm:
             return
         async with self._locks[role.model]:
@@ -163,16 +183,16 @@ class Router:
         return [first, *(binding for binding in fallbacks if binding is not None)]
 
     async def turn(self, request: TurnRequest) -> ModelTurn:
-        """The first of the primary, Claude and the free fallback that answers: a 429 or a spent
-        quota moves the turn down the chain, except Claude's 429 with a retry-after, which the job
-        waits out and asks again."""
+        """The first of the primary, Claude and the free fallback that answers: a 429, a spent
+        quota, a rejected key or a refusal moves the turn down the chain, except Claude's 429 with
+        a retry-after, which the job waits out and asks again."""
         calls: list[ModelCall] = []
         chain = self._chain(self.primary, self.claude, self.fallback)
         try:
             for binding in chain[:-1]:
                 try:
                     return await self._turn(binding, request, calls)
-                except QuotaExhausted:
+                except (QuotaExhausted, KeyRejected, Refused):
                     continue
                 except RateLimited:
                     if binding is self.claude:
@@ -185,31 +205,38 @@ class Router:
     def available(self, conn: Connection) -> bool:
         """Whether some model of the turn's chain can answer now."""
         chain = self._chain(self.primary, self.claude, self.fallback)
-        return any(not spent(conn, binding.role) for binding in chain)
+        return any(spent(conn, binding.role) is None for binding in chain)
 
-    async def summarize(self, page: str, remaining: int) -> tuple[str | None, list[ModelCall]]:
+    async def summarize(
+        self, page: str, remaining: int, prompt_sha: str
+    ) -> tuple[str | None, list[ModelCall]]:
         """A summary of one log page by the small role, or by Claude while the small role is rate
-        limited or spent; None when it cannot fit or fails."""
+        limited or spent, its key is rejected or it refuses; None when it cannot fit or fails."""
         bound = len(SUMMARY_SYSTEM.encode()) + len(page.encode()) + PROMPT_OVERHEAD
         max_output = min(SUMMARY_OUTPUT_CAP, remaining - bound)
         if max_output < SUMMARY_MIN_OUTPUT or bound > PROMPT_LIMIT:
             return None, []
         calls: list[ModelCall] = []
         for binding in self._chain(self.small, self.claude):
-            summary, call = await self._summary(binding, page, bound, max_output)
-            calls.append(call)
-            if call.outcome not in ("rate_limited", "quota_exhausted", "credits_exhausted"):
+            summary, call, moves_on = await self._summary(
+                binding, page, bound, max_output, prompt_sha
+            )
+            # The small role's work whichever model writes it, so LAST_TURN (job.py) skips it.
+            calls.append(replace(call, role="small"))
+            if not moves_on:
                 return summary, calls
         return None, calls
 
     async def _summary(
-        self, binding: Binding, page: str, bound: int, max_output: int
-    ) -> tuple[str | None, ModelCall]:
+        self, binding: Binding, page: str, bound: int, max_output: int, sha: str
+    ) -> tuple[str | None, ModelCall, bool]:
+        """The summary, its call, and whether the next model of the chain should try."""
         role, provider = binding.role, binding.provider
         try:
             await self.limiter.acquire(role)
         except QuotaExhausted as error:
-            return None, _call(role, "quota_exhausted", bound, max_output, error=str(error))
+            skipped = _call(role, "quota_exhausted", bound, max_output, error=str(error), sha=sha)
+            return None, skipped, True
         started = time.perf_counter()
         try:
             summary, usage = await asyncio.wait_for(
@@ -219,15 +246,17 @@ class Router:
             _say_if_credits_gone(role, error)
             usage = error.usage if isinstance(error, ModelError) else Usage()
             failed = _call(
-                role, _outcome(error), bound, max_output, usage, _ms(started), _err(error)
+                role, _outcome(error), bound, max_output, usage, _ms(started), _err(error), sha=sha
             )
-            return None, failed
-        return summary.strip() or None, _call(role, "ok", bound, max_output, usage, _ms(started))
+            moves_on = isinstance(error, (RateLimited, QuotaExhausted, KeyRejected, Refused))
+            return None, failed, moves_on
+        done = _call(role, "ok", bound, max_output, usage, _ms(started), sha=sha)
+        return summary.strip() or None, done, False
 
     async def _turn(
         self, binding: Binding, request: TurnRequest, calls: list[ModelCall]
     ) -> ModelTurn:
-        role, provider = binding.role, binding.provider
+        role, provider, sha = binding.role, binding.provider, request.prompt_sha
         limits = request.budget.limits(role.model)
         if limits is None:
             raise BudgetRefused
@@ -235,7 +264,9 @@ class Router:
         try:
             await self.limiter.acquire(role)
         except QuotaExhausted as error:
-            calls.append(_call(role, "quota_exhausted", bound, max_output, error=str(error)))
+            calls.append(
+                _call(role, "quota_exhausted", bound, max_output, error=str(error), sha=sha)
+            )
             raise
         started = time.perf_counter()
         try:
@@ -248,16 +279,18 @@ class Router:
         except ModelError as error:
             _say_if_credits_gone(role, error)
             outcome = _outcome(error)
+            usage, elapsed = error.usage, _ms(started)
             calls.append(
-                _call(role, outcome, bound, max_output, error.usage, _ms(started), _err(error))
+                _call(role, outcome, bound, max_output, usage, elapsed, _err(error), sha=sha)
             )
             raise
         except Exception as error:
+            elapsed = _ms(started)
             calls.append(
-                _call(role, "error", bound, max_output, Usage(), _ms(started), _err(error))
+                _call(role, "error", bound, max_output, Usage(), elapsed, _err(error), sha=sha)
             )
             raise ModelError(f"{role.provider} call failed: {type(error).__name__}") from error
-        calls.append(_call(role, "ok", bound, max_output, out.usage, _ms(started)))
+        calls.append(_call(role, "ok", bound, max_output, out.usage, _ms(started), sha=sha))
         return ModelTurn(
             action=_action(out.tool, out.args),
             tokens=TokenUsage(input=out.usage.input, output=out.usage.output),
@@ -286,9 +319,20 @@ def _call(
     usage: Usage = NO_USAGE,
     latency_ms: int = 0,
     error: str | None = None,
+    *,
+    sha: str,
 ) -> ModelCall:
     return ModelCall(
-        role.name, role.provider, role.model, outcome, usage, bound, max_output, latency_ms, error
+        role.name,
+        role.provider,
+        role.model,
+        outcome,
+        usage,
+        bound,
+        max_output,
+        latency_ms,
+        error,
+        sha,
     )
 
 
@@ -297,19 +341,25 @@ def _outcome(error: Exception) -> Outcome:
         return "rate_limited"
     if isinstance(error, CreditsExhausted):
         return "credits_exhausted"
+    if isinstance(error, ModelExhausted):
+        return "model_exhausted"
     return "quota_exhausted" if isinstance(error, QuotaExhausted) else "error"
 
 
 def _say_if_credits_gone(role: Role, error: Exception) -> None:
-    if not isinstance(error, CreditsExhausted):
+    if not isinstance(error, (CreditsExhausted, ModelExhausted)):
         return
     today = datetime.now(UTC).date()
     back = date(today.year + today.month // 12, today.month % 12 + 1, 1)
-    log.warning(
-        "Claude's credits or spend limit are used up: no Claude call until the month ends, and "
-        "turns go on down the chain",
-        extra={"model": role.model, "until": back.isoformat(), "detail": str(error)},
+    message = (
+        "Claude's credits or spend limit are used up: no call to any Anthropic model until the "
+        "month ends, and turns go on down the chain"
+        if isinstance(error, CreditsExhausted)
+        else "Anthropic answered 429 without retry-after: no call to this model until the month "
+        "ends, and turns go on down the chain"
     )
+    extra = {"model": role.model, "until": back.isoformat(), "detail": str(error)}
+    log.warning(message, extra=extra)
 
 
 def _err(error: Exception) -> str:

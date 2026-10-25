@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.4.0
+  version: 0.5.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
@@ -665,6 +665,9 @@ components:
           description: The fingerprint the gateway computed from the labels.
         labels:
           $ref: '#/components/schemas/Labels'
+        annotations:
+          $ref: '#/components/schemas/Labels'
+          description: The annotations the alert arrived with; absent for alerts stored before they were kept (0.5.0).
         starts_at:
           type: string
           format: date-time

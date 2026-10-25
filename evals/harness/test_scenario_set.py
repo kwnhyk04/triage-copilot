@@ -19,6 +19,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from agent.job import PROMPT_SHA
 from agent.tools import ToolContext, Tools
 from py_clients.clients import AlertContextClient
 from sim.main import Settings, create_apps
@@ -139,7 +140,7 @@ def test_every_required_signal_shows_in_the_tools_results(scenario_id: str) -> N
         async with httpx2.AsyncClient(transport=transport, base_url="http://sim") as sim:
             context = AlertContextClient("http://gateway.test", "token")
             tools = Tools(sim, context, None, None).all()
-            ctx = ToolContext(uuid.uuid4(), fired, 100_000)
+            ctx = ToolContext(uuid.uuid4(), fired, 100_000, PROMPT_SHA)
             found: list[tuple[str, str]] = []
             for signal in LOADED[scenario_id].scenario.labels.required_signals:
                 out = await tools[signal.tool](ctx, dict(signal.args))

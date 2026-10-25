@@ -2,6 +2,7 @@ import secrets
 from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -59,6 +60,19 @@ def test_the_free_chain_is_the_default_and_claude_needs_its_key() -> None:
         "claude-haiku-5-5",
     )
     assert (claude.until, claude.api_key) == (date(2026, 11, 10), "sk-ant-test")
+
+
+def test_live_tenants_map_each_tenant_to_its_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_DATABASE_URL", OFFLINE.agent_database_url)
+    monkeypatch.setenv("AGENT_SERVICE_TOKEN", TOKEN)
+    monkeypatch.delenv("LIVE_TENANTS", raising=False)
+    assert load_settings(Settings).live_tenants == {}
+    tenant = "0b6f2d1e-3c4a-4f5e-8a9b-1c2d3e4f5a6b"
+    monkeypatch.setenv("LIVE_TENANTS", f'{{"{tenant}": "freight-audit"}}')
+    assert load_settings(Settings).live_tenants == {UUID(tenant): "freight-audit"}
+    monkeypatch.setenv("LIVE_TENANTS", f'{{"{tenant}": "payroll"}}')
+    with pytest.raises(ConfigError):
+        load_settings(Settings)
 
 
 def test_settings_refuse_a_missing_or_short_service_token(monkeypatch: pytest.MonkeyPatch) -> None:

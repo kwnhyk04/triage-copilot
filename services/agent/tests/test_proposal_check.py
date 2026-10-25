@@ -14,7 +14,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from agent.job import State, refusal
+from agent.job import PROMPT_SHA, State, refusal
 from agent.prompt import CallRow
 from agent.steps import StepRecordedV2, TokenUsage
 from agent.tools import ProposeActionArgs, ToolContext, Tools
@@ -70,7 +70,8 @@ def investigate(scenario: str, *calls: Call) -> State:
             for n, (name, args) in enumerate(calls):
                 call_id, result, error = f"tc_{n}", None, None
                 try:
-                    out = await tools[name](ToolContext(uuid.uuid4(), FIRED, 0), args)
+                    ctx = ToolContext(uuid.uuid4(), FIRED, 0, PROMPT_SHA)
+                    out = await tools[name](ctx, args)
                     result = out if isinstance(out, str) else out.text
                 except Exception as failure:  # A backend the scenario marks down.
                     error = f"{type(failure).__name__}: {failure}"

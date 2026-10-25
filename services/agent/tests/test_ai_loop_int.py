@@ -23,20 +23,26 @@ import httpx2
 import pytest
 import yaml
 from sqlalchemy import Connection, Engine, create_engine, func, select, text
+from test_llm import Fake
 from test_workers_int import CAP, new_request, recorded
 from types_boto3_sqs import SQSClient
 
 import agent.job
 from agent.db import Investigation, ModelCall, Outbox, ProposedAction
-from agent.job import DEGRADED_CEILING, RESULT_BYTES, Job
+from agent.job import DEGRADED_CEILING, PROMPT_SHA, RESULT_BYTES, Job
+from agent.llm import Binding, Limiter, Router
 from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
     HypothesisDraft,
+    Model,
     ModelTurn,
+    QuotaExhausted,
+    RateLimited,
     Report,
     ReportDraft,
     ToolRequest,
+    TurnBudget,
     TurnRequest,
     Usage,
     is_model_turn,
@@ -44,6 +50,7 @@ from agent.model import (
 from agent.model import ModelCall as Call
 from agent.outbox import relay_once, sqs_sender
 from agent.runbooks import DOCUMENT, QUERY, FastEmbedder, RunbookSearch, ingest
+from agent.settings import Role
 from agent.steps import StepRecordedV2, TokenUsage
 from agent.tools import Tool, ToolContext, ToolResult, Tools
 from py_clients.clients import AlertContextClient
@@ -167,7 +174,7 @@ async def activate(client: httpx2.AsyncClient, scenario: str, anchor: datetime) 
     assert response.status_code == 200, response.text
 
 
-def job_for(engine: Engine, model: Planned, tools: dict[str, Tool], cap: int = CAP) -> Job:
+def job_for(engine: Engine, model: Model, tools: dict[str, Tool], cap: int = CAP) -> Job:
     return Job(
         engine, model, tools, ai_enabled=True, daily_token_budget=10**9, tenant_cap=5, token_cap=cap
     )
@@ -336,7 +343,7 @@ def test_log_pages_cover_5000_lines_at_most_200_each(tmp_path: Path) -> None:
     fired = datetime.now(UTC).replace(microsecond=0)
     pages: list[int] = []
 
-    async def summarize(page: str, allowance: int) -> tuple[str | None, list[Call]]:
+    async def summarize(page: str, allowance: int, sha: str) -> tuple[str | None, list[Call]]:
         pages.append(len(page.splitlines()))
         return f"{pages[-1]} GET /cart lines", []
 
@@ -344,7 +351,7 @@ def test_log_pages_cover_5000_lines_at_most_200_each(tmp_path: Path) -> None:
         async with sim(flood(tmp_path)) as (client, admin):
             await activate(admin, "log-flood", fired)
             tools = Tools(client, alerts_client(), None, summarize)
-            ctx = ToolContext(uuid.uuid4(), fired, 100_000)
+            ctx = ToolContext(uuid.uuid4(), fired, 100_000, PROMPT_SHA)
             args: dict[str, Any] = {"query": '{service="checkout"}', "minutes_before": 60}
             first = await tools.query_logs(ctx, args)
             assert isinstance(first, str)
@@ -375,10 +382,13 @@ def test_paging_through_logs_keeps_the_context_within_budget(
         found = re.search(r"next_cursor: (\S+)", last.result or "")
         return ask("query_logs", **query, cursor=found.group(1) if found else "")
 
-    async def summarize(page: str, allowance: int) -> tuple[str | None, list[Call]]:
+    shas: set[str] = set()
+
+    async def summarize(page: str, allowance: int, sha: str) -> tuple[str | None, list[Call]]:
+        shas.add(sha)
         size = len(page.encode())
         usage = Usage(input=size // 4, output=40)
-        call = Call("small", "fake", "small-model", "ok", usage, size, 400)
+        call = Call("small", "fake", "small-model", "ok", usage, size, 400, prompt_sha=sha)
         return f"Checkout served {len(page.splitlines())} GET /cart requests.", [call]
 
     plan: list[Plan] = [ask("query_logs", **query), *[next_page] * 20, report(0.5, "query_logs")]
@@ -408,6 +418,67 @@ def test_paging_through_logs_keeps_the_context_within_budget(
     _, done, used = final(engine, request.investigation_id)
     assert (small, done.partial) == (14, True)
     assert used <= CAP
+    # The job hands each tool the investigation's prompt sha, and the log tool passes it on.
+    assert shas == {PROMPT_SHA}
+
+
+def test_a_resume_after_a_claude_log_summary_builds_the_bound_on_the_last_turn(
+    engine: Engine,
+) -> None:
+    """Claude answers a turn (Gemini's day is spent) and then a log summary (the small model is
+    busy). A summary is the small role's work whichever model writes it, so after a restart the
+    next turn's input bound builds on the last turn's exact count, never on the summary's."""
+    request = new_request()
+    stopping = asyncio.Event()
+    router = Router(
+        Binding(
+            Role("primary", "gemini", "primary-model", None, 0, 0),
+            Fake("primary", QuotaExhausted("day spent")),
+        ),
+        Binding(Role("fallback", "nvidia", "fallback-model", None, 0, 0), Fake("fallback")),
+        Binding(
+            Role("small", "gemini", "small-model", None, 0, 0), Fake("small", RateLimited("busy"))
+        ),
+        fallback_on_rate_limit=True,
+        limiter=Limiter(None),
+        claude=Binding(Role("fallback", "anthropic", "claude-model", None, 0, 0), Fake("claude")),
+    )
+
+    async def logs(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        summary, calls = await router.summarize("x" * 500, ctx.token_allowance, ctx.prompt_sha)
+        stopping.set()  # The agent stops once this result is recorded, as on a restart.
+        return ToolResult(f"Summary of 2 lines:\n{summary}", calls)
+
+    class Resumed(Planned):
+        def __init__(self, plan: Sequence[Plan]) -> None:
+            super().__init__(plan)
+            self.budgets: list[TurnBudget] = []
+
+        async def turn(self, request: TurnRequest) -> ModelTurn:
+            self.budgets.append(request.budget)
+            return await super().turn(request)
+
+    first = job_for(engine, router, {"query_metrics": logs})
+    assert asyncio.run(first.run(request, stopping)) == "stopped"
+    resumed = Resumed([report(0.5), report(0.5)])
+    assert asyncio.run(job_for(engine, resumed, {}).run(request, asyncio.Event())) == "done"
+
+    # Claude's turn reported 900 input and 30 output tokens, its summary 500 and 10.
+    budget = resumed.budgets[0]
+    assert (budget.last_model, budget.last_input, budget.last_output) == ("claude-model", 900, 30)
+    columns = (ModelCall.role, ModelCall.model, ModelCall.outcome, ModelCall.prompt_sha)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(*columns)
+            .where(ModelCall.investigation_id == request.investigation_id)
+            .order_by(ModelCall.id)
+        ).all()
+    assert [tuple(row) for row in rows[:4]] == [
+        ("primary", "primary-model", "quota_exhausted", PROMPT_SHA),
+        ("fallback", "claude-model", "ok", PROMPT_SHA),
+        ("small", "small-model", "rate_limited", PROMPT_SHA),
+        ("small", "claude-model", "ok", PROMPT_SHA),
+    ]
 
 
 def test_a_proposal_waits_for_a_human_and_the_report_reaches_the_events_queue(

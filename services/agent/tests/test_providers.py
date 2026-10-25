@@ -10,10 +10,13 @@ import pytest
 
 from agent.model import (
     CreditsExhausted,
+    KeyRejected,
     Message,
     ModelError,
+    ModelExhausted,
     QuotaExhausted,
     RateLimited,
+    Refused,
     ToolCallPart,
     ToolResultPart,
     ToolSpec,
@@ -120,20 +123,22 @@ def test_gemini_429_tells_a_spent_day_from_a_busy_minute(
     assert raised.value.retry_after == 17.0
 
 
-def test_a_rejected_gemini_key_is_not_retried() -> None:
-    body = {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "bad key"}}
-    _, provider = gemini(body, 401)
-
-    with pytest.raises(ModelError) as raised:
-        asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
-
-    assert raised.value.retryable is False
-
-
 def openai(status: int, body: Any) -> tuple[list[httpx2.Request], OpenAICompatibleProvider]:
     seen, http = recorder(status, body)
     provider = OpenAICompatibleProvider("nvidia", "m", "https://nim.test/v1", "nvapi-key", http)
     return seen, provider
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_key_is_never_retried_on_any_provider(status: int) -> None:
+    google = {"error": {"code": status, "status": "UNAUTHENTICATED", "message": "bad key"}}
+    claude_body = {"type": "error", "error": {"type": "authentication_error", "message": "bad"}}
+    providers = [gemini(google, status)[1], claude(status, claude_body)[1], openai(status, {})[1]]
+
+    for provider in providers:
+        with pytest.raises(KeyRejected) as raised:
+            asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
+        assert raised.value.retryable is False
 
 
 def test_openai_compatible_request_and_reply() -> None:
@@ -272,15 +277,16 @@ BUSY = "This request would exceed your organization's rate limit."
 @pytest.mark.parametrize(
     ("status", "kind", "message", "headers", "error"),
     [
+        # Credits or the spend limit stop every Anthropic model; a bare 429 stops only this one.
         (402, "billing_error", "Your credit balance is too low.", None, CreditsExhausted),
         (400, "invalid_request_error", LIMITS, None, CreditsExhausted),
-        (429, "rate_limit_error", BUSY, None, CreditsExhausted),
+        (429, "rate_limit_error", BUSY, None, ModelExhausted),
         (429, "rate_limit_error", BUSY, {"retry-after": "7"}, RateLimited),
         (400, "invalid_request_error", "messages: roles must alternate", None, ModelError),
         (529, "overloaded_error", "Overloaded", None, ModelError),
     ],
 )
-def test_claude_tells_credits_gone_from_a_busy_minute(
+def test_claude_tells_credits_gone_from_a_model_stop_and_a_busy_minute(
     status: int, kind: str, message: str, headers: dict[str, str] | None, error: type[ModelError]
 ) -> None:
     body = {"type": "error", "error": {"type": kind, "message": message}}
@@ -295,13 +301,17 @@ def test_claude_tells_credits_gone_from_a_busy_minute(
     assert raised.value.retryable is (error is not ModelError or status >= 500)
 
 
-def test_a_claude_refusal_is_not_retried() -> None:
+def test_a_claude_refusal_is_never_retried_in_a_turn_or_a_summary() -> None:
     details = {"type": "refusal", "category": "cyber", "explanation": None}
     refused: dict[str, Any] = {"content": [], "stop_reason": "refusal", "stop_details": details}
     _, provider = claude(200, CLAUDE_REPLY | refused)
 
-    with pytest.raises(ModelError) as raised:
+    with pytest.raises(Refused) as raised:
         asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
 
     assert raised.value.retryable is False
     assert raised.value.usage.input == 2_800
+    assert "category cyber" in str(raised.value)
+    _, provider = claude(200, CLAUDE_REPLY | refused)
+    with pytest.raises(Refused):
+        asyncio.run(provider.complete("Summarize.", "lines", 400))

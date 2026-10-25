@@ -14,6 +14,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from agent.job import PROMPT_SHA
 from agent.settings import Settings
 from agent.tools import ToolContext, Tools
 from py_clients.clients import AlertContextClient
@@ -69,7 +70,7 @@ def test_no_tool_reaches_anything_but_the_data_routes() -> None:
         async with httpx2.AsyncClient(transport=transport, base_url=SIM_URL) as sim:
             context = AlertContextClient("http://gateway.test", "token")
             tools = Tools(sim, context, None, None).all()
-            ctx = ToolContext(uuid.uuid4(), ANCHOR, 100_000)
+            ctx = ToolContext(uuid.uuid4(), ANCHOR, 100_000, PROMPT_SHA)
             results: list[str] = []
             for name, (valid, fields) in CALLS.items():
                 for field in fields:

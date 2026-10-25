@@ -82,11 +82,12 @@ export const createAlertContext =
       {
         fingerprint: string;
         labels: Record<string, string>;
+        annotations: Record<string, string> | null;
         starts_at: Date;
         status: Schemas['AlertStatus'];
       }[]
     >`
-      SELECT fingerprint, labels, starts_at, status FROM gateway.alerts
+      SELECT fingerprint, labels, annotations, starts_at, status FROM gateway.alerts
       WHERE group_id = ${group.id}
       ORDER BY starts_at, created_at, id LIMIT 200`;
     return {
@@ -97,7 +98,12 @@ export const createAlertContext =
       window_start: group.window_start.toISOString(),
       severity: group.severity,
       alert_count: group.alert_count,
-      alerts: alerts.map((alert) => ({ ...alert, starts_at: alert.starts_at.toISOString() })),
+      // Rows stored before 0005 have no annotations, and their alerts leave the field out.
+      alerts: alerts.map(({ annotations, ...alert }) => ({
+        ...alert,
+        ...(annotations === null ? {} : { annotations }),
+        starts_at: alert.starts_at.toISOString(),
+      })),
     };
   };
 

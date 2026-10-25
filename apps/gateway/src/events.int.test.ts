@@ -18,8 +18,9 @@ import Fastify, { type FastifyBaseLogger } from 'fastify';
 import { connectDb } from './db.ts';
 import { startEventsConsumer, type StepRow, type Store, storeEvent } from './events.ts';
 import { buildInternalApp } from './internal.ts';
+import { createIntake } from './intake.ts';
 import { createAlertContext } from './investigations.ts';
-import { env, eventually, newTenant, scratchDb } from './testing.ts';
+import { env, eventually, newTenant, scratchDb, webhook } from './testing.ts';
 
 // A silent logger that keeps the consumer's warnings and errors for the tests to read. Its other
 // methods come from Fastify's no-op logger through the prototype, which a spread would not copy.
@@ -500,11 +501,46 @@ describe('agent events against Postgres and ElasticMQ', () => {
           { fingerprint: 'later', status: 'firing' },
         ],
       });
+      // Rows stored before annotations existed read as before.
+      expect(found.json<{ alerts: object[] }>().alerts[0]).not.toHaveProperty('annotations');
       const unknown = await internal.inject({
         url: `/internal/investigations/${randomUUID()}/alerts`,
         headers,
       });
       expect(unknown.statusCode).toBe(404);
+    } finally {
+      await internal.close();
+    }
+  });
+
+  it('keeps the annotations an alert arrived with and serves them to the agent', async () => {
+    const { tenantId } = await newTenant(db.sql);
+    const payload = webhook('{}:{alertname="HighErrorRate"}', [{ alert: 'noted' }]);
+    const annotations = {
+      summary: 'checkout 5xx ratio above 5% for 2 minutes',
+      runbook_url: 'https://runbooks.example/5xx',
+    };
+    payload.alerts = payload.alerts.map((alert) => ({ ...alert, annotations }));
+    const accepted = await createIntake(db.sql, () => undefined, 5)(tenantId, payload);
+    const [group] = await db.sql<{ investigation_id: string }[]>`
+      SELECT investigation_id FROM gateway.alert_groups WHERE id = ${accepted.group_id}`;
+    const internal = buildInternalApp({
+      config: {
+        LOG_LEVEL: 'error',
+        EXECUTOR_SERVICE_TOKEN: 'executor-token-for-these-tests-000000',
+        AGENT_SERVICE_TOKEN: AGENT_TOKEN,
+      },
+      claim: () => Promise.reject(new Error('unused')),
+      report: () => Promise.reject(new Error('unused')),
+      alertContext: createAlertContext(db.sql),
+    });
+    try {
+      const found = await internal.inject({
+        url: `/internal/investigations/${group?.investigation_id ?? ''}/alerts`,
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+      });
+      expect(found.statusCode).toBe(200);
+      expect(found.json()).toMatchObject({ alerts: [{ annotations }] });
     } finally {
       await internal.close();
     }
