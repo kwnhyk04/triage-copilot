@@ -12,7 +12,8 @@
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
     "tenant:token": "node src/cli.ts tenant-token",
     "outbox:replay": "node src/cli.ts outbox-replay",
-    "events:replay": "node src/cli.ts events-replay"
+    "events:replay": "node src/cli.ts events-replay",
+    "digest": "node src/cli.ts digest"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.1150.0",

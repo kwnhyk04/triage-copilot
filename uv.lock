@@ -55,6 +55,7 @@ dependencies = [
     { name = "py-telemetry" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
+    { name = "watch" },
 ]
 
 [package.metadata]
@@ -71,6 +72,7 @@ requires-dist = [
     { name = "py-telemetry", editable = "packages/py-telemetry" },
     { name = "sqlalchemy", specifier = ">=2.1.4" },
     { name = "uvicorn", specifier = ">=0.54.0" },
+    { name = "watch", editable = "services/watch" },
 ]
 
 [[package]]

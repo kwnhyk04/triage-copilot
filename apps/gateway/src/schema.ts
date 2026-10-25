@@ -1,7 +1,7 @@
 import type {
   ActionApprovedV1,
   InvestigationRequestedV2,
-  ReportRecordedV1,
+  ReportRecordedV2,
 } from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
 import {
@@ -48,6 +48,15 @@ export const executionState = gateway.enum('execution_state', ['claimed', 'succe
 // The API's StepKind and ToolCallStatus, for the steps the agent reports.
 export const stepKind = gateway.enum('step_kind', ['tool_call', 'hypothesis', 'action', 'report']);
 export const toolCallStatus = gateway.enum('tool_call_status', ['ok', 'error', 'timeout']);
+// A live triage's verdict (ReportRecorded v2).
+export const reportVerdict = gateway.enum('report_verdict', ['real', 'not_real']);
+// Why a group got no investigation: every new alert had resolved, the tenant's 5-minute cap
+// (MAX_NEW_INVESTIGATIONS), or its daily one (MAX_DAILY_INVESTIGATIONS, a UTC day).
+export const notInvestigatedReason = gateway.enum('not_investigated_reason', [
+  'resolved',
+  'burst',
+  'daily_cap',
+]);
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
 const createdAt = () => timestamptz('created_at').notNull().defaultNow();
@@ -110,9 +119,15 @@ export const alertGroups = gateway.table(
     // The recovery sweeper's last re-queue of the investigation (src/sweeper.ts), and how many.
     requeuedAt: timestamptz('requeued_at'),
     requeueCount: integer('requeue_count').notNull().default(0),
+    // Set on a queued_not_investigated group from gateway 0007 on; null on older ones.
+    notInvestigated: notInvestigatedReason('not_investigated'),
   },
   (t) => [
     unique().on(t.tenantId, t.groupKey, t.windowStart),
+    check(
+      'alert_groups_reason_without_investigation',
+      sql`${t.notInvestigated} is null or ${t.investigationId} is null`,
+    ),
     index('alert_groups_keyset_idx').on(
       t.tenantId,
       t.createdAt.desc().nullsFirst(),
@@ -225,7 +240,10 @@ export const investigationReports = gateway.table(
   {
     investigationId: uuid('investigation_id').primaryKey(),
     status: alertGroupStatus('status').notNull(),
-    report: jsonb('report').$type<ReportRecordedV1['report']>().notNull(),
+    report: jsonb('report').$type<ReportRecordedV2['report']>().notNull(),
+    // From ReportRecorded v2; a v1 report has neither, and a simulated incident has no verdict.
+    verdict: reportVerdict('verdict'),
+    models: jsonb('models').$type<ReportRecordedV2['models']>(),
     recordedAt: timestamptz('recorded_at').notNull(),
     createdAt: createdAt(),
   },

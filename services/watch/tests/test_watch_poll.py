@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,6 +11,7 @@ from watch_fixtures import CANARIES, LOGS, log_text
 
 from watch.catalog import CATALOGS, Stack
 from watch.poll import SNAPSHOT_BYTES, Target, Watcher, fingerprint
+from watch.readers import Container
 
 FA = CATALOGS["freight-audit"]
 BEARER = "fa-webhook-credential-for-tests-only-0123456789"
@@ -273,6 +274,52 @@ def test_the_snapshot_lists_recent_commits_and_recreated_containers(
     ]
     [git] = [call for call in tools.calls() if call["tool"] == "git"]
     assert "--since=2026-10-24T09:55:00Z" in git["argv"]
+
+
+class Running:
+    """docker in process: every listed container up, no new log lines."""
+
+    def ps(self, project: str, names: Collection[str]) -> list[Container]:
+        return [Container(name, "image", "running", "Up 2 days (healthy)", None) for name in names]
+
+    def logs(
+        self, container: Container, since: datetime, until: datetime, tail: int
+    ) -> list[tuple[datetime, str]]:
+        return []
+
+
+def test_a_flapping_alert_fires_at_most_three_times_an_hour_then_stays_firing(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("watch.poll.Docker", Running)
+    watcher = _watch(server, gateway)
+    when = NOW
+
+    def checks(status: int, polls: int) -> None:
+        nonlocal when
+        server.route("/readyz", Route(status))
+        for _ in range(polls):
+            watcher.poll(when)
+            when += timedelta(seconds=30)
+
+    # Three failed checks fire it and two passed ones resolve it, four times within ten minutes.
+    for _ in range(4):
+        checks(503, 3)
+        checks(200, 2)
+    statuses = [alert["status"] for alert in _alerts(gateway)]
+    assert statuses == ["firing", "resolved", "firing", "resolved", "firing"]
+    # Its third firing holds it: it stays firing until its first firing is an hour old.
+    when = NOW + timedelta(minutes=59)
+    checks(200, 1)
+    assert len(_alerts(gateway)) == 5
+    when = NOW + timedelta(hours=1, minutes=2)
+    checks(200, 1)
+    last = _alerts(gateway)[-1]
+    assert (last["status"], last["startsAt"], last["endsAt"]) == (
+        "resolved",
+        "2026-10-25T10:01:00Z",
+        "2026-10-25T10:57:00Z",
+    )
 
 
 def test_docker_out_of_reach_is_a_problem_not_an_alert(

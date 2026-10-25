@@ -28,8 +28,16 @@ RootCause = Literal[
     "certificate_expiry",
     "unknown",
 ]
+# skipped: the agent itself sent no request (its limits, a switch, the dollar cap); the others are
+# what the provider answered.
 Outcome = Literal[
-    "ok", "rate_limited", "quota_exhausted", "model_exhausted", "credits_exhausted", "error"
+    "ok",
+    "rate_limited",
+    "quota_exhausted",
+    "model_exhausted",
+    "credits_exhausted",
+    "error",
+    "skipped",
 ]
 # Framing a provider adds around each message and tool definition, in tokens.
 MESSAGE_OVERHEAD = 16
@@ -251,6 +259,8 @@ class TurnRequest:
     prompt_sha: str
     # None allows every tool; the forced final report allows submit_report only.
     allowed: tuple[str, ...] | None = None
+    # What submit_report must hold: live triage's report adds a verdict.
+    report: type[ReportDraft] = ReportDraft
 
 
 class Model(Protocol):

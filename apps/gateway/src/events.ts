@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/client-sqs';
 import {
   parseMessage,
-  type ReportRecordedV1,
+  type ReportRecorded,
   type StepRecorded,
   type ToolCall,
 } from '@triage/ts-clients/messages';
@@ -147,7 +147,7 @@ export function toolOutcome(
 }
 
 /** A message body checked against its contract; any failure is an InvalidEvent. */
-function parse<K extends 'step-recorded' | 'report-recorded.v1'>(name: K, body: string) {
+function parse<K extends 'step-recorded' | 'report-recorded'>(name: K, body: string) {
   try {
     return parseMessage(name, JSON.parse(body));
   } catch (error) {
@@ -197,15 +197,20 @@ export async function storeEvent(
     });
   }
   if (type === 'report-recorded') {
-    const message: ReportRecordedV1 = parse('report-recorded.v1', body);
+    const message: ReportRecorded = parse('report-recorded', body);
     const { investigation_id: id, status, report, recorded_at: at } = message;
+    // v1 carries neither.
+    const { verdict, models } =
+      message.schema_version === 2 ? message : { verdict: null, models: null };
     return sql.begin(async (tx) => {
       const tenantId = await tenantOf(tx, id);
       if (tenantId === undefined) return 'unknown_investigation';
       // Text cast to jsonb: postgres.js would store a string parameter typed jsonb as one string.
       const inserted = await tx`
-        INSERT INTO gateway.investigation_reports (investigation_id, status, report, recorded_at)
-        VALUES (${id}, ${status}, ${JSON.stringify(report)}::text::jsonb, ${at})
+        INSERT INTO gateway.investigation_reports
+          (investigation_id, status, report, verdict, models, recorded_at)
+        VALUES (${id}, ${status}, ${JSON.stringify(report)}::text::jsonb, ${verdict},
+                ${models === null ? null : JSON.stringify(models)}::text::jsonb, ${at})
         ON CONFLICT (investigation_id) DO NOTHING
         RETURNING investigation_id`;
       // The first report stands: a redelivered or later one adds no actions and moves no group.

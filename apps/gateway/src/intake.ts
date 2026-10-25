@@ -126,12 +126,18 @@ export const createFindTenant =
  * Stores each firing once, keyed by (tenant, fingerprint, startsAt), and records a known alert's
  * new status. New alerts join the group of their groupKey whose 5-minute window opened last, or
  * open a group. A new group gets an investigation when it has a firing alert and the tenant opened
- * fewer than `maxNewInvestigations` in the last 5 minutes; otherwise it stays
- * queued_not_investigated, so a storm over many group keys starts only a few. The investigation's
+ * fewer than `maxNewInvestigations` in the last 5 minutes and fewer than `maxDailyInvestigations`
+ * this UTC day; otherwise it stays queued_not_investigated with the reason, so a storm over many
+ * group keys starts only a few, and every alert is still stored. The investigation's
  * InvestigationRequested message goes to the outbox in the same transaction; `onQueued` runs after
  * that commit to wake the relay.
  */
-export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigations: number): Intake {
+export function createIntake(
+  sql: Sql,
+  onQueued: () => void,
+  maxNewInvestigations: number,
+  maxDailyInvestigations = 30,
+): Intake {
   return async (tenantId, { groupKey, alerts }) => {
     // A jsonb parameter, so postgres.js serializes it once.
     const rows = sql.json(
@@ -189,20 +195,33 @@ export function createIntake(sql: Sql, onQueued: () => void, maxNewInvestigation
       }
       let queued = false;
       if (group === undefined) {
-        const recent = one(
-          await tx<{ count: number }[]>`
-            SELECT count(*)::int AS count FROM gateway.alert_groups
+        const midnight = tx`date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
+        const recently = tx`window_start > now() - interval '5 minutes'`;
+        const started = one(
+          await tx<{ recent: number; today: number }[]>`
+            SELECT count(*) FILTER (WHERE ${recently})::int AS recent,
+                   count(*) FILTER (WHERE created_at >= ${midnight})::int AS today
+            FROM gateway.alert_groups
             WHERE tenant_id = ${tenantId} AND investigation_id IS NOT NULL
-              AND window_start > now() - interval '5 minutes'`,
+              AND (${recently} OR created_at >= ${midnight})`,
         );
-        const investigate = seen.fresh_firing > 0 && recent.count < maxNewInvestigations;
+        const reason =
+          seen.fresh_firing === 0
+            ? 'resolved'
+            : started.recent >= maxNewInvestigations
+              ? 'burst'
+              : started.today >= maxDailyInvestigations
+                ? 'daily_cap'
+                : null;
+        const investigate = reason === null;
         const created = one(
           await tx<{ id: string; investigation_id: string | null; window_start: Date }[]>`
             INSERT INTO gateway.alert_groups
-              (tenant_id, group_key, window_start, severity, status, investigation_id)
+              (tenant_id, group_key, window_start, severity, status, investigation_id,
+               not_investigated)
             VALUES (${tenantId}, ${groupKey}, now(), ${severity ?? 'warning'},
                     ${investigate ? 'queued' : 'queued_not_investigated'},
-                    ${investigate ? tx`gen_random_uuid()` : null})
+                    ${investigate ? tx`gen_random_uuid()` : null}, ${reason})
             RETURNING id, investigation_id, window_start`,
         );
         if (created.investigation_id !== null) {

@@ -85,6 +85,11 @@ export interface InvestigationRequestedV2 {
 }
 
 /**
+ * Every ReportRecorded version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.
+ */
+export type ReportRecorded = ReportRecordedV1 | ReportRecordedV2;
+
+/**
  * Id of a tool result, as StepRecorded's tool_call_id.
  */
 export type ToolCallId = string;
@@ -168,6 +173,46 @@ export interface ProposedAction {
    * @maxItems 20
    */
   evidence_ids: [ToolCallId, ...ToolCallId[]];
+}
+
+/**
+ * Agent to gateway on agent-events.fifo: an investigation's final report, as in v1, plus the verdict of a live triage and every model asked for each part of the work. Sent once after the transaction that stored it; MessageGroupId is the investigation id and MessageDeduplicationId report-<investigation_id>, as in v1. Producers emit this version.
+ */
+export interface ReportRecordedV2 {
+  schema_version: 2;
+  investigation_id: string;
+  /**
+   * awaiting_approval when the report proposes actions, resolved otherwise.
+   */
+  status: "resolved" | "awaiting_approval";
+  report: Report;
+  /**
+   * A live triage's answer: real when the alert shows an incident a human must look at, not_real when it does not. Null for a simulated incident, and for a report the agent wrote itself after a stop. A not_real verdict never hides the alert.
+   */
+  verdict: ("real" | "not_real") | null;
+  /**
+   * Every model asked during the investigation, in the order first asked, once per part: triage for the investigation's turns, summary for log page summaries.
+   *
+   * @maxItems 20
+   */
+  models: {
+    part: "triage" | "summary";
+    provider: string;
+    model: string;
+    /**
+     * Requests it answered.
+     */
+    calls: number;
+    /**
+     * Requests it did not answer, and requests the agent skipped before they reached it.
+     */
+    failed: number;
+    /**
+     * Why the last of those failed or was skipped; null when it answered every request.
+     */
+    reason: string | null;
+  }[];
+  recorded_at: string;
 }
 
 /**
@@ -279,7 +324,9 @@ export interface Messages {
   "investigation-requested": InvestigationRequested;
   "investigation-requested.v1": InvestigationRequestedV1;
   "investigation-requested.v2": InvestigationRequestedV2;
+  "report-recorded": ReportRecorded;
   "report-recorded.v1": ReportRecordedV1;
+  "report-recorded.v2": ReportRecordedV2;
   "step-recorded": StepRecorded;
   "step-recorded.v1": StepRecordedV1;
   "step-recorded.v2": StepRecordedV2;
@@ -559,6 +606,21 @@ export const schemas = {
       }
     ]
   },
+  "report-recorded": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReportRecorded",
+    "description": "Every ReportRecorded version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
+    "oneOf": [
+      {
+        "$ref": "report-recorded.v1.schema.json",
+        "deprecated": true,
+        "description": "Deprecated: v1 carries no verdict and no models. Accepted until the queue holds no v1 messages."
+      },
+      {
+        "$ref": "report-recorded.v2.schema.json"
+      }
+    ]
+  },
   "report-recorded.v1": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ReportRecordedV1",
@@ -821,6 +883,194 @@ export const schemas = {
           "proposed_actions": [],
           "partial": true
         },
+        "recorded_at": "2026-10-14T12:05:00Z"
+      }
+    ]
+  },
+  "report-recorded.v2": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReportRecordedV2",
+    "description": "Agent to gateway on agent-events.fifo: an investigation's final report, as in v1, plus the verdict of a live triage and every model asked for each part of the work. Sent once after the transaction that stored it; MessageGroupId is the investigation id and MessageDeduplicationId report-<investigation_id>, as in v1. Producers emit this version.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "investigation_id",
+      "status",
+      "report",
+      "verdict",
+      "models",
+      "recorded_at"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": 2
+      },
+      "investigation_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "resolved",
+          "awaiting_approval"
+        ],
+        "description": "awaiting_approval when the report proposes actions, resolved otherwise."
+      },
+      "report": {
+        "$ref": "report-recorded.v1.schema.json#/$defs/Report"
+      },
+      "verdict": {
+        "description": "A live triage's answer: real when the alert shows an incident a human must look at, not_real when it does not. Null for a simulated incident, and for a report the agent wrote itself after a stop. A not_real verdict never hides the alert.",
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "real",
+              "not_real"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "models": {
+        "type": "array",
+        "maxItems": 20,
+        "description": "Every model asked during the investigation, in the order first asked, once per part: triage for the investigation's turns, summary for log page summaries.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "provider",
+            "model",
+            "calls",
+            "failed",
+            "reason"
+          ],
+          "properties": {
+            "part": {
+              "type": "string",
+              "enum": [
+                "triage",
+                "summary"
+              ]
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "calls": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests it answered."
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests it did not answer, and requests the agent skipped before they reached it."
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 500,
+              "description": "Why the last of those failed or was skipped; null when it answered every request."
+            }
+          }
+        }
+      },
+      "recorded_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "examples": [
+      {
+        "schema_version": 2,
+        "investigation_id": "3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68",
+        "status": "resolved",
+        "report": {
+          "summary": "freight-audit's api fails its readiness check: Postgres refuses connections since 09:52.",
+          "hypotheses": [
+            {
+              "root_cause_class": "database",
+              "service": "postgres",
+              "confidence": 0.8,
+              "summary": "The api's readiness check fails on postgres from 09:52, and the postgres container restarts.",
+              "evidence_ids": [
+                "tc_01J9ZK3Q7M",
+                "tc_01J9ZK4B2X"
+              ]
+            }
+          ],
+          "missing_evidence": [],
+          "proposed_actions": [],
+          "partial": false
+        },
+        "verdict": "real",
+        "models": [
+          {
+            "part": "triage",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "calls": 0,
+            "failed": 1,
+            "reason": "QuotaExhausted: claude-haiku-5-5 skipped: today's Claude spend plus this call's worst case passes the triage cap of $0.40 (UTC)"
+          },
+          {
+            "part": "triage",
+            "provider": "gemini",
+            "model": "gemini-3.5-flash-lite",
+            "calls": 5,
+            "failed": 0,
+            "reason": null
+          }
+        ],
+        "recorded_at": "2026-10-25T10:01:30Z"
+      },
+      {
+        "schema_version": 2,
+        "investigation_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "status": "resolved",
+        "report": {
+          "summary": "Stopped at the investigation budget after 15 tool calls; the findings are incomplete.",
+          "hypotheses": [],
+          "missing_evidence": [
+            "The investigation stopped at its tool call budget."
+          ],
+          "proposed_actions": [],
+          "partial": true
+        },
+        "verdict": null,
+        "models": [
+          {
+            "part": "triage",
+            "provider": "gemini",
+            "model": "gemini-3.5-flash-lite",
+            "calls": 16,
+            "failed": 0,
+            "reason": null
+          },
+          {
+            "part": "summary",
+            "provider": "gemini",
+            "model": "gemini-3.1-flash-lite",
+            "calls": 2,
+            "failed": 0,
+            "reason": null
+          }
+        ],
         "recorded_at": "2026-10-14T12:05:00Z"
       }
     ]

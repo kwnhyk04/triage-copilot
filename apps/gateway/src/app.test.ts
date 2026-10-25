@@ -416,6 +416,8 @@ describe('gateway', () => {
       hypotheses: [],
       proposedActions: [],
       steps: [],
+      verdict: null,
+      models: [],
     };
     // SSE has no "subscribed" signal, so publish until the first event arrives.
     const publisher = setInterval(() => {

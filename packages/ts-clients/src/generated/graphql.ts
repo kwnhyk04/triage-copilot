@@ -66,6 +66,8 @@ export type Investigation = {
   /** Best first. */
   hypotheses: Array<Hypothesis>;
   id: Scalars['ID']['output'];
+  /** Every model asked, in the order first asked; empty until the report, and for older reports. */
+  models: Array<ModelUse>;
   proposedActions: Array<ProposedAction>;
   status: InvestigationStatus;
   /** In execution order. */
@@ -76,6 +78,11 @@ export type Investigation = {
   /** Model tokens spent so far, input and output combined. */
   tokensUsed: Scalars['Int']['output'];
   updatedAt: Scalars['DateTime']['output'];
+  /**
+   * A live triage's verdict; null until the report, for simulated incidents, for a report written
+   * after a stop, and for reports recorded before verdicts existed.
+   */
+  verdict?: Maybe<Verdict>;
 };
 
 export type InvestigationConnection = {
@@ -98,6 +105,26 @@ export type InvestigationStatus =
   | 'QUEUED'
   | 'RESOLVED'
   | 'RUNNING';
+
+export type ModelPart =
+  /** Log page summaries. */
+  | 'SUMMARY'
+  /** The investigation's turns. */
+  | 'TRIAGE';
+
+/** A model asked during an investigation, for one part of the work. */
+export type ModelUse = {
+  __typename?: 'ModelUse';
+  /** Requests it answered. */
+  calls: Scalars['Int']['output'];
+  /** Requests it did not answer, and requests skipped before they reached it. */
+  failed: Scalars['Int']['output'];
+  model: Scalars['String']['output'];
+  part: ModelPart;
+  provider: Scalars['String']['output'];
+  /** Why the last of those failed or was skipped; null when it answered every request. */
+  reason?: Maybe<Scalars['String']['output']>;
+};
 
 export type PageInfo = {
   __typename?: 'PageInfo';
@@ -214,6 +241,11 @@ export type ToolCallStatus =
   | 'OK'
   | 'TIMEOUT';
 
+/** Whether a live alert shows an incident a human must look at. NOT_REAL never hides the alert. */
+export type Verdict =
+  | 'NOT_REAL'
+  | 'REAL';
+
 
 
 export type ResolverTypeWrapper<T> = Promise<T> | T;
@@ -302,6 +334,8 @@ export type ResolversTypes = {
   InvestigationConnection: ResolverTypeWrapper<InvestigationConnection>;
   InvestigationEdge: ResolverTypeWrapper<InvestigationEdge>;
   InvestigationStatus: InvestigationStatus;
+  ModelPart: ModelPart;
+  ModelUse: ResolverTypeWrapper<ModelUse>;
   PageInfo: ResolverTypeWrapper<PageInfo>;
   ProposedAction: ResolverTypeWrapper<ProposedAction>;
   Query: ResolverTypeWrapper<Record<PropertyKey, never>>;
@@ -312,6 +346,7 @@ export type ResolversTypes = {
   Subscription: ResolverTypeWrapper<Record<PropertyKey, never>>;
   ToolCall: ResolverTypeWrapper<ToolCall>;
   ToolCallStatus: ToolCallStatus;
+  Verdict: Verdict;
 };
 
 /** Mapping between all available schema types and the resolvers parents */
@@ -328,6 +363,7 @@ export type ResolversParentTypes = {
   Investigation: Investigation;
   InvestigationConnection: InvestigationConnection;
   InvestigationEdge: InvestigationEdge;
+  ModelUse: ModelUse;
   PageInfo: PageInfo;
   ProposedAction: ProposedAction;
   Query: Record<PropertyKey, never>;
@@ -368,6 +404,7 @@ export type InvestigationResolvers<ContextType = any, ParentType extends Resolve
   groupId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   hypotheses?: Resolver<Array<ResolversTypes['Hypothesis']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  models?: Resolver<Array<ResolversTypes['ModelUse']>, ParentType, ContextType>;
   proposedActions?: Resolver<Array<ResolversTypes['ProposedAction']>, ParentType, ContextType>;
   status?: Resolver<ResolversTypes['InvestigationStatus'], ParentType, ContextType>;
   steps?: Resolver<Array<ResolversTypes['Step']>, ParentType, ContextType>;
@@ -375,6 +412,7 @@ export type InvestigationResolvers<ContextType = any, ParentType extends Resolve
   title?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   tokensUsed?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
   updatedAt?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  verdict?: Resolver<Maybe<ResolversTypes['Verdict']>, ParentType, ContextType>;
 };
 
 export type InvestigationConnectionResolvers<ContextType = any, ParentType extends ResolversParentTypes['InvestigationConnection'] = ResolversParentTypes['InvestigationConnection']> = {
@@ -385,6 +423,15 @@ export type InvestigationConnectionResolvers<ContextType = any, ParentType exten
 export type InvestigationEdgeResolvers<ContextType = any, ParentType extends ResolversParentTypes['InvestigationEdge'] = ResolversParentTypes['InvestigationEdge']> = {
   cursor?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   node?: Resolver<ResolversTypes['Investigation'], ParentType, ContextType>;
+};
+
+export type ModelUseResolvers<ContextType = any, ParentType extends ResolversParentTypes['ModelUse'] = ResolversParentTypes['ModelUse']> = {
+  calls?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  failed?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  model?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  part?: Resolver<ResolversTypes['ModelPart'], ParentType, ContextType>;
+  provider?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  reason?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
 export type PageInfoResolvers<ContextType = any, ParentType extends ResolversParentTypes['PageInfo'] = ResolversParentTypes['PageInfo']> = {
@@ -440,6 +487,7 @@ export type Resolvers<ContextType = any> = {
   Investigation?: InvestigationResolvers<ContextType>;
   InvestigationConnection?: InvestigationConnectionResolvers<ContextType>;
   InvestigationEdge?: InvestigationEdgeResolvers<ContextType>;
+  ModelUse?: ModelUseResolvers<ContextType>;
   PageInfo?: PageInfoResolvers<ContextType>;
   ProposedAction?: ProposedActionResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;

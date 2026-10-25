@@ -193,6 +193,7 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `agent-events-dlq.fifo`, `investigations-dlq.fifo`, and the agent's `dead_letters` |
 | `make switch` | Shows the kill switches; `NAME=live\|claude STATE=on\|off` flips one (live is off and claude on by default) |
 | `make dev-watch` | Runs `watch` against the apps whose `WATCH_*_TOKEN` is set in `.env` (none by default; see `.env.example`). It reads the real apps, so it is not part of `make dev` |
+| `make digest` | Lists a UTC day's alert groups that got no investigation, per tenant, with why (only resolved alerts, the 5-minute cap, or the 30-a-day cap); `DAY=YYYY-MM-DD`, today by default |
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 

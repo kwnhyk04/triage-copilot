@@ -36,6 +36,8 @@ export const loadGatewayConfig = (env?: Env) =>
         RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
         // Investigations one tenant may start within any 5 minutes; later groups go uninvestigated.
         MAX_NEW_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(5),
+        // And within one UTC day: 30 triages a day per app (each app is one tenant).
+        MAX_DAILY_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(30),
         // The agent's internal API, which the recovery sweeper asks with the service token.
         AGENT_URL: z.url().default('http://127.0.0.1:4210'),
         AGENT_SERVICE_TOKEN: z.string().min(32),

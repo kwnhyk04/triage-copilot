@@ -7,6 +7,7 @@ import {
   type ActionProposedV1,
   type Messages,
   type ReportRecordedV1,
+  type ReportRecordedV2,
   type StepRecordedV1,
   type StepRecordedV2,
   type StepRecordedV3,
@@ -25,9 +26,12 @@ const [stepV1] = schemas['step-recorded.v1'].examples;
 const [stepV3] = schemas['step-recorded.v3'].examples;
 const [reportV1] = schemas['report-recorded.v1'].examples;
 if (reportV1 === undefined) throw new Error('report-recorded.v1 has no example');
+const [reportV2] = schemas['report-recorded.v2'].examples;
+if (reportV2 === undefined) throw new Error('report-recorded.v2 has no example');
 
 type Rest = GatewayComponents['schemas'];
 type Reported = ReportRecordedV1['report'];
+type ModelUse = ReportRecordedV2['models'][number];
 type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 // Enums copied across REST, messages and GraphQL; `make typecheck` fails here when one drifts.
 const enumsAgree: [
@@ -46,7 +50,29 @@ const enumsAgree: [
   Equal<Uppercase<Rest['RootCauseClass']>, GraphQL.RootCauseClass>,
   Equal<Rest['RootCauseClass'], Reported['hypotheses'][number]['root_cause_class']>,
   Equal<Rest['ActionKind'], Reported['proposed_actions'][number]['kind']>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Equal<ReportRecordedV2['report'], Reported>,
+  Equal<Uppercase<NonNullable<ReportRecordedV2['verdict']>>, GraphQL.Verdict>,
+  Equal<Uppercase<ModelUse['part']>, GraphQL.ModelPart>,
+] = [
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+];
 
 describe('message contracts', () => {
   it.each(examples)('%s example validates', (name, example) => {
@@ -149,6 +175,29 @@ describe('message contracts', () => {
         /invalid report-recorded.v1/,
       );
     }
+  });
+
+  it('accepts ReportRecorded v1 and v2 wherever reports are consumed, and marks v1 deprecated', () => {
+    for (const name of ['report-recorded.v1', 'report-recorded.v2'] as const) {
+      for (const example of schemas[name].examples) {
+        expect(parseMessage('report-recorded', example)).toEqual(example);
+      }
+    }
+    const deprecated = schemas['report-recorded'].oneOf.map((branch) => 'deprecated' in branch);
+    expect(deprecated).toEqual([true, false]);
+  });
+
+  // The same cases run against the Python models in packages/py-clients/tests/test_contracts.py.
+  const [model] = reportV2.models;
+  it.each([
+    ['an unknown verdict', { verdict: 'maybe' }],
+    ['an unknown part', { models: [{ ...model, part: 'plan' }] }],
+    ['a negative call count', { models: [{ ...model, calls: -1 }] }],
+    ['a reason over 500 characters', { models: [{ ...model, reason: 'x'.repeat(501) }] }],
+  ])('ReportRecorded v2 rejects %s', (_, change) => {
+    expect(() => parseMessage('report-recorded.v2', { ...reportV2, ...change })).toThrow(
+      /invalid report-recorded.v2/,
+    );
   });
 
   it('keeps enums copied across contracts in sync (asserted by the type checker)', () => {

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReportRecorded",
+  "description": "Every ReportRecorded version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.",
+  "oneOf": [
+    {
+      "$ref": "report-recorded.v1.schema.json",
+      "deprecated": true,
+      "description": "Deprecated: v1 carries no verdict and no models. Accepted until the queue holds no v1 messages."
+    },
+    { "$ref": "report-recorded.v2.schema.json" }
+  ]
+}

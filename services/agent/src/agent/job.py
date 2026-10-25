@@ -40,6 +40,7 @@ from sqlalchemy import Connection, Date, Engine, case, cast, func, insert, selec
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ProposedAction, ToolCall
+from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft, live_brief
 from agent.llm import SUMMARY_SYSTEM
 from agent.model import (
     MESSAGE_OVERHEAD,
@@ -53,6 +54,7 @@ from agent.model import (
     Report,
     ReportDraft,
     ToolRequest,
+    ToolSpec,
     TurnBudget,
     TurnRequest,
     is_model_turn,
@@ -83,7 +85,7 @@ from agent.tools import (
 )
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
-from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
+from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 from py_clients.generated.messages.step_recorded_v3_schema import StepRecordedV3
 
 log = logging.getLogger(__name__)
@@ -107,6 +109,23 @@ def prompt_sha() -> str:
 
 PROMPT_SHA = prompt_sha()
 Status = Literal["resolved", "awaiting_approval"]
+Verdict = Literal["real", "not_real"]
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """What the model is told for one kind of investigation, the sha its calls record, and what
+    its submit_report must hold."""
+
+    system: str
+    specs: tuple[ToolSpec, ...]
+    sha: str
+    brief: Callable[[str, datetime], str]
+    report: type[ReportDraft]
+
+
+SIM = Prompt(SYSTEM, TOOL_SPECS, PROMPT_SHA, brief, ReportDraft)
+LIVE = Prompt(LIVE_SYSTEM, LIVE_SPECS, LIVE_PROMPT_SHA, live_brief, LiveReportDraft)
 
 MODEL_RETRIES = 3
 TOOL_TIMEOUT = 10.0
@@ -175,6 +194,15 @@ LAST_TURN = text("""
     WHERE investigation_id = :id AND outcome = 'ok' AND role <> 'small'
     ORDER BY id DESC LIMIT 1
 """)
+# Every model asked, per part, in the order first asked: ReportRecorded v2's models.
+MODELS = text("""
+    SELECT CASE WHEN role = 'small' THEN 'summary' ELSE 'triage' END AS part, provider, model,
+           count(*) FILTER (WHERE outcome = 'ok') AS calls,
+           count(*) FILTER (WHERE outcome <> 'ok') AS failed,
+           (array_agg(error ORDER BY id DESC) FILTER (WHERE outcome <> 'ok'))[1] AS reason
+    FROM agent.model_calls WHERE investigation_id = :id
+    GROUP BY 1, 2, 3 ORDER BY min(id) LIMIT 20
+""")
 
 
 class Stopped(Exception):
@@ -199,6 +227,9 @@ class State:
     last_output: int
     # The token cap the job runs this investigation under.
     cap: int
+    # The sim's prompt, or live triage's with the tenant's app.
+    prompt: Prompt = SIM
+    app: str | None = None
     started_at: datetime | None = None
 
 
@@ -233,14 +264,20 @@ class Job:
         on_commit: Callable[[], None] | None = None,
         live_tenants: Mapping[UUID, str] | None = None,
         live_tools: Mapping[str, Tool] | None = None,
+        live_model: Model | None = None,
+        live_token_cap: int | None = None,
+        live_daily_token_budget: int | None = None,
     ) -> None:
         self.engine = engine
         self.model = model
         self.tools = tools
-        # Live tenants' investigations run only while the live switch is on, and with their own
-        # tools (none until the live tools exist), so they never reach the sim.
+        # Live tenants' investigations run only while the live switch is on, on live triage's
+        # prompt, tools, model chain, token cap and daily budget, so they never reach the sim.
         self.live_tenants = dict(live_tenants or {})
         self.live_tools = dict(live_tools or {})
+        self.live_model = live_model or model
+        self.live_token_cap = live_token_cap or token_cap
+        self.live_daily_token_budget = live_daily_token_budget or daily_token_budget
         self.ai_enabled = ai_enabled
         self.daily_token_budget = daily_token_budget
         self.tenant_cap = tenant_cap
@@ -266,11 +303,13 @@ class Job:
         inv = request.investigation_id
         if not await asyncio.to_thread(_try_lock, conn, LOCK_INVESTIGATION, key=str(inv)):
             return "busy"
-        status, state = await asyncio.to_thread(_load, conn, request, self.token_cap)
+        tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
+        app = self.live_tenants.get(tenant) if tenant else None
+        cap = self.token_cap if app is None else self.live_token_cap
+        status, state = await asyncio.to_thread(_load, conn, request, cap, app)
         if status in FINISHED:
             return "done"
-        tenant = request.tenant_id if isinstance(request, InvestigationRequestedV2) else None
-        tools = self.live_tools if tenant in self.live_tenants else self.tools
+        tools = self.tools if app is None else self.live_tools
         # The budget check comes before the tenant slot, so parking for budget never held a slot.
         available = self._model_available
         if not state.steps and not await asyncio.to_thread(available, conn, True, tenant):
@@ -295,9 +334,7 @@ class Job:
 
                 def build(messages: list[Message] = messages) -> TurnRequest:
                     budget = _budget(state, messages, TURN_OUTPUT_CAP, MIN_OUTPUT)
-                    return TurnRequest(
-                        state.steps, SYSTEM, messages, TOOL_SPECS, budget, PROMPT_SHA
-                    )
+                    return _request(state, messages, budget)
 
                 try:
                     turn = await self._model_turn(conn, inv, state, build, stopping)
@@ -317,14 +354,16 @@ class Job:
 
     def _model_available(self, conn: Connection, new: bool, tenant: UUID | None) -> bool:
         """Model calls are on (and the live switch, for a live tenant), a model has quota today,
-        and, for a new investigation, today's token budget is not spent."""
+        and, for a new investigation, today's token budget (live triage's own) is not spent."""
         if not self.ai_enabled:
             return False
-        if tenant in self.live_tenants and not is_on(conn, "live"):
+        live = tenant in self.live_tenants
+        if live and not is_on(conn, "live"):
             return False
-        if new and _tokens_today(conn) >= self.daily_token_budget:
+        budget = self.live_daily_token_budget if live else self.daily_token_budget
+        if new and _tokens_today(conn) >= budget:
             return False
-        return self.model.available(conn)
+        return (self.live_model if live else self.model).available(conn)
 
     def resumable(
         self, conn: Connection, inv: UUID, reason: str | None, tenant: UUID | None, new: bool
@@ -357,9 +396,10 @@ class Job:
         Every request is recorded, and its tokens counted, whether it succeeded or not; each
         attempt is built anew, so it sees what the failed ones spent.
         """
+        model = self.model if state.app is None else self.live_model
         for attempt in range(MODEL_RETRIES + 1):
             try:
-                turn = await self.model.turn(build())
+                turn = await model.turn(build())
             except (QuotaExhausted, BudgetRefused) as error:
                 await self._record_calls(conn, inv, state, error.calls)
                 raise
@@ -400,7 +440,8 @@ class Job:
                     conn, inv, state, call_id, None, f"ToolInputError: {error}", 0, None
                 )
                 return False
-            await self._record_report(conn, inv, state, report, status, turn.tokens)
+            verdict = _verdict(action)
+            await self._record_report(conn, inv, state, report, status, turn.tokens, verdict)
             return True
         await self._record_request(conn, inv, state, turn, action)
         return False
@@ -421,8 +462,7 @@ class Job:
 
         def build() -> TurnRequest:
             budget = _budget(state, forced, REPORT_OUTPUT_CAP, REPORT_MIN_OUTPUT)
-            allowed = (REPORT_TOOL,)
-            return TurnRequest(state.steps, SYSTEM, forced, TOOL_SPECS, budget, PROMPT_SHA, allowed)
+            return _request(state, forced, budget, (REPORT_TOOL,))
 
         draft: ReportDraft | None = None
         tokens: TokenUsage | None = None
@@ -438,12 +478,14 @@ class Job:
         else:
             tokens = turn.tokens
             draft = turn.action if isinstance(turn.action, ReportDraft) else None
+        verdict: Verdict | None = None
         if draft is not None:
             note = f"The investigation stopped early: {reason}."
             report, status = build_report(draft, state, actions, partial=True, notes=[note])
+            verdict = _verdict(draft)
         else:
             report, status = partial_report(state, reason, actions)
-        await self._record_report(conn, inv, state, report, status, tokens)
+        await self._record_report(conn, inv, state, report, status, tokens, verdict)
         log.info(
             "investigation stopped at its budget",
             extra={"investigation_id": str(inv), "reason": reason, "tokens": state.used},
@@ -468,9 +510,11 @@ class Job:
         if row.name == PROPOSE_TOOL:
             result, error, proposal = _propose(state, call_id, row.args)
         elif row.name == REPORT_TOOL:
-            result, error = None, f"ToolInputError: {_report_problems(row.args)}"
+            problems = _report_problems(row.args, state.prompt.report)
+            result, error = None, f"ToolInputError: {problems}"
         else:
-            ctx = ToolContext(inv, state.fired_at, _tool_allowance(state), PROMPT_SHA)
+            allowance = _tool_allowance(state)
+            ctx = ToolContext(inv, state.fired_at, allowance, state.prompt.sha, state.app)
             out, error = await self._invoke(tools, row.name, row.args, ctx, stopping)
             result = None if out is None else _clip(out.text)
             if out is not None:
@@ -566,6 +610,7 @@ class Job:
         report: Report,
         status: Status,
         tokens: TokenUsage | None,
+        verdict: Verdict | None,
     ) -> None:
         event = StepRecordedV2(
             kind="report",
@@ -576,7 +621,9 @@ class Job:
             latency_ms=None,
             tokens=tokens,
         )
-        await asyncio.to_thread(_store_report, conn, inv, event, report, status, self.dual_write)
+        await asyncio.to_thread(
+            _store_report, conn, inv, event, report, status, verdict, self.dual_write
+        )
         state.steps.append(event)
         self.on_commit()
 
@@ -621,7 +668,7 @@ def _budget(
     after = messages[last + 1 :] if last is not None else messages
     return TurnBudget(
         remaining=state.cap - state.used,
-        prompt_bytes=prompt_bytes(SYSTEM, TOOL_SPECS, messages),
+        prompt_bytes=prompt_bytes(state.prompt.system, state.prompt.specs, messages),
         delta_bytes=sum(map(message_bytes, after)),
         messages=len(messages),
         new_messages=len(messages) - last if last is not None else len(messages),
@@ -631,6 +678,31 @@ def _budget(
         last_input=state.last_input,
         last_output=state.last_output,
     )
+
+
+def _request(
+    state: State,
+    messages: Sequence[Message],
+    budget: TurnBudget,
+    allowed: tuple[str, ...] | None = None,
+) -> TurnRequest:
+    """A turn on the investigation's own prompt: the sim's, or live triage's."""
+    prompt = state.prompt
+    return TurnRequest(
+        state.steps,
+        prompt.system,
+        messages,
+        prompt.specs,
+        budget,
+        prompt.sha,
+        allowed,
+        prompt.report,
+    )
+
+
+def _verdict(draft: ReportDraft) -> Verdict | None:
+    """Live triage's verdict; a simulated incident's report has none."""
+    return draft.verdict if isinstance(draft, LiveReportDraft) else None
 
 
 def _forced_prompt(bound: int) -> int:
@@ -905,9 +977,9 @@ def _seconds(match: re.Match[str]) -> int:
     return -value if sign == "-" else value
 
 
-def _report_problems(args: dict[str, Any]) -> str:
+def _report_problems(args: dict[str, Any], report: type[ReportDraft]) -> str:
     try:
-        ReportDraft.model_validate(args)
+        report.model_validate(args)
     except ValidationError as error:
         return f"invalid report: {_problems(error)}"[:480]
     return "invalid report"
@@ -953,8 +1025,10 @@ def _release(conn: Connection) -> None:
     conn.close()
 
 
-def _load(conn: Connection, request: Request, cap: int) -> tuple[str, State]:
-    """The checkpoint: the investigation's status and what the job knows; creates it when new."""
+def _load(conn: Connection, request: Request, cap: int, app: str | None) -> tuple[str, State]:
+    """The checkpoint: the investigation's status and what the job knows; creates it when new.
+    A live tenant's app (or None for the sim) picks the prompt."""
+    prompt = SIM if app is None else LIVE
     inv = request.investigation_id
     with conn.begin():
         conn.execute(pg_insert(Investigation).values(id=inv).on_conflict_do_nothing())
@@ -972,7 +1046,7 @@ def _load(conn: Connection, request: Request, cap: int) -> tuple[str, State]:
         calls = {r.id: CallRow(r.name, r.args, r.error, r.provider_state) for r in rows}
         last = conn.execute(LAST_TURN, {"id": inv}).one_or_none()
     state = State(
-        opening=brief(request.group_key, request.requested_at),
+        opening=prompt.brief(request.group_key, request.requested_at),
         fired_at=request.requested_at,
         steps=steps,
         calls=calls,
@@ -981,6 +1055,8 @@ def _load(conn: Connection, request: Request, cap: int) -> tuple[str, State]:
         last_input=last.input_tokens if last else 0,
         last_output=last.output_tokens if last else 0,
         cap=cap,
+        prompt=prompt,
+        app=app,
     )
     return status, state
 
@@ -1168,9 +1244,11 @@ def _store_report(
     event: StepRecordedV2,
     report: Report,
     status: Status,
+    verdict: Verdict | None,
     dual_write: bool,
 ) -> None:
-    """Records the report step, ends the investigation, and queues ReportRecorded after it."""
+    """Records the report step, ends the investigation, and queues ReportRecorded v2 after it,
+    with the verdict and every model the investigation asked."""
     with conn.begin():
         recorded_at = _step(conn, inv, event, dual_write).recorded_at
         conn.execute(
@@ -1178,12 +1256,25 @@ def _store_report(
             .where(Investigation.id == inv)
             .values(final_report=report.model_dump(mode="json"), status=status)
         )
-        message = ReportRecordedV1.model_validate(
+        models = [
             {
-                "schema_version": 1,
+                "part": row.part,
+                "provider": row.provider,
+                "model": row.model,
+                "calls": row.calls,
+                "failed": row.failed,
+                "reason": None if row.reason is None else row.reason[:500],
+            }
+            for row in conn.execute(MODELS, {"id": inv})
+        ]
+        message = ReportRecordedV2.model_validate(
+            {
+                "schema_version": 2,
                 "investigation_id": inv,
                 "status": status,
                 "report": report.model_dump(mode="json"),
+                "verdict": verdict,
+                "models": models,
                 "recorded_at": recorded_at,
             }
         )

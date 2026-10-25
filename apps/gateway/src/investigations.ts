@@ -107,6 +107,59 @@ export const createAlertContext =
     };
   };
 
+/** The groups a UTC day kept from investigation, per tenant, with why and what they hold. */
+export interface Digest {
+  day: string;
+  tenants: {
+    tenant: string;
+    investigated: number;
+    not_investigated: {
+      group_id: string;
+      group_key: string;
+      window_start: string;
+      reason: string | null;
+      alerts: number;
+      names: string[];
+    }[];
+  }[];
+}
+
+/** A day's digest: every tenant with an alert group that day, oldest group first. */
+export const createDigest =
+  (sql: Sql) =>
+  async (day: string): Promise<Digest> => {
+    const rows = await sql<
+      {
+        tenant: string;
+        group_id: string;
+        group_key: string;
+        window_start: Date;
+        investigated: boolean;
+        reason: string | null;
+        alerts: number;
+        names: string[];
+      }[]
+    >`
+      SELECT t.name AS tenant, g.id AS group_id, g.group_key, g.window_start,
+             g.investigation_id IS NOT NULL AS investigated, g.not_investigated::text AS reason,
+             (SELECT count(*)::int FROM gateway.alerts a WHERE a.group_id = g.id) AS alerts,
+             (SELECT coalesce(array_agg(DISTINCT concat_ws(' on ', a.labels->>'alertname',
+                                                          a.labels->>'service')), '{}')
+              FROM gateway.alerts a WHERE a.group_id = g.id) AS names
+      FROM gateway.alert_groups g JOIN gateway.tenants t ON t.id = g.tenant_id
+      WHERE g.created_at >= ${day}::date AT TIME ZONE 'UTC'
+        AND g.created_at < (${day}::date + 1) AT TIME ZONE 'UTC'
+      ORDER BY t.name, g.created_at, g.id`;
+    const tenants = new Map<string, Digest['tenants'][number]>();
+    for (const { tenant, investigated, window_start, ...group } of rows) {
+      const entry = tenants.get(tenant) ?? { tenant, investigated: 0, not_investigated: [] };
+      tenants.set(tenant, entry);
+      if (investigated) entry.investigated++;
+      else entry.not_investigated.push({ ...group, window_start: window_start.toISOString() });
+    }
+    return { day, tenants: [...tenants.values()] };
+  };
+
 /** Keyset pagination over investigated alert groups, ordered by (created_at, id) descending. */
 export const createListInvestigations =
   (sql: Sql): ListInvestigations =>

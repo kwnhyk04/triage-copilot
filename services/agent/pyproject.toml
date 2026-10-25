@@ -16,6 +16,8 @@ dependencies = [
   "py-telemetry",
   "sqlalchemy>=2.1.4",
   "uvicorn>=0.54.0",
+  # Live triage reads watch's app catalog and masks provider text with its scrubber.
+  "watch",
 ]
 
 [project.scripts]
@@ -25,6 +27,7 @@ agent = "agent.main:run"
 py-clients = { workspace = true }
 py-config = { workspace = true }
 py-telemetry = { workspace = true }
+watch = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12,<0.14"]

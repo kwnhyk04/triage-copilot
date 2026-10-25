@@ -10,7 +10,9 @@ from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
 from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.report_recorded_schema import ReportRecorded
 from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
+from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 from py_clients.generated.messages.step_recorded_schema import StepRecorded
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
@@ -50,6 +52,42 @@ def test_every_investigation_requested_version_validates_as_the_union(version: i
     for example in json.loads(schema_file.read_bytes())["examples"]:
         root = InvestigationRequested.model_validate(example).root
         assert isinstance(root, model_for(schema_file))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_every_report_recorded_version_validates_as_the_union(version: int) -> None:
+    schema_file = CONTRACTS / f"messages/report-recorded.v{version}.schema.json"
+    for example in json.loads(schema_file.read_bytes())["examples"]:
+        assert isinstance(ReportRecorded.model_validate(example).root, model_for(schema_file))
+
+
+def test_report_recorded_v1_is_deprecated_and_v2_carries_v1_s_report() -> None:
+    union = json.loads((CONTRACTS / "messages/report-recorded.schema.json").read_bytes())
+    assert [branch.get("deprecated") for branch in union["oneOf"]] == [True, None]
+    v1 = ReportRecordedV1.model_validate(REPORT_EXAMPLE)
+    v2 = ReportRecordedV2.model_validate(V2_EXAMPLE)
+    assert type(v2.report) is type(v1.report)
+
+
+V2_EXAMPLE: dict[str, Any] = json.loads(
+    (CONTRACTS / "messages/report-recorded.v2.schema.json").read_bytes()
+)["examples"][0]
+V2_MODEL: dict[str, Any] = V2_EXAMPLE["models"][0]
+
+
+# The same cases run against ajv in packages/ts-clients/src/contracts.test.ts.
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"verdict": "maybe"},
+        {"models": [{**V2_MODEL, "part": "plan"}]},
+        {"models": [{**V2_MODEL, "calls": -1}]},
+        {"models": [{**V2_MODEL, "reason": "x" * 501}]},
+    ],
+)
+def test_report_recorded_v2_rejects_bad_verdicts_and_models(change: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        ReportRecordedV2.model_validate({**V2_EXAMPLE, **change})
 
 
 @pytest.mark.parametrize("name", ["action-proposed.v1", "action-approved.v1"])
