@@ -132,6 +132,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plans/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Records a human approval of a plan. Nothing runs from it yet.
+         * @description One decision per plan. A plan that holds no proposal, because no model gave one, takes no decision. In phase 2 an approval only records the human's answer; no action is queued.
+         */
+        post: operations["approvePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records a human rejection of a plan; it never runs. */
+        post: operations["rejectPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/actions/{id}/execution": {
         parameters: {
             query?: never;
@@ -343,9 +384,11 @@ export interface components {
             missing_evidence: string[];
             /** @description True when the agent stopped before the model reported, at a limit, and wrote the report itself; false until the report. */
             partial: boolean;
-            /** @description Every model asked, per part of the work, in the order first asked; empty until the report, and for reports recorded before models were listed. */
+            /** @description Every model asked, per part of the work, in the order first asked: the report's, then the plan's; empty until the report, and for reports recorded before models were listed. */
             models: components["schemas"]["ModelUse"][];
             proposed_actions: components["schemas"]["ProposedAction"][];
+            /** @description The plan for a real incident's fix; null for any other investigation, and while the plan is not made yet. */
+            plan: components["schemas"]["Plan"] | null;
             /** @description In execution order. */
             steps: components["schemas"]["Step"][];
         };
@@ -362,10 +405,41 @@ export interface components {
             reason: string | null;
         };
         /**
-         * @description triage: the investigation's turns; summary: log page summaries.
+         * @description triage: the investigation's turns; summary: log page summaries; plan: the plan.
          * @enum {string}
          */
-        ModelPart: "triage" | "summary";
+        ModelPart: "triage" | "summary" | "plan";
+        /** @description The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. */
+        Plan: {
+            /** Format: uuid */
+            id: string;
+            /** @description The plan itself; null when no model gave one, and problem says why. */
+            proposal: components["schemas"]["PlanProposal"] | null;
+            /** @description Why there is no proposal; null when there is one. */
+            problem: string | null;
+            status: components["schemas"]["ActionStatus"];
+            /** Format: date-time */
+            recorded_at: string;
+            /** @description Approver identity; null while pending. */
+            decided_by: string | null;
+            /** Format: date-time */
+            decided_at: string | null;
+            decision_reason: string | null;
+        };
+        PlanProposal: {
+            kind: components["schemas"]["PlanKind"];
+            /** @description A service of the app's catalog: the one to restart, the one whose code changes, or for none the one at fault. */
+            target: string;
+            /** @description code_fix only, the repo paths to change; empty for the other kinds. */
+            files: string[];
+            /** @description The plan's only free text. */
+            rationale: string;
+        };
+        /**
+         * @description none: no fixed action fits, and the rationale says what a human should do; restart_service: restart one app or worker container; code_fix: change the app's source on a local branch.
+         * @enum {string}
+         */
+        PlanKind: "none" | "restart_service" | "code_fix";
         Hypothesis: {
             /** @description 1 is the most likely root cause. */
             rank: number;
@@ -573,6 +647,24 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description The decision was recorded. */
+        PlanDecided: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Plan"];
+            };
+        };
+        /** @description The plan was already approved or rejected, or it holds no proposal to decide. */
+        PlanNotDecidable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description The body is over 1 MB. */
         PayloadTooLarge: {
             headers: {
@@ -608,6 +700,7 @@ export interface components {
     parameters: {
         InvestigationId: string;
         ActionId: string;
+        PlanId: string;
     };
     requestBodies: {
         Decision: {
@@ -805,6 +898,48 @@ export interface operations {
             403: components["responses"]["ApproverKeyRequired"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["AlreadyDecided"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    approvePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["Decision"];
+        responses: {
+            200: components["responses"]["PlanDecided"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ApproverKeyRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["PlanNotDecidable"];
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    rejectPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["Decision"];
+        responses: {
+            200: components["responses"]["PlanDecided"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ApproverKeyRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["PlanNotDecidable"];
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
         };

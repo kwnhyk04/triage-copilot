@@ -57,16 +57,17 @@ def switch(engine: Engine, name: Switch, on: bool) -> None:
         set_switch(conn, name, on)
 
 
-def test_live_starts_off_claude_on_and_the_cli_flips_them(engine: Engine) -> None:
+def test_live_and_the_planner_start_off_claude_on_and_the_cli_flips_them(engine: Engine) -> None:
     with engine.connect() as conn:
-        assert (is_on(conn, "live"), is_on(conn, "claude")) == (False, True)
+        assert [is_on(conn, name) for name in ("live", "claude", "planner")] == [False, True, False]
 
     assert run(engine, ["set", "live", "on"]) == "live: on"
-    assert run(engine, ["show"]) == "live: on\nclaude: on"
+    assert run(engine, ["show"]) == "live: on\nclaude: on\nplanner: off"
+    assert run(engine, ["set", "planner", "on"]) == "planner: on"
     with pytest.raises(SystemExit):
-        run(engine, ["set", "planner", "on"])
+        run(engine, ["set", "coder", "on"])
     with engine.connect() as conn:
-        assert is_on(conn, "live")
+        assert is_on(conn, "live") and is_on(conn, "planner")
 
 
 def test_a_live_tenant_parks_while_live_is_off_and_no_model_is_asked(engine: Engine) -> None:
@@ -344,7 +345,7 @@ def test_a_skipped_claude_is_named_in_the_report_and_back_once_its_reason_ends(
         assert spent(conn, TRIAGE) is None
 
 
-def claude_spend(engine: Engine, model: str, output_tokens: int) -> None:
+def claude_spend(engine: Engine, model: str, output_tokens: int, role: str = "primary") -> None:
     """An Anthropic call today that produced this many output tokens and read no input."""
     inv = uuid4()
     with engine.begin() as conn:
@@ -352,7 +353,7 @@ def claude_spend(engine: Engine, model: str, output_tokens: int) -> None:
         conn.execute(
             insert(ModelCall).values(
                 investigation_id=inv,
-                role="primary",
+                role=role,
                 provider="anthropic",
                 model=model,
                 outcome="ok",
@@ -379,10 +380,10 @@ def test_the_triage_cap_counts_today_s_claude_spend_and_each_call_s_worst_case(
     with engine.connect() as conn:
         # Yesterday's spend (UTC) no longer counts.
         assert spent(conn, TRIAGE, 0.02) is None
-    claude_spend(engine, "claude-opus-5-5", 1)
+    claude_spend(engine, "claude-sonnet-5-5", 1)
     with engine.connect() as conn:
         # A model without a price cannot be checked against the cap, so Claude waits.
-        assert "claude-opus-5-5" in (spent(conn, TRIAGE, 0.0) or "")
+        assert "claude-sonnet-5-5" in (spent(conn, TRIAGE, 0.0) or "")
 
 
 # A Claude role with TC's monthly cap and no daily one, as an eval's Claude has.
@@ -400,6 +401,40 @@ def test_tc_s_monthly_claude_cap_counts_this_month_s_claude_spend(engine: Engine
         conn.execute(update(ModelCall).values(created_at=ModelCall.created_at - timedelta(days=32)))
     with engine.connect() as conn:
         assert spent(conn, MONTHLY, 0.02) is None
+
+
+PLANNER = Role(
+    "planner",
+    "anthropic",
+    "claude-opus-5-5",
+    None,
+    0,
+    0,
+    until=LATER,
+    daily_usd=1.00,
+    monthly_usd=15.0,
+    effort="medium",
+)
+
+
+def test_the_planner_cap_counts_today_s_plans_only_and_the_monthly_cap_counts_both(
+    engine: Engine,
+) -> None:
+    claude_spend(engine, "claude-opus-5-5", 30_000, role="planner")  # $0.60 at $20 per million out
+    with engine.connect() as conn:
+        assert "planner cap of $1.00" in (spent(conn, PLANNER, 0.48) or "")
+        assert spent(conn, PLANNER, 0.39) is None
+        # Plans never use up the triage cap.
+        assert spent(conn, TRIAGE, 0.39) is None
+    claude_spend(engine, "claude-haiku-5-5", 780_000)  # $0.39 of triage
+    with engine.connect() as conn:
+        # Nor does triage use up the planner's.
+        assert spent(conn, PLANNER, 0.39) is None
+        assert "triage cap of $0.40" in (spent(conn, TRIAGE, 0.02) or "")
+    claude_spend(engine, "claude-opus-5-5", 699_500, role="planner")  # $13.99 more of plans
+    with engine.connect() as conn:
+        # TC's $15 a month counts plans and triage alike: $14.98 spent.
+        assert "TC's monthly Claude cap" in (spent(conn, MONTHLY, 0.03) or "")
 
 
 def test_a_claude_only_chain_waits_once_no_call_can_fit_this_month_s_cap(engine: Engine) -> None:

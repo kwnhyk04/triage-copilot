@@ -2,8 +2,9 @@
 credits last and the free fallback, on a 429, a spent quota, a rejected key or a refusal; the
 small role for log-page summaries, with Claude after it too; and a limiter that keeps each role
 under its requests per minute and per day, and off any model whose provider said it is spent.
-Live triage's router asks Claude first, under its daily dollar cap, then the same free chain. Every
-Claude call also stays within TC's monthly dollar cap, evals included.
+Live triage's router asks Claude first, under its daily dollar cap, then the same free chain; its
+plan for a real incident asks the planner's Claude, under the planner's own daily cap, then the
+free chain. Every Claude call also stays within TC's monthly dollar cap, evals included.
 
 Every request is returned as a ModelCall, with its outcome, usage and prompt sha, for the job to
 record; a skipped one says why. Provider text is masked (watch.scrub) before it is kept or logged.
@@ -33,6 +34,7 @@ from agent.model import (
     ModelExhausted,
     ModelTurn,
     Outcome,
+    PlanRequest,
     QuotaExhausted,
     RateLimited,
     Refused,
@@ -43,8 +45,8 @@ from agent.model import (
 )
 from agent.pricing import RATES, cost, worst
 from agent.prompt import REPORT_TOOL
-from agent.providers import REQUEST_TIMEOUT, Provider
-from agent.settings import Role
+from agent.providers import PLAN_TIMEOUT, REQUEST_TIMEOUT, Provider
+from agent.settings import Role, RoleName
 from agent.steps import TokenUsage
 from agent.switches import is_on
 from watch.scrub import mask
@@ -57,6 +59,8 @@ MAX_WAIT = 60
 # The largest call a turn makes: a prompt at the limit, and the forced report's output allowance
 # (job.REPORT_OUTPUT_CAP; a test keeps the two equal).
 LARGEST_CALL = (PROMPT_LIMIT, 4_096)
+# A plan's output allowance, thinking included.
+PLAN_OUTPUT_CAP = 16_000
 SUMMARY_OUTPUT_CAP = 400
 SUMMARY_MIN_OUTPUT = 64
 SUMMARY_SYSTEM = (
@@ -92,15 +96,23 @@ STOPPED = text("""
     ORDER BY CASE outcome WHEN 'credits_exhausted' THEN 0 WHEN 'model_exhausted' THEN 1 ELSE 2 END
     LIMIT 1
 """)
-# Claude's tokens per model since this UTC day or month began (:period), for the dollar caps.
+# Claude's tokens per model since this UTC day or month began (:period), of the calls made for the
+# roles a cap counts (:roles), for the dollar caps.
 SPEND_SINCE = text("""
     SELECT model, sum(input_tokens)::bigint AS input, sum(cached_tokens)::bigint AS cached,
            sum(cache_write_tokens)::bigint AS writes, sum(output_tokens)::bigint AS output
     FROM agent.model_calls
-    WHERE provider = 'anthropic'
+    WHERE provider = 'anthropic' AND role::text = ANY(:roles)
       AND created_at >= date_trunc(:period, now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
     GROUP BY model
 """)
+# Whose calls each cap counts: the planner's daily cap its plans, the triage cap every other
+# Claude call of the day (evals included), and TC's monthly cap all of them.
+PLANS: tuple[RoleName, ...] = ("planner",)
+TURNS: tuple[RoleName, ...] = ("primary", "fallback", "small")
+# A dollar cap: its period, how a reason names it, the cap, whose calls it counts, its name, and
+# what those calls spent.
+Cap = tuple[Literal["day", "month"], str, float | None, tuple[RoleName, ...], str, str]
 STOP_REASONS = {
     "credits_exhausted": "its provider's credits or spend limit are used up, for every model until "
     "the month ends (UTC)",
@@ -115,11 +127,14 @@ def calls_today(conn: Connection, model: str) -> int:
         return conn.execute(CALLS_TODAY, {"model": model}).scalar_one()
 
 
-def claude_spend(conn: Connection, period: Literal["day", "month"]) -> float | str:
-    """What Claude cost since this UTC day or month began, in US dollars, every model priced by its
-    own rates; or the name of a model with no rates, whose cost cannot be known."""
+def claude_spend(
+    conn: Connection, period: Literal["day", "month"], roles: tuple[RoleName, ...] = PLANS + TURNS
+) -> float | str:
+    """What Claude cost since this UTC day or month began for the roles' calls, in US dollars,
+    every model priced by its own rates; or the name of a model with no rates, whose cost cannot
+    be known."""
     with conn.begin():
-        rows = conn.execute(SPEND_SINCE, {"period": period}).all()
+        rows = conn.execute(SPEND_SINCE, {"period": period, "roles": list(roles)}).all()
     total = 0.0
     for row in rows:
         rates = RATES.get(row.model)
@@ -141,19 +156,28 @@ def spent(conn: Connection, role: Role, worst_usd: float = 0.0) -> str | None:
         return f"its credits ended on {role.until.isoformat()} (UTC)"
     if role.provider == "anthropic" and not is_on(conn, "claude"):
         return "Claude is switched off (agent.switches)"
-    caps: tuple[tuple[Literal["day", "month"], str, float | None, str], ...] = (
-        ("day", "today's", role.daily_usd, "the triage cap"),
-        ("month", "this month's", role.monthly_usd, "TC's monthly Claude cap"),
+    day: Cap = (
+        ("day", "today's", role.daily_usd, PLANS, "the planner cap", "spend on plans")
+        if role.name == "planner"
+        else ("day", "today's", role.daily_usd, TURNS, "the triage cap", "spend")
     )
-    for period, when, cap, name in caps:
+    month: Cap = (
+        "month",
+        "this month's",
+        role.monthly_usd,
+        PLANS + TURNS,
+        "TC's monthly Claude cap",
+        "spend",
+    )
+    for period, when, cap, roles, name, what in (day, month):
         if cap is None:
             continue
-        spend = claude_spend(conn, period)
+        spend = claude_spend(conn, period, roles)
         if isinstance(spend, str):
             return f"{spend} has no price in agent/pricing.py, so {name} cannot be checked"
         if spend + worst_usd > cap:
             return (
-                f"{when} Claude spend of ${spend:.4f} plus this call's worst case of "
+                f"{when} Claude {what} of ${spend:.4f} plus this call's worst case of "
                 f"${worst_usd:.4f} passes {name} of ${cap:.2f} (UTC)"
             )
     if role.rpd > 0 and calls_today(conn, role.model) >= role.rpd:
@@ -223,6 +247,7 @@ class Router:
         limiter: Limiter,
         claude: Binding | None = None,
         claude_first: bool = False,
+        planner: Binding | None = None,
     ) -> None:
         self.primary = primary
         self.fallback = fallback
@@ -232,6 +257,8 @@ class Router:
         self.claude = claude
         # Live triage: Claude before the free chain, for turns and summaries alike.
         self.claude_first = claude_first
+        # The planner's Claude, before the free chain of a plan.
+        self.planner = planner
 
     def _chain(self, *bindings: Binding | None) -> list[Binding]:
         """The bindings that exist, in order; evals pin the first alone."""
@@ -292,6 +319,44 @@ class Router:
             calls.append(replace(call, role="small"))
             if not moves_on:
                 return summary, calls
+        return None, calls
+
+    async def plan(self, request: PlanRequest) -> tuple[dict[str, Any] | None, list[ModelCall]]:
+        """The first answer of the plan's chain (the planner's Claude while there is one, then the
+        free chain) that request.problems accepts, and every call made, each recorded as the
+        planner's; None when no model gave one. A skipped, failed, refused, cut-off or invalid
+        answer moves the plan down the chain: a plan is one call, so nothing is retried."""
+        calls: list[ModelCall] = []
+        bound, sha = request.bound, request.prompt_sha
+        for binding in self._chain(self.planner, self.primary, self.fallback):
+            role, provider = binding.role, binding.provider
+            try:
+                # A plan marks nothing for the cache, so its input bills at the input rate.
+                worst_usd = _worst(role, bound, PLAN_OUTPUT_CAP, caches=False)
+                await self.limiter.acquire(role, worst_usd)
+            except QuotaExhausted as error:
+                calls.append(_plan_call(role, "skipped", bound, sha, error=str(error)))
+                continue
+            started = time.perf_counter()
+            try:
+                answer, usage = await asyncio.wait_for(
+                    provider.structured(
+                        request.system, request.text, request.shape, PLAN_OUTPUT_CAP, role.effort
+                    ),
+                    PLAN_TIMEOUT + 5,
+                )
+            except Exception as error:
+                _say_if_credits_gone(role, error)
+                usage = error.usage if isinstance(error, ModelError) else Usage()
+                calls.append(_plan_call(role, _outcome(error), bound, sha, usage, started, error))
+                continue
+            problem = request.problems(answer)
+            if problem is not None:
+                invalid = f"InvalidPlan: {problem}"
+                calls.append(_plan_call(role, "error", bound, sha, usage, started, invalid))
+                continue
+            calls.append(_plan_call(role, "ok", bound, sha, usage, started))
+            return answer, calls
         return None, calls
 
     async def _summary(
@@ -365,11 +430,11 @@ class Router:
         )
 
 
-def _worst(role: Role, bound: int, max_output: int) -> float:
+def _worst(role: Role, bound: int, max_output: int, *, caches: bool = True) -> float:
     """The call's worst-case cost in US dollars, for a role with a dollar cap; 0 for the others."""
     if role.daily_usd is None and role.monthly_usd is None:
         return 0.0
-    return worst(RATES[role.model], bound, max_output)
+    return worst(RATES[role.model], bound, max_output, caches=caches)
 
 
 def _action(
@@ -408,6 +473,22 @@ def _call(
         None if error is None else mask(error)[:500],
         sha,
     )
+
+
+def _plan_call(
+    role: Role,
+    outcome: Outcome,
+    bound: int,
+    sha: str,
+    usage: Usage = NO_USAGE,
+    started: float | None = None,
+    error: Exception | str | None = None,
+) -> ModelCall:
+    """A plan's call, recorded as the planner's whichever model of the chain it went to."""
+    ms = 0 if started is None else _ms(started)
+    why = _err(error) if isinstance(error, Exception) else error
+    call = _call(role, outcome, bound, PLAN_OUTPUT_CAP, usage, ms, why, sha=sha)
+    return replace(call, role="planner")
 
 
 def _outcome(error: Exception) -> Outcome:

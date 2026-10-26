@@ -1,12 +1,12 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.6.0
+  version: 0.7.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
-    Alertmanager webhook takes the tenant's bearer token, approve and reject take X-Approver-Key,
-    every other route the X-API-Key header. /graphql takes the same X-API-Key. Requests are rate
+    Alertmanager webhook takes the tenant's bearer token, approve and reject (of actions and of
+    plans) take X-Approver-Key, every other route the X-API-Key header. /graphql takes the same X-API-Key. Requests are rate
     limited per credential, or per client address without one. The /internal routes are served
     only on a separate listener bound to 127.0.0.1 (the internal Docker network in production),
     which the public listener does not expose; only the executor and the agent call them, each
@@ -206,6 +206,63 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/plans/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/PlanId'
+    post:
+      operationId: approvePlan
+      summary: Records a human approval of a plan. Nothing runs from it yet.
+      description: >-
+        One decision per plan. A plan that holds no proposal, because no model gave one, takes
+        no decision. In phase 2 an approval only records the human's answer; no action is queued.
+      security:
+        - approverKey: []
+      requestBody:
+        $ref: '#/components/requestBodies/Decision'
+      responses:
+        '200':
+          $ref: '#/components/responses/PlanDecided'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ApproverKeyRequired'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/PlanNotDecidable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/plans/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/PlanId'
+    post:
+      operationId: rejectPlan
+      summary: Records a human rejection of a plan; it never runs.
+      security:
+        - approverKey: []
+      requestBody:
+        $ref: '#/components/requestBodies/Decision'
+      responses:
+        '200':
+          $ref: '#/components/responses/PlanDecided'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ApproverKeyRequired'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/PlanNotDecidable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /internal/actions/{id}/execution:
     servers:
       - url: http://127.0.0.1:4201
@@ -339,8 +396,8 @@ components:
       name: X-Approver-Key
       description: >-
         APPROVER_API_KEY, held only by the web app's server, which sends it when a human approves
-        or rejects an action. The agent, executor and sim never receive it. Valid on approve and
-        reject only.
+        or rejects an action or a plan. The agent, executor and sim never receive it. Valid on the
+        approve and reject routes only.
     alertmanagerToken:
       type: http
       scheme: bearer
@@ -369,6 +426,13 @@ components:
         type: string
         format: uuid
     ActionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PlanId:
       name: id
       in: path
       required: true
@@ -476,6 +540,19 @@ components:
             $ref: '#/components/schemas/Problem'
     AlreadyDecided:
       description: The action was already approved or rejected.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PlanDecided:
+      description: The decision was recorded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Plan'
+    PlanNotDecidable:
+      description: >-
+        The plan was already approved or rejected, or it holds no proposal to decide.
       content:
         application/problem+json:
           schema:
@@ -754,6 +831,7 @@ components:
             - partial
             - models
             - proposed_actions
+            - plan
             - steps
           properties:
             summary:
@@ -785,14 +863,22 @@ components:
             models:
               type: array
               description: >-
-                Every model asked, per part of the work, in the order first asked; empty until the
-                report, and for reports recorded before models were listed.
+                Every model asked, per part of the work, in the order first asked: the report's,
+                then the plan's; empty until the report, and for reports recorded before models
+                were listed.
               items:
                 $ref: '#/components/schemas/ModelUse'
             proposed_actions:
               type: array
               items:
                 $ref: '#/components/schemas/ProposedAction'
+            plan:
+              description: >-
+                The plan for a real incident's fix; null for any other investigation, and while
+                the plan is not made yet.
+              anyOf:
+                - $ref: '#/components/schemas/Plan'
+                - type: 'null'
             steps:
               type: array
               description: In execution order.
@@ -829,8 +915,73 @@ components:
             Why the last of those failed or was skipped; null when it answered every request.
     ModelPart:
       type: string
-      description: "triage: the investigation's turns; summary: log page summaries."
-      enum: [triage, summary]
+      description: "triage: the investigation's turns; summary: log page summaries; plan: the plan."
+      enum: [triage, summary, plan]
+    Plan:
+      type: object
+      description: >-
+        The agent's plan for a real incident's fix, made once after the triage's real verdict, for
+        a human to approve or reject. Nothing runs from a plan in phase 2.
+      required:
+        - id
+        - proposal
+        - problem
+        - status
+        - recorded_at
+        - decided_by
+        - decided_at
+        - decision_reason
+      properties:
+        id:
+          type: string
+          format: uuid
+        proposal:
+          description: The plan itself; null when no model gave one, and problem says why.
+          anyOf:
+            - $ref: '#/components/schemas/PlanProposal'
+            - type: 'null'
+        problem:
+          type: [string, 'null']
+          description: Why there is no proposal; null when there is one.
+        status:
+          $ref: '#/components/schemas/ActionStatus'
+        recorded_at:
+          type: string
+          format: date-time
+        decided_by:
+          type: [string, 'null']
+          description: Approver identity; null while pending.
+        decided_at:
+          type: [string, 'null']
+          format: date-time
+        decision_reason:
+          type: [string, 'null']
+    PlanProposal:
+      type: object
+      required: [kind, target, files, rationale]
+      properties:
+        kind:
+          $ref: '#/components/schemas/PlanKind'
+        target:
+          type: string
+          description: >-
+            A service of the app's catalog: the one to restart, the one whose code changes, or for
+            none the one at fault.
+        files:
+          type: array
+          description: code_fix only, the repo paths to change; empty for the other kinds.
+          items:
+            type: string
+        rationale:
+          type: string
+          description: The plan's only free text.
+    PlanKind:
+      type: string
+      description: >-
+        none: no fixed action fits, and the rationale says what a human should do;
+        restart_service: restart one app or worker container; code_fix: change the app's source on
+        a local branch.
+      enum: [none, restart_service, code_fix]
     Hypothesis:
       type: object
       required: [rank, root_cause_class, service, summary, confidence, evidence]

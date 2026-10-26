@@ -19,6 +19,49 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-26: P2.1 to P2.4 (planner, plans, the check on real targets, plan decisions) on branch p2-planner
+
+- What happened: The user asked for P2.1 to P2.4 together on a new branch `p2-planner` from the updated main, with one report at the end and one PR. Their rules: tests first with fake Anthropic responses only; no live model call, since P2.5's measuring run waits for them; the frozen sim prompt and the eval cache-key tests stay green; the `live` switch stays off and the real FA and FL untouched; files edited with the editing tools only; stop only on a hook refusal or a needed key, decide the rest and list it (docs/memory.md, 2026-10-26); every check, then `make infra-down`.
+- Why: phase 2 of the real-incident plan (docs/todo.md).
+- What we did:
+  1. Checked and branched: `git fetch origin`; `git status --short --branch` was clean on main, and `git rev-parse HEAD origin/main` printed `cb132e6` (#16, the P1.10 merge) for both. Then `git switch -c p2-planner`.
+  2. Read the claude-api skill's Python streaming and structured-output pages and Opus 5.5's prices ($4 in, $20 out, cache reads $0.20, 5-minute writes 1.25x), and the installed SDK (anthropic 1.15.0): `messages.stream` takes `output_config` with `effort` and `format`, `anthropic.transform_schema` is public, and no `cache_control` means nothing is cached.
+  3. P2.1, tests first: `test_providers.py` (fake SSE streams: a JSON plan, a refusal, a `max_tokens` stop; the request streamed, at effort medium, with no tools, thinking, fallbacks or cache marks, and a 300 s timeout), `test_llm.py` (the plan chain), `test_live_int.py` (the planner cap), `test_agent_api.py` (the planner role) and `test_live.py` ($0.48 worst case). RED: `cannot import name 'Truncated'`, `cannot import name 'PLAN_OUTPUT_CAP'`, `'Settings' object has no attribute 'planner'`, `KeyError: 'claude-opus-5-5'` and `Role.__init__() got an unexpected keyword argument 'effort'`. GREEN: `model.py`, `pricing.py` with `evals/pricing.json`, `settings.py`, `providers.py`, `llm.py`, `switches.py`, `db.py`, agent 0013 and `main.py`.
+  4. Contracts, tests first in both languages. RED: `Cannot read properties of undefined (reading 'examples')` and `No module named 'py_clients.generated.messages.plan_recorded_v1_schema'`. GREEN: `plan-recorded.v1.schema.json`, gateway API 0.7.0, the decision client's routes, then `make codegen`.
+  5. P2.2 and P2.3 in the agent, tests first: `test_planner.py` (shape, parsing, the prompt's bound, and the check on catalog fixtures for every kind of service) and `test_planner_int.py` (one plan per real verdict, none otherwise, a redelivery finishing a plan left due, no plan with its reason). RED: `No module named 'agent.planner'`, then `Job.__init__() got an unexpected keyword argument 'planner'`. GREEN: `planner.py`, `job.py` and `outbox.py`.
+  6. The gateway, tests first: plan routes in `app.test.ts` (RED: 2 failures) and the new `plans.int.test.ts`. GREEN: `schema.ts` with `drizzle/0008_plans.sql` from `db:generate`, `events.ts`, `investigations.ts`, `decisions.ts`, `app.ts`, `main.ts`, and the new dependency in four suites.
+  7. The web, tests first: `decisions.test.ts` and `report.test.tsx`. RED: 5 failures (`decidePlan is not a function`, no plan section). GREEN: `lib/decisions.ts`, `lib/report.ts`, `components/report.tsx`, `app/investigations/[id]/actions.ts` and the detail page.
+  8. Docs: `.env.example`, README, and docs/ (todo, context, memory, migrations, this entry).
+  - Why this was the best option: every done check is a test, and nothing reached a real model, app or key. The sim's prompt, tools and eval keys are unchanged, and `planner` stays off until the user's P2.5.
+- Small events:
+  - GateGuard asked for facts before the first Bash call and the first edit of each file, about 50 times; stating them cleared each. Not counted as a stop.
+  - My own test mistakes, each fixed in the test: an assertion that `maxLength` was absent from the whole schema's JSON, though the SDK moves it into the description (docs/memory.md); `select(Plan)` on a Core connection, which returns the first column (the 2026-10-15 pitfall); an untyped `.json()` (ESLint); two literals pyright called partly unknown; ten lines over 100 characters.
+  - Mistake: I did not run `plans.int.test.ts` red before its code, for fear of the beforeAll hang (docs/memory.md). The routes' red came from `app.test.ts`.
+  - One Edit of `app.ts` named an anchor that did not exist; it failed and changed nothing.
+  - drizzle-kit stopped at "GATEWAY_DATABASE_URL is required" outside make, so it ran as `make -s --eval='one: ; pnpm --filter @triage/gateway exec drizzle-kit generate --config drizzle.config.ts --name plans' one`.
+  - Prettier's layout in six files was applied by hand after printing each diff, so no formatter wrote a project file.
+  - Two tests used `claude-opus-5-5` as their model without prices; with Opus priced, they use `claude-sonnet-5-5`.
+  - Found while documenting: docs/todo.md's In Progress line said P0 was not committed, but it merged as #12 (`58fdd00`). Corrected there.
+  - Infra: `make infra-up` started this project's three containers, and `make infra-down` removed them at the end; the volumes stay, and no other project was touched.
+- Files:
+  - Contracts: `contracts/messages/plan-recorded.v1.schema.json` (new), `contracts/openapi/gateway.yaml` and the regenerated clients; `packages/ts-clients/src/{gateway,contracts.test}.ts`, `packages/py-clients/tests/test_contracts.py`.
+  - Agent: `src/agent/planner.py` and `migrations/versions/0013_planner.py` (new), `{model,pricing,settings,providers,llm,switches,db,job,outbox,main}.py`; tests `test_planner.py` and `test_planner_int.py` (new), `test_providers.py`, `test_llm.py`, `test_live.py`, `test_live_int.py`, `test_agent_api.py`. `evals/pricing.json`.
+  - Gateway: `drizzle/0008_plans.sql` and its snapshot (new), `src/{schema,events,investigations,decisions,app,main}.ts`; tests `plans.int.test.ts` (new), `app.test.ts`, `investigations.int.test.ts`, and the new dependency in `db.int.test.ts`, `decisions.int.test.ts` and `intake.int.test.ts`.
+  - Web: `src/app/investigations/[id]/actions.ts` (new), `[id]/page.tsx`, `src/components/report.tsx`, `src/lib/{decisions,report,testing}.ts` and their tests.
+  - Root: `.env.example`, `README.md`.
+- Validation, final run:
+  - `make lint` and `make typecheck`: exit 0.
+  - `make test`: exit 0. pytest 611 passed (579 before); Jest gateway 51 (49), ts-clients 51 (43), web 17 (12), ts-config 2.
+  - The frozen prompt and eval cache-key tests by name (`test_the_prompt_is_frozen`, `test_the_prompt_hash_covers_the_system_prompt`, `test_a_token_cap_off_the_default_changes_the_key_and_the_report_name`, `test_a_run_counts_only_under_the_prompt_its_calls_used`, `test_the_live_prompt_has_its_own_sha_and_leaves_the_sim_s_alone`, `test_every_call_records_the_prompt_sha_it_was_made_with`): 6 passed.
+  - `make test-int`: exit 0. Jest 9 suites and 43 tests (8 and 40 before); pytest 70 passed (64) in 161.70 s.
+  - `make contracts-check`: exit 0. `make contracts-breaking`: exit 0, with one warning, `response-property-enum-value-added` for `ModelPart` `plan`.
+  - `make build`: exit 0; both report pages render per request.
+  - No model call, no eval, and no watch or agent run against a real app. The `live` and `planner` switches were on only inside scratch databases.
+- Outstanding:
+  - P2.5, the measuring run and turning `planner` on, is the user's; `make migrate` (agent 0013, gateway 0008) first.
+  - The plan follow-ups in docs/todo.md.
+  - Nothing is committed.
+
 ### 2026-10-25: P1.10 and P1.11 (report view, retention) and TC's monthly Claude cap on branch p1-10-reports
 
 - What happened: The user asked for P1.10 and P1.11 together on a new branch `p1-10-reports` from the updated main, with one report at the end and one PR:

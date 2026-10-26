@@ -82,11 +82,22 @@ class Verdict(StrEnum):
 
 class ModelPart(StrEnum):
     """
-    triage: the investigation's turns; summary: log page summaries.
+    triage: the investigation's turns; summary: log page summaries; plan: the plan.
     """
 
     triage = "triage"
     summary = "summary"
+    plan = "plan"
+
+
+class PlanKind(StrEnum):
+    """
+    none: no fixed action fits, and the rationale says what a human should do; restart_service: restart one app or worker container; code_fix: change the app's source on a local branch.
+    """
+
+    none = "none"
+    restart_service = "restart_service"
+    code_fix = "code_fix"
 
 
 class RootCauseClass(StrEnum):
@@ -296,6 +307,21 @@ class ModelUse(BaseModel):
     ]
 
 
+class PlanProposal(BaseModel):
+    kind: PlanKind
+    target: Annotated[
+        str,
+        Field(
+            description="A service of the app's catalog: the one to restart, the one whose code changes, or for none the one at fault."
+        ),
+    ]
+    files: Annotated[
+        list[str],
+        Field(description="code_fix only, the repo paths to change; empty for the other kinds."),
+    ]
+    rationale: Annotated[str, Field(description="The plan's only free text.")]
+
+
 class Hypothesis(BaseModel):
     rank: Annotated[int, Field(description="1 is the most likely root cause.", ge=1)]
     root_cause_class: RootCauseClass
@@ -385,6 +411,26 @@ class InvestigationPage(BaseModel):
     ]
 
 
+class Plan(BaseModel):
+    """
+    The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2.
+    """
+
+    id: UUID
+    proposal: Annotated[
+        PlanProposal | None,
+        Field(description="The plan itself; null when no model gave one, and problem says why."),
+    ]
+    problem: Annotated[
+        str | None, Field(description="Why there is no proposal; null when there is one.")
+    ]
+    status: ActionStatus
+    recorded_at: AwareDatetime
+    decided_by: Annotated[str | None, Field(description="Approver identity; null while pending.")]
+    decided_at: AwareDatetime | None
+    decision_reason: str | None
+
+
 class Step(BaseModel):
     """
     One step of the agent loop.
@@ -426,8 +472,14 @@ class Investigation(InvestigationSummary):
     models: Annotated[
         list[ModelUse],
         Field(
-            description="Every model asked, per part of the work, in the order first asked; empty until the report, and for reports recorded before models were listed."
+            description="Every model asked, per part of the work, in the order first asked: the report's, then the plan's; empty until the report, and for reports recorded before models were listed."
         ),
     ]
     proposed_actions: list[ProposedAction]
+    plan: Annotated[
+        Plan | None,
+        Field(
+            description="The plan for a real incident's fix; null for any other investigation, and while the plan is not made yet."
+        ),
+    ]
     steps: Annotated[list[Step], Field(description="In execution order.")]

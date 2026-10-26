@@ -20,8 +20,16 @@ from agent.model import (
     ToolCallPart,
     ToolResultPart,
     ToolSpec,
+    Truncated,
+    Usage,
 )
-from agent.providers import UNSIGNED, AnthropicProvider, GeminiProvider, OpenAICompatibleProvider
+from agent.providers import (
+    PLAN_TIMEOUT,
+    UNSIGNED,
+    AnthropicProvider,
+    GeminiProvider,
+    OpenAICompatibleProvider,
+)
 
 TOOLS = [ToolSpec("query_metrics", "Metrics.", {"type": "object", "properties": {}})]
 HISTORY = [
@@ -315,3 +323,146 @@ def test_a_claude_refusal_is_never_retried_in_a_turn_or_a_summary() -> None:
     _, provider = claude(200, CLAUDE_REPLY | refused)
     with pytest.raises(Refused):
         asyncio.run(provider.complete("Summarize.", "lines", 400))
+
+
+# The planner's answer: one JSON object in this shape, as a tool's parameters describe it.
+PLAN_SHAPE = ToolSpec(
+    "submit_plan",
+    "Submit the plan.",
+    {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["none", "restart_service", "code_fix"]},
+            "rationale": {"type": "string", "minLength": 1, "maxLength": 2000},
+        },
+        "required": ["kind", "rationale"],
+        "additionalProperties": False,
+    },
+)
+PLAN = {"kind": "restart_service", "rationale": "The api's container is down; postgres is up."}
+
+
+def sse(*events: dict[str, Any]) -> bytes:
+    return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
+
+
+def opus_stream(
+    text: str, stop_reason: str, stop_details: dict[str, Any] | None = None, output: int = 1_400
+) -> bytes:
+    """Claude's streamed answer: a thinking block, the text, then the stop reason and usage."""
+    start: dict[str, Any] = {
+        "id": "msg_02",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 12_000,
+            "output_tokens": 1,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    }
+    thinking = {"type": "thinking", "thinking": "", "signature": ""}
+    signed = {"type": "signature_delta", "signature": "s"}
+    delta = {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details}
+    return sse(
+        {"type": "message_start", "message": start},
+        {"type": "content_block_start", "index": 0, "content_block": thinking},
+        {"type": "content_block_delta", "index": 0, "delta": signed},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": delta, "usage": {"output_tokens": output}},
+        {"type": "message_stop"},
+    )
+
+
+def plan(provider: AnthropicProvider) -> tuple[dict[str, Any], Usage]:
+    return asyncio.run(provider.structured("Plan.", "The report.", PLAN_SHAPE, 16_000, "medium"))
+
+
+def opus(body: bytes) -> tuple[list[httpx2.Request], AnthropicProvider]:
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handle))
+    return seen, AnthropicProvider("claude-opus-5-5", "sk-ant-right", "https://claude.test", http)
+
+
+def test_claude_plans_in_one_streamed_structured_answer_with_no_tools() -> None:
+    seen, provider = opus(opus_stream(json.dumps(PLAN), "end_turn"))
+
+    answer, usage = plan(provider)
+
+    assert answer == PLAN
+    assert (usage.input, usage.output) == (12_000, 1_400)
+    request = seen[0]
+    body = json.loads(request.content)
+    # Streamed, at effort medium, in the answer's JSON schema; Opus 5.5 refuses a forced tool call,
+    # thinks in its own way, and no server-side fallback answers for it.
+    assert body["stream"] is True
+    assert (body["model"], body["max_tokens"]) == ("claude-opus-5-5", 16_000)
+    assert body["system"] == "Plan."
+    assert body["messages"] == [{"role": "user", "content": "The report."}]
+    config = body["output_config"]
+    assert (config["effort"], config["format"]["type"]) == ("medium", "json_schema")
+    schema = config["format"]["schema"]
+    # Structured outputs take no length limits: they move into the description, and the agent
+    # checks them on the answer.
+    rationale = schema["properties"]["rationale"]
+    assert "maxLength" not in rationale
+    assert "maxLength: 2000" in rationale["description"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"kind", "rationale"}
+    for absent in ("tools", "tool_choice", "thinking", "fallbacks", "cache_control"):
+        assert absent not in body
+    # Its own timeout, longer than a triage turn's.
+    assert request.extensions["timeout"]["read"] == PLAN_TIMEOUT == 300.0
+
+
+def test_a_refused_or_cut_off_plan_is_never_retried_and_keeps_its_usage() -> None:
+    details = {"type": "refusal", "category": "cyber", "explanation": None}
+    _, provider = opus(opus_stream("", "refusal", details))
+    with pytest.raises(Refused) as refused:
+        plan(provider)
+    assert (refused.value.retryable, refused.value.usage.input) == (False, 12_000)
+    assert "category cyber" in str(refused.value)
+
+    # Thinking and a long rationale can use up the output before the JSON ends.
+    _, provider = opus(opus_stream('{"kind": "restart_se', "max_tokens", output=16_000))
+    with pytest.raises(Truncated) as cut:
+        plan(provider)
+    assert (cut.value.retryable, cut.value.usage.output) == (False, 16_000)
+    assert "16,000 output tokens" in str(cut.value)
+
+
+def test_the_free_models_plan_through_one_forced_call_of_the_answer_s_tool() -> None:
+    call = {"function": {"name": "submit_plan", "arguments": json.dumps(PLAN)}}
+    reply = {"choices": [{"message": {"tool_calls": [call]}}], "usage": {"prompt_tokens": 800}}
+    seen, nim = openai(200, reply)
+
+    answer, usage = asyncio.run(nim.structured("Plan.", "The report.", PLAN_SHAPE, 16_000, None))
+
+    assert (answer, usage.input) == (PLAN, 800)
+    body = json.loads(seen[0].content)
+    assert body["tool_choice"] == {"type": "function", "function": {"name": "submit_plan"}}
+    assert [t["function"]["name"] for t in body["tools"]] == ["submit_plan"]
+    assert body["messages"][1:] == [{"role": "user", "content": "The report."}]
+
+    gemini_reply = json.loads(json.dumps(GEMINI_REPLY))
+    gemini_reply["candidates"][0]["content"]["parts"][0]["functionCall"] = {
+        "name": "submit_plan",
+        "args": PLAN,
+    }
+    seen, provider = gemini(gemini_reply)
+    answer, _ = asyncio.run(provider.structured("Plan.", "The report.", PLAN_SHAPE, 16_000, None))
+    assert answer == PLAN
+    calling = json.loads(seen[0].content)["toolConfig"]["functionCallingConfig"]
+    assert (calling["mode"], calling["allowedFunctionNames"]) == ("ANY", ["submit_plan"])

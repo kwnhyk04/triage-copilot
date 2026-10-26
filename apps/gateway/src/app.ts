@@ -34,6 +34,13 @@ export type Decide = (
   decision: Schemas['Decision'],
 ) => Promise<Schemas['ProposedAction'] | 'not_found' | 'already_decided'>;
 
+/** Records a human decision on a plan that holds a proposal; nothing runs from it. */
+export type DecidePlan = (
+  planId: string,
+  verdict: 'approved' | 'rejected',
+  decision: Schemas['Decision'],
+) => Promise<Schemas['Plan'] | 'not_found' | 'already_decided' | 'no_proposal'>;
+
 export interface AppDeps {
   config: Pick<
     GatewayConfig,
@@ -43,6 +50,7 @@ export interface AppDeps {
   ping: () => Promise<void>;
   updates: Updates;
   decide: Decide;
+  decidePlan: DecidePlan;
   findTenant: FindTenant;
   intake: Intake;
   listInvestigations: ListInvestigations;
@@ -56,6 +64,8 @@ const OWN_CREDENTIAL = new Set([
   '/v1/alerts',
   '/v1/actions/:id/approve',
   '/v1/actions/:id/reject',
+  '/v1/plans/:id/approve',
+  '/v1/plans/:id/reject',
 ]);
 
 /** Webhook bodies over 1 MB get 413. */
@@ -112,6 +122,7 @@ export async function buildApp({
   ping,
   updates,
   decide,
+  decidePlan,
   findTenant,
   intake,
   listInvestigations,
@@ -222,12 +233,28 @@ export async function buildApp({
     },
   );
 
-  // Approve and reject take only the approver key, which the web app's server alone holds.
+  // Approve and reject, of actions and of plans, take only the approver key, which the web app's
+  // server alone holds.
+  const decisions = [
+    ['actions', 'action', decide],
+    ['plans', 'plan', decidePlan],
+  ] as const;
   for (const [route, verdict] of [
     ['approve', 'approved'],
     ['reject', 'rejected'],
-  ] as const) {
-    app.post<{ Params: { id: string } }>(`/v1/actions/:id/${route}`, async (request, reply) => {
+  ] as const)
+    for (const [resource, noun, record] of decisions) {
+      addDecisionRoute(`/v1/${resource}/:id/${route}`, noun, (id, body) =>
+        record(id, verdict, body),
+      );
+    }
+
+  function addDecisionRoute(
+    url: string,
+    noun: string,
+    record: (id: string, decision: Schemas['Decision']) => ReturnType<Decide | DecidePlan>,
+  ) {
+    app.post<{ Params: { id: string } }>(url, async (request, reply) => {
       const key = request.headers['x-approver-key'];
       if (key === undefined && (request.headers['x-api-key'] ?? request.headers.authorization)) {
         return problem(reply, 403, 'Forbidden', 'Approve and reject take X-Approver-Key only.');
@@ -243,15 +270,19 @@ export async function buildApp({
       }
       let result;
       try {
-        result = await decide(id.data, verdict, body.data);
+        result = await record(id.data, body.data);
       } catch (error) {
         request.log.error({ err: error }, 'decision failed');
         reply.header('Retry-After', '5');
         return problem(reply, 503, 'Service Unavailable', 'The decision could not be recorded.');
       }
-      if (result === 'not_found') return problem(reply, 404, 'Not Found', 'No action has this id.');
+      if (result === 'not_found')
+        return problem(reply, 404, 'Not Found', `No ${noun} has this id.`);
       if (result === 'already_decided') {
-        return problem(reply, 409, 'Conflict', 'The action was already approved or rejected.');
+        return problem(reply, 409, 'Conflict', `The ${noun} was already approved or rejected.`);
+      }
+      if (result === 'no_proposal') {
+        return problem(reply, 409, 'Conflict', 'The plan holds no proposal to decide.');
       }
       return result;
     });

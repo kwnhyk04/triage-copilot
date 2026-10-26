@@ -5,7 +5,11 @@ import type { paths } from './generated/gateway.ts';
 
 export type * from './generated/gateway.ts';
 
-type Decisions = '/v1/actions/{id}/approve' | '/v1/actions/{id}/reject';
+type Decisions =
+  | '/v1/actions/{id}/approve'
+  | '/v1/actions/{id}/reject'
+  | '/v1/plans/{id}/approve'
+  | '/v1/plans/{id}/reject';
 // Served on the internal listener only, for the executor.
 type Internal = '/internal/actions/{id}/execution' | '/internal/actions/{id}/execution/result';
 
@@ -29,7 +33,10 @@ export const createGatewayClient = ({
     fetch: fetchWithTimeout(timeoutMs),
   });
 
-/** Typed client for approve and reject. Only the web app's server holds the approver key. */
+/**
+ * Typed client for approve and reject, of actions and of plans. Only the web app's server holds
+ * the approver key.
+ */
 export const createDecisionClient = ({
   baseUrl,
   approverKey,

@@ -177,6 +177,7 @@ describe('alert intake against Postgres and ElasticMQ', () => {
       intake: createIntake(db.sql, () => undefined, 5),
       listInvestigations: unused,
       getInvestigation: unused,
+      decidePlan: unused,
     });
     // Up to 6 alerts over up to 4 group keys (each alert's key is one of its labels, as with
     // Alertmanager's group_by). Each is sent once, then any of them again, labels in either order.
@@ -343,6 +344,7 @@ describe('alert intake against Postgres and ElasticMQ', () => {
       decide: unused,
       listInvestigations: unused,
       getInvestigation: unused,
+      decidePlan: unused,
       findTenant: createFindTenant(db.sql),
       intake: createIntake(
         db.sql,

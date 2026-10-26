@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
 from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.plan_recorded_v1_schema import PlanRecordedV1
 from py_clients.generated.messages.report_recorded_schema import ReportRecorded
 from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
 from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
@@ -88,6 +89,28 @@ V2_MODEL: dict[str, Any] = V2_EXAMPLE["models"][0]
 def test_report_recorded_v2_rejects_bad_verdicts_and_models(change: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         ReportRecordedV2.model_validate({**V2_EXAMPLE, **change})
+
+
+PLAN_EXAMPLE: dict[str, Any] = json.loads(
+    (CONTRACTS / "messages/plan-recorded.v1.schema.json").read_bytes()
+)["examples"][0]
+PLAN: dict[str, Any] = PLAN_EXAMPLE["plan"]
+
+
+# The same cases run against ajv in packages/ts-clients/src/contracts.test.ts.
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"plan": {**PLAN, "kind": "delete_namespace"}},
+        {"plan": {**PLAN, "files": ["a.ts"] * 11}},
+        {"plan": {**PLAN, "rationale": "x" * 2001}},
+        {"plan": {**PLAN, "note": "restart it now"}},
+        {"models": [{**PLAN_EXAMPLE["models"][0], "part": "triage"}]},
+    ],
+)
+def test_plan_recorded_v1_rejects_bad_plans_and_models(change: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        PlanRecordedV1.model_validate({**PLAN_EXAMPLE, **change})
 
 
 @pytest.mark.parametrize("name", ["action-proposed.v1", "action-approved.v1"])

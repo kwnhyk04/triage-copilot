@@ -1,5 +1,5 @@
 import type { components } from '@triage/ts-clients/gateway';
-import type { ReportRecordedV2 } from '@triage/ts-clients/messages';
+import type { PlanRecordedV1, ReportRecordedV2 } from '@triage/ts-clients/messages';
 import { z } from '@triage/ts-config';
 import type { Sql } from 'postgres';
 
@@ -25,6 +25,42 @@ interface Group {
 type Row = Group & { cursor_at: string };
 // The contract's Evidence.excerpt cap: the start of the cited result.
 const EXCERPT_CHARS = 2000;
+
+/** A gateway.plans row with its decision, if one was made. */
+export interface PlanRow {
+  id: string;
+  kind: Schemas['PlanKind'] | null;
+  target: string | null;
+  files: string[];
+  rationale: string | null;
+  problem: string | null;
+  models: PlanRecordedV1['models'];
+  recorded_at: Date;
+  decision: 'approved' | 'rejected' | null;
+  approver: string | null;
+  decided_at: Date | null;
+  reason: string | null;
+}
+
+/** A plan as the API serves it: its proposal, or null with the problem that left none. */
+export const toPlan = (row: PlanRow): Schemas['Plan'] => ({
+  id: row.id,
+  proposal:
+    row.kind === null
+      ? null
+      : {
+          kind: row.kind,
+          target: row.target ?? '',
+          files: row.files,
+          rationale: row.rationale ?? '',
+        },
+  problem: row.problem,
+  status: row.decision ?? 'pending',
+  recorded_at: row.recorded_at.toISOString(),
+  decided_by: row.approver,
+  decided_at: row.decided_at?.toISOString() ?? null,
+  decision_reason: row.reason,
+});
 
 // A position is (created_at, id). created_at travels as text with its microseconds: a JS Date keeps
 // only milliseconds, so rows created within one millisecond would be skipped or repeated.
@@ -270,6 +306,11 @@ export const createGetInvestigation =
              p.decision, p.approver, p.decided_at, p.reason
       FROM gateway.proposed_actions a LEFT JOIN gateway.approvals p ON p.action_id = a.id
       WHERE a.investigation_id = ${id} ORDER BY a.proposed_at, a.id`;
+    const [plan] = await sql<PlanRow[]>`
+      SELECT p.id, p.kind, p.target, p.files, p.rationale, p.problem, p.models, p.recorded_at,
+             d.decision, d.approver, d.decided_at, d.reason
+      FROM gateway.plans p LEFT JOIN gateway.plan_decisions d ON d.plan_id = p.id
+      WHERE p.investigation_id = ${id}`;
     const results = new Map<string, string>();
     for (const step of steps) {
       if (step.tool_call_id !== null && step.excerpt !== null) {
@@ -294,7 +335,9 @@ export const createGetInvestigation =
       })),
       missing_evidence: report?.missing_evidence ?? [],
       partial: report?.partial ?? false,
-      models: group.models ?? [],
+      // The report's models, then the plan's.
+      models: [...(group.models ?? []), ...(plan?.models ?? [])],
+      plan: plan === undefined ? null : toPlan(plan),
       proposed_actions: actions.map((action) => ({
         id: action.id,
         investigation_id: action.investigation_id,

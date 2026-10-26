@@ -26,6 +26,7 @@ describe('gateway against real Postgres', () => {
       intake: unused,
       listInvestigations: unused,
       getInvestigation: unused,
+      decidePlan: unused,
     });
     try {
       expect((await app.inject({ url: '/readyz' })).statusCode).toBe(200);

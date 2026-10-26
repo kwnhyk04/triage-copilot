@@ -6,6 +6,7 @@ import {
   type ActionApprovedV1,
   type ActionProposedV1,
   type Messages,
+  type PlanRecordedV1,
   type ReportRecordedV1,
   type ReportRecordedV2,
   type StepRecordedV1,
@@ -28,10 +29,14 @@ const [reportV1] = schemas['report-recorded.v1'].examples;
 if (reportV1 === undefined) throw new Error('report-recorded.v1 has no example');
 const [reportV2] = schemas['report-recorded.v2'].examples;
 if (reportV2 === undefined) throw new Error('report-recorded.v2 has no example');
+const [planV1] = schemas['plan-recorded.v1'].examples;
+if (planV1 === undefined) throw new Error('plan-recorded.v1 has no example');
 
 type Rest = GatewayComponents['schemas'];
 type Reported = ReportRecordedV1['report'];
 type ModelUse = ReportRecordedV2['models'][number];
+type PlanModelUse = PlanRecordedV1['models'][number];
+type Planned = NonNullable<PlanRecordedV1['plan']>;
 type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 // Enums copied across REST, messages and GraphQL; `make typecheck` fails here when one drifts.
 const enumsAgree: [
@@ -54,10 +59,16 @@ const enumsAgree: [
   Equal<Uppercase<NonNullable<ReportRecordedV2['verdict']>>, GraphQL.Verdict>,
   Equal<Uppercase<ModelUse['part']>, GraphQL.ModelPart>,
   Equal<Rest['Verdict'], NonNullable<ReportRecordedV2['verdict']>>,
-  Equal<Rest['ModelPart'], ModelUse['part']>,
-  // The detail route serves the report's models as the message carried them.
-  Equal<Rest['ModelUse'], ModelUse>,
+  // The detail route serves the report's models and then the plan's, as the messages carried them.
+  Equal<Rest['ModelPart'], ModelUse['part'] | PlanModelUse['part']>,
+  Equal<Omit<Rest['ModelUse'], 'part'>, Omit<ModelUse, 'part'>>,
+  Equal<Omit<PlanModelUse, 'part'>, Omit<ModelUse, 'part'>>,
+  Equal<Rest['PlanKind'], Planned['kind']>,
+  Equal<Rest['PlanProposal'], Planned>,
 ] = [
+  true,
+  true,
+  true,
   true,
   true,
   true,
@@ -207,6 +218,21 @@ describe('message contracts', () => {
     );
   });
 
+  // The same cases run against the Python models in packages/py-clients/tests/test_contracts.py.
+  const plan = planV1.plan;
+  if (plan === null) throw new Error("plan-recorded.v1's first example has a plan");
+  it.each([
+    ['an unknown kind', { plan: { ...plan, kind: 'delete_namespace' } }],
+    ['more than 10 files', { plan: { ...plan, files: Array.from({ length: 11 }, () => 'a.ts') } }],
+    ['a rationale over 2,000 characters', { plan: { ...plan, rationale: 'x'.repeat(2001) } }],
+    ['a free-text field beside the rationale', { plan: { ...plan, note: 'restart it now' } }],
+    ['a model of another part', { models: [{ ...planV1.models[0], part: 'triage' }] }],
+  ])('PlanRecorded v1 rejects %s', (_, change) => {
+    expect(() => parseMessage('plan-recorded.v1', { ...planV1, ...change })).toThrow(
+      /invalid plan-recorded.v1/,
+    );
+  });
+
   it('keeps enums copied across contracts in sync (asserted by the type checker)', () => {
     expect(enumsAgree.every(Boolean)).toBe(true);
   });
@@ -247,6 +273,23 @@ describe('gateway clients', () => {
     const request = sent(spy);
     expect(request.url).toBe(
       'http://gateway.test/v1/actions/9f8b6c1e-3d2a-4f5b-8e7d-6c5b4a392817/reject',
+    );
+    expect(request.headers.get('X-Approver-Key')).toBe('appr-1');
+    expect(request.headers.get('X-API-Key')).toBeNull();
+  });
+
+  it('sends only the approver key on plan decisions too', async () => {
+    const spy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({}));
+    const client = createDecisionClient({ baseUrl: 'http://gateway.test', approverKey: 'appr-1' });
+
+    await client.POST('/v1/plans/{id}/approve', {
+      params: { path: { id: '5b1c9d2e-7f3a-4e8b-9c6d-1a2b3c4d5e6f' } },
+      body: { approver: 'oncall@example.com' },
+    });
+
+    const request = sent(spy);
+    expect(request.url).toBe(
+      'http://gateway.test/v1/plans/5b1c9d2e-7f3a-4e8b-9c6d-1a2b3c4d5e6f/approve',
     );
     expect(request.headers.get('X-Approver-Key')).toBe('appr-1');
     expect(request.headers.get('X-API-Key')).toBeNull();

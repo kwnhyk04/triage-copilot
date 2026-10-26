@@ -1,8 +1,76 @@
 import type { Investigation } from '../lib/investigations.ts';
-import { cause, fallbackNotes, PARTS, verdictLabel } from '../lib/report.ts';
+import { cause, fallbackNotes, PARTS, PLAN_KINDS, verdictLabel } from '../lib/report.ts';
 
-/** One investigation, read-only: verdict, cause and evidence, the models asked and their misses. */
-export function Report({ investigation }: { investigation: Investigation }) {
+type Plan = NonNullable<Investigation['plan']>;
+/** Records a human's decision on a plan from the submitted form (a server action). */
+export type DecidePlan = (planId: string, form: FormData) => Promise<void>;
+
+/** A real incident's plan; while it is pending, and with a way to decide, the form to decide it. */
+function PlanSection({ plan, decide }: { plan: Plan; decide: DecidePlan | undefined }) {
+  const { proposal } = plan;
+  if (proposal === null) return <p>No plan: {plan.problem}</p>;
+  const decision = plan.status === 'approved' ? 'Approved' : 'Rejected';
+  return (
+    <>
+      <p>
+        <strong>
+          {PLAN_KINDS[proposal.kind]} {proposal.target}
+        </strong>
+        : {proposal.rationale}
+      </p>
+      {proposal.files.length > 0 && (
+        <ul>
+          {proposal.files.map((file) => (
+            <li key={file}>
+              <code>{file}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+      {plan.status === 'pending' ? (
+        <p>Waiting for a decision.</p>
+      ) : (
+        <p>
+          {decision} by {plan.decided_by} at {plan.decided_at} (UTC)
+          {plan.decision_reason === null ? '.' : `: ${plan.decision_reason}`}
+        </p>
+      )}
+      {plan.status === 'pending' && decide !== undefined && (
+        <form action={decide.bind(null, plan.id)}>
+          <p>
+            <label>
+              Your name <input name="approver" required maxLength={200} />
+            </label>
+          </p>
+          <p>
+            <label>
+              Reason (optional) <textarea name="reason" maxLength={2000} />
+            </label>
+          </p>
+          <button type="submit" name="verdict" value="approve">
+            Approve
+          </button>{' '}
+          <button type="submit" name="verdict" value="reject">
+            Reject
+          </button>
+        </form>
+      )}
+      <p>A decision is only recorded: nothing runs from a plan yet.</p>
+    </>
+  );
+}
+
+/**
+ * One investigation: verdict, cause and evidence, the plan, the models asked and their misses.
+ * Read-only, but for a pending plan's form when `decide` is given.
+ */
+export function Report({
+  investigation,
+  decide,
+}: {
+  investigation: Investigation;
+  decide?: DecidePlan;
+}) {
   const { hypotheses, models, proposed_actions: actions } = investigation;
   const notes = fallbackNotes(models);
   return (
@@ -71,6 +139,13 @@ export function Report({ investigation }: { investigation: Investigation }) {
             ))}
           </ul>
         </>
+      )}
+
+      <h2>Plan</h2>
+      {investigation.plan === null ? (
+        <p>No plan was made: plans are only for real incidents, while the planner is on.</p>
+      ) : (
+        <PlanSection plan={investigation.plan} decide={decide} />
       )}
 
       <h2>Models</h2>

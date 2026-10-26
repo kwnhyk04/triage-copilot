@@ -5,8 +5,9 @@ import { connection } from 'next/server';
 import { Report } from '../../../components/report.tsx';
 import { loadWebConfig } from '../../../lib/config.ts';
 import { getInvestigation } from '../../../lib/investigations.ts';
+import { decidePlanAction } from './actions.ts';
 
-/** One investigation's report, read-only. */
+/** One investigation's report, read-only but for its plan's decision. */
 export default async function InvestigationReport({ params }: { params: Promise<{ id: string }> }) {
   // Render per request: the report is live data and GATEWAY_URL exists only at runtime.
   await connection();
@@ -18,7 +19,10 @@ export default async function InvestigationReport({ params }: { params: Promise<
       <p>
         <Link href="/investigations">All investigations</Link>
       </p>
-      <Report investigation={investigation} />
+      <Report
+        investigation={investigation}
+        decide={decidePlanAction.bind(null, investigation.id)}
+      />
     </main>
   );
 }

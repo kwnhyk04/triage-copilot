@@ -11,10 +11,15 @@ from py_config import EnvSettings
 from py_telemetry import LogLevel
 
 Provider = Literal["gemini", "anthropic", "nvidia", "openrouter", "ollama"]
-RoleName = Literal["primary", "fallback", "small"]
+# The roles a model chain is built from, each with its own LLM_<ROLE>_* settings.
+ChainRole = Literal["primary", "fallback", "small"]
+# planner: the plan for a real incident's fix (P2), whichever model of its chain makes it.
+RoleName = Literal[ChainRole, "planner"]
+# Claude's output_config.effort.
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # The apps whose real incidents TC triages (docs/context.md, Real Incidents).
 LiveApp = Literal["freight-audit", "filing-lens"]
-ROLES: tuple[RoleName, ...] = ("primary", "fallback", "small")
+ROLES: tuple[ChainRole, ...] = ("primary", "fallback", "small")
 # Each provider's key setting; ollama runs locally without one.
 KEY_SETTINGS: dict[Provider, str | None] = {
     "gemini": "gemini_api_key",
@@ -38,10 +43,13 @@ class Role:
     rpd: int
     api_key: str | None = field(default=None, repr=False)
     until: date | None = None
-    # Live triage's Claude only: what it may spend in a UTC day, in US dollars (agent.pricing).
+    # Live triage's and the planner's Claude: what its calls may spend in a UTC day, in US dollars
+    # (agent.pricing).
     daily_usd: float | None = None
     # Every Claude role: what all of TC's Claude calls may spend in a UTC month, evals included.
     monthly_usd: float | None = None
+    # The planner's Claude: how hard it thinks; None leaves the model's default.
+    effort: Effort | None = None
 
 
 class Settings(EnvSettings):
@@ -114,6 +122,12 @@ class Settings(EnvSettings):
     # TC's share of the Anthropic account a calendar month (UTC), evals included: any Claude call
     # runs only if this month's Claude spend plus the call's worst case stays within it.
     llm_claude_monthly_usd: Annotated[float, Field(ge=0)] = 15.0
+    # The plan for a real incident's fix asks Claude first, while ANTHROPIC_API_KEY is set and
+    # before LLM_CLAUDE_UNTIL, then the free chain. A Claude plan runs only if today's plans (UTC)
+    # plus its worst case stay within LLM_PLANNER_DAILY_USD.
+    llm_planner_model: str = "claude-opus-5-5"
+    llm_planner_effort: Effort = "medium"
+    llm_planner_daily_usd: Annotated[float, Field(ge=0)] = 1.00
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None
@@ -123,7 +137,7 @@ class Settings(EnvSettings):
     fastembed_cache_path: Path | None = None
     runbooks_dir: Path = Path("runbooks")
 
-    @field_validator("llm_triage_model")
+    @field_validator("llm_triage_model", "llm_planner_model")
     @classmethod
     def _priced(cls, model: str) -> str:
         # The dollar cap cannot be checked without the model's prices.
@@ -161,7 +175,7 @@ class Settings(EnvSettings):
             raise ValueError("ANTHROPIC_API_KEY is required by LLM_CLAUDE_FALLBACK")
         return self
 
-    def role(self, name: RoleName) -> Role:
+    def role(self, name: ChainRole) -> Role:
         provider: Provider = getattr(self, f"llm_{name}_provider")
         key = KEY_SETTINGS[provider]
         secret: SecretStr | None = getattr(self, key) if key else None
@@ -193,6 +207,25 @@ class Settings(EnvSettings):
             until=self.llm_claude_until,
             daily_usd=self.llm_triage_daily_usd,
             monthly_usd=self.llm_claude_monthly_usd,
+        )
+
+    def planner(self) -> Role | None:
+        """The planner's Claude, first in its chain, when ANTHROPIC_API_KEY is set."""
+        secret = self.anthropic_api_key
+        if secret is None:
+            return None
+        return Role(
+            name="planner",
+            provider="anthropic",
+            model=self.llm_planner_model,
+            base_url=None,
+            rpm=self.llm_claude_rpm,
+            rpd=0,
+            api_key=secret.get_secret_value(),
+            until=self.llm_claude_until,
+            daily_usd=self.llm_planner_daily_usd,
+            monthly_usd=self.llm_claude_monthly_usd,
+            effort=self.llm_planner_effort,
         )
 
     def claude(self) -> Role | None:

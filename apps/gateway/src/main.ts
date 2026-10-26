@@ -1,7 +1,7 @@
 import { buildApp, createUpdates } from './app.ts';
 import { type GatewayConfig, loadGatewayConfig } from './config.ts';
 import { connectDb } from './db.ts';
-import { createDecide } from './decisions.ts';
+import { createDecide, createDecidePlan } from './decisions.ts';
 import { startEventsConsumer, storeEvent } from './events.ts';
 import { createClaim, createReport } from './executions.ts';
 import { createFindTenant, createIntake } from './intake.ts';
@@ -38,6 +38,7 @@ const app = await buildApp({
   ping: db.ping,
   updates: createUpdates(),
   decide: createDecide(db.sql, nudge),
+  decidePlan: createDecidePlan(db.sql),
   findTenant: createFindTenant(db.sql),
   intake: createIntake(
     db.sql,

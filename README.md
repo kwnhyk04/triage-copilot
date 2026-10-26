@@ -191,13 +191,15 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `make runbooks` | Embeds `runbooks/*.md` into `agent.runbook_chunks` for `search_runbooks` |
 | `make smoke` | One scenario (`SCENARIO=bad-deploy-1`) against the running stack; needs `make dev` with `AI_ENABLED=true` and the provider keys in `.env`. Prints the report, each tool call, tokens and latency per model turn, and the gateway's copy; results go to `evals/reports/runs/` |
 | `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `agent-events-dlq.fifo`, `investigations-dlq.fifo`, and the agent's `dead_letters` |
-| `make switch` | Shows the kill switches; `NAME=live\|claude STATE=on\|off` flips one (live is off and claude on by default) |
+| `make switch` | Shows the kill switches; `NAME=live\|claude\|planner STATE=on\|off` flips one (live and planner are off, claude on, by default) |
 | `make dev-watch` | Runs `watch` against the apps whose `WATCH_*_TOKEN` is set in `.env` (none by default; see `.env.example`). It reads the real apps, so it is not part of `make dev` |
 | `make digest` | Lists a UTC day's alert groups that got no investigation, per tenant, with why (only resolved alerts, the 5-minute cap, or the 30-a-day cap); `DAY=YYYY-MM-DD`, today by default |
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
 Reports: with `make dev` running, `http://127.0.0.1:3200/investigations` lists every investigation, newest first, each linked to its report (the verdict, the cause with its evidence, the models asked and any fallback). The web server reads them from the gateway with its own API key; the pages have no login yet (step 9) and listen on 127.0.0.1 only. A live tenant's snapshots and steps are purged after 30 days, by the gateway and the agent each; its reports stay.
+
+Plans: with the `planner` switch on (off until the P2.5 measuring run), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report page shows it with a form to approve or reject it; the decision is recorded once, and nothing runs from it yet.
 
 Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:
 

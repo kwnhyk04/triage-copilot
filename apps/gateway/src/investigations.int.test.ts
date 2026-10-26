@@ -51,6 +51,7 @@ describe('investigation list against Postgres', () => {
       intake: unused,
       listInvestigations: createListInvestigations(db.sql),
       getInvestigation: createGetInvestigation(db.sql),
+      decidePlan: unused,
     });
   }, 60_000);
   afterAll(async () => {
@@ -304,6 +305,8 @@ describe('investigation list against Postgres', () => {
       partial: false,
       models: MODELS,
       proposed_actions: [],
+      // No plan was recorded for it.
+      plan: null,
       steps: [
         { seq: 1, kind: 'tool_call', summary: 'Read the snapshot of alert 1.' },
         { seq: 2, kind: 'tool_call', summary: 'read_snapshot returned' },

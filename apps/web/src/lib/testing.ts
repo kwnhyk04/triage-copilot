@@ -59,5 +59,6 @@ export const LIVE_TRIAGE: Investigation = {
     },
   ],
   proposed_actions: [],
+  plan: null,
   steps: [],
 };

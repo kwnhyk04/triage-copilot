@@ -196,7 +196,10 @@ class ModelCall(Base):
     investigation_id: Mapped[UUID] = mapped_column(
         ForeignKey(Investigation.id, ondelete="CASCADE"), index=True
     )
-    role: Mapped[str] = mapped_column(Enum("primary", "fallback", "small", name="model_role"))
+    # planner (since 0013): a plan's call, whichever model of its chain it went to.
+    role: Mapped[str] = mapped_column(
+        Enum("primary", "fallback", "small", "planner", name="model_role")
+    )
     provider: Mapped[str]
     model: Mapped[str]
     outcome: Mapped[str] = mapped_column(
@@ -234,11 +237,32 @@ class Switch(Base):
     """An operator's kill switch (agent.switches); a switch with no row is at its default."""
 
     __tablename__ = "switches"
-    __table_args__ = (CheckConstraint("name IN ('live', 'claude')", name="switches_name_check"),)
+    __table_args__ = (
+        CheckConstraint("name IN ('live', 'claude', 'planner')", name="switches_name_check"),
+    )
 
     name: Mapped[str] = mapped_column(primary_key=True)
     enabled: Mapped[bool]
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Plan(Base):
+    """A real incident's plan (P2, since 0013): its report's transaction adds the row, and the
+    planner completes it once, with the plan or the problem that left none."""
+
+    __tablename__ = "plans"
+
+    investigation_id: Mapped[UUID] = mapped_column(
+        ForeignKey(Investigation.id, ondelete="CASCADE"), primary_key=True
+    )
+    # plan_id in PlanRecorded, which a human's decision names.
+    id: Mapped[UUID] = mapped_column(unique=True)
+    # PlanRecorded's plan; null while the plan is due, and when no model gave one.
+    plan: Mapped[dict[str, Any] | None]
+    problem: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Null while the plan is due: a redelivered message finishes it.
+    planned_at: Mapped[datetime | None]
 
 
 class Outbox(Base):
@@ -248,7 +272,7 @@ class Outbox(Base):
     __table_args__ = (Index(None, "next_attempt_at", postgresql_where=text("failed_at IS NULL")),)
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    # The SQS message attribute message_type: step-recorded or report-recorded.
+    # The SQS message attribute message_type: step-recorded, report-recorded or plan-recorded.
     message_type: Mapped[str]
     group_id: Mapped[str]
     deduplication_id: Mapped[str]

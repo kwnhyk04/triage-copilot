@@ -5,6 +5,12 @@ type Schemas = components['schemas'];
 export const PARTS: Record<Schemas['ModelPart'], string> = {
   triage: 'Triage',
   summary: 'Log summaries',
+  plan: 'Plan',
+};
+export const PLAN_KINDS: Record<Schemas['PlanKind'], string> = {
+  none: 'No fixed action for',
+  restart_service: 'Restart',
+  code_fix: 'Code fix in',
 };
 export const VERDICTS: Record<Schemas['Verdict'], string> = {
   real: 'Real incident',

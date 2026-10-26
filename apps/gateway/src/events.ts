@@ -147,7 +147,10 @@ export function toolOutcome(
 }
 
 /** A message body checked against its contract; any failure is an InvalidEvent. */
-function parse<K extends 'step-recorded' | 'report-recorded'>(name: K, body: string) {
+function parse<K extends 'step-recorded' | 'report-recorded' | 'plan-recorded.v1'>(
+  name: K,
+  body: string,
+) {
   try {
     return parseMessage(name, JSON.parse(body));
   } catch (error) {
@@ -164,7 +167,8 @@ async function tenantOf(tx: TransactionSql, investigationId: string) {
 /**
  * Copies one message into the mirror tables in one transaction. Every write is keyed, so a
  * redelivered message changes nothing. Throws InvalidEvent on an unknown message type or an invalid
- * body. The agent sets message_type on each message: step-recorded or report-recorded.
+ * body. The agent sets message_type on each message: step-recorded, report-recorded or
+ * plan-recorded.
  */
 export async function storeEvent(
   sql: Sql,
@@ -231,6 +235,30 @@ export async function storeEvent(
           SELECT id FROM gateway.alert_groups
           WHERE investigation_id = ${id} AND status IN ('queued', 'running', 'failed')
           FOR NO KEY UPDATE SKIP LOCKED)`;
+      return 'stored';
+    });
+  }
+  if (type === 'plan-recorded') {
+    const {
+      plan_id,
+      investigation_id: id,
+      plan,
+      problem,
+      models,
+      recorded_at,
+    } = parse('plan-recorded.v1', body);
+    return sql.begin(async (tx) => {
+      const tenantId = await tenantOf(tx, id);
+      if (tenantId === undefined) return 'unknown_investigation';
+      // The first plan stands: a redelivered or later one changes nothing.
+      await tx`
+        INSERT INTO gateway.plans
+          (id, tenant_id, investigation_id, kind, target, files, rationale, problem, models,
+           recorded_at)
+        VALUES (${plan_id}, ${tenantId}, ${id}, ${plan?.kind ?? null}, ${plan?.target ?? null},
+                ${JSON.stringify(plan?.files ?? [])}::text::jsonb, ${plan?.rationale ?? null},
+                ${problem}, ${JSON.stringify(models)}::text::jsonb, ${recorded_at})
+        ON CONFLICT DO NOTHING`;
       return 'stored';
     });
   }

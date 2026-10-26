@@ -229,3 +229,10 @@ def test_a_call_is_charged_its_real_cost_and_gated_on_its_worst() -> None:
     assert real == pytest.approx((3_000 * 0.10 + 2_000 * 0.01 + 5_000 * 0.125 + 500 * 0.50) / 1e6)
     # The worst case bills every input token at the cache-write rate: 100,000 in and 2,048 out.
     assert worst(haiku, 100_000, 2_048) == pytest.approx(0.0125 + 0.001024)
+
+
+def test_a_plan_s_worst_case_is_48_cents_so_two_fit_the_planner_s_day() -> None:
+    opus = RATES["claude-opus-5-5"]
+    # A plan caches nothing: 40,000 input tokens at $4 and 16,000 output at $20 per million.
+    assert worst(opus, 40_000, 16_000, caches=False) == pytest.approx(0.16 + 0.32)
+    assert worst(opus, 40_000, 16_000) == pytest.approx(0.20 + 0.32)
