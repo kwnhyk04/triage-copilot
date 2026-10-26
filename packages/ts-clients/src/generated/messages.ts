@@ -85,6 +85,69 @@ export interface InvestigationRequestedV2 {
 }
 
 /**
+ * Agent to gateway on agent-events.fifo: the plan for a real incident's fix, made once per investigation after a live triage's real verdict, for a human to approve or reject. Nothing runs from it. Sent once after the transaction that stored it; MessageGroupId is the investigation id, so it follows the investigation's ReportRecorded, and MessageDeduplicationId plan-<investigation_id>.
+ */
+export interface PlanRecordedV1 {
+  schema_version: 1;
+  /**
+   * The plan's id, which a human's decision names.
+   */
+  plan_id: string;
+  investigation_id: string;
+  /**
+   * The plan; null when no model gave one that passed the agent's checks, and problem says why.
+   */
+  plan: Plan | null;
+  /**
+   * Why there is no plan, such as every model failing or the agent's check refusing the plan given; null when there is one.
+   */
+  problem: string | null;
+  /**
+   * Every model asked for the plan, in the order first asked.
+   *
+   * @maxItems 20
+   */
+  models: {
+    part: "plan";
+    provider: string;
+    model: string;
+    /**
+     * Requests it answered.
+     */
+    calls: number;
+    /**
+     * Requests it did not answer or answered with no plan, and requests the agent skipped before they reached it.
+     */
+    failed: number;
+    /**
+     * Why the last of those failed or was skipped; null when it answered every request.
+     */
+    reason: string | null;
+  }[];
+  recorded_at: string;
+}
+export interface Plan {
+  /**
+   * none: no fixed action fits, and the rationale says what a human should do; restart_service: restart one app or worker container of the app (run from phase 3 on); code_fix: change the app's source on a local branch (phase 4).
+   */
+  kind: "none" | "restart_service" | "code_fix";
+  /**
+   * A service of the app's catalog: the one to restart, the one whose code changes, or for none the one at fault.
+   */
+  target: string;
+  /**
+   * code_fix only: the repo paths to change, each in the app's source allowlist; empty for the other kinds.
+   *
+   * @maxItems 10
+   */
+  files: string[];
+  /**
+   * The plan's only free text: the cause, the evidence it rests on, what the plan changes and how a human checks it worked.
+   */
+  rationale: string;
+}
+
+/**
  * Every ReportRecorded version a consumer must accept. Producers emit v2 only. Drop a version here only after no producer emits it and the queue holds none of its messages.
  */
 export type ReportRecorded = ReportRecordedV1 | ReportRecordedV2;
@@ -324,6 +387,7 @@ export interface Messages {
   "investigation-requested": InvestigationRequested;
   "investigation-requested.v1": InvestigationRequestedV1;
   "investigation-requested.v2": InvestigationRequestedV2;
+  "plan-recorded.v1": PlanRecordedV1;
   "report-recorded": ReportRecorded;
   "report-recorded.v1": ReportRecordedV1;
   "report-recorded.v2": ReportRecordedV2;
@@ -603,6 +667,208 @@ export const schemas = {
         "tenant_id": "6f1c2a9e-8b3d-4e5f-9a7b-2c4d6e8f0a1b",
         "group_key": "{}:{alertname=\"CheckoutHighErrorRate\"}",
         "requested_at": "2026-10-14T12:00:05Z"
+      }
+    ]
+  },
+  "plan-recorded.v1": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PlanRecordedV1",
+    "description": "Agent to gateway on agent-events.fifo: the plan for a real incident's fix, made once per investigation after a live triage's real verdict, for a human to approve or reject. Nothing runs from it. Sent once after the transaction that stored it; MessageGroupId is the investigation id, so it follows the investigation's ReportRecorded, and MessageDeduplicationId plan-<investigation_id>.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "plan_id",
+      "investigation_id",
+      "plan",
+      "problem",
+      "models",
+      "recorded_at"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": 1
+      },
+      "plan_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "The plan's id, which a human's decision names."
+      },
+      "investigation_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "plan": {
+        "description": "The plan; null when no model gave one that passed the agent's checks, and problem says why.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Plan"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "problem": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 1000,
+        "description": "Why there is no plan, such as every model failing or the agent's check refusing the plan given; null when there is one."
+      },
+      "models": {
+        "type": "array",
+        "maxItems": 20,
+        "description": "Every model asked for the plan, in the order first asked.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "provider",
+            "model",
+            "calls",
+            "failed",
+            "reason"
+          ],
+          "properties": {
+            "part": {
+              "type": "string",
+              "enum": [
+                "plan"
+              ]
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "calls": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests it answered."
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests it did not answer or answered with no plan, and requests the agent skipped before they reached it."
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 500,
+              "description": "Why the last of those failed or was skipped; null when it answered every request."
+            }
+          }
+        }
+      },
+      "recorded_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "$defs": {
+      "Plan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "target",
+          "files",
+          "rationale"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "none",
+              "restart_service",
+              "code_fix"
+            ],
+            "description": "none: no fixed action fits, and the rationale says what a human should do; restart_service: restart one app or worker container of the app (run from phase 3 on); code_fix: change the app's source on a local branch (phase 4)."
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "A service of the app's catalog: the one to restart, the one whose code changes, or for none the one at fault."
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "description": "code_fix only: the repo paths to change, each in the app's source allowlist; empty for the other kinds."
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "The plan's only free text: the cause, the evidence it rests on, what the plan changes and how a human checks it worked."
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "schema_version": 1,
+        "plan_id": "5b1c9d2e-7f3a-4e8b-9c6d-1a2b3c4d5e6f",
+        "investigation_id": "3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68",
+        "plan": {
+          "kind": "restart_service",
+          "target": "worker",
+          "files": [],
+          "rationale": "The worker container exited with 137 at 09:51 while postgres, redis, minio and the egress proxy stay healthy [tc_01J9ZK3Q7M]. Restart it, then check that it stays up and the queue drains."
+        },
+        "problem": null,
+        "models": [
+          {
+            "part": "plan",
+            "provider": "anthropic",
+            "model": "claude-opus-5-5",
+            "calls": 1,
+            "failed": 0,
+            "reason": null
+          }
+        ],
+        "recorded_at": "2026-10-26T10:03:10Z"
+      },
+      {
+        "schema_version": 1,
+        "plan_id": "8e2f4a6b-1c3d-4e5f-a7b8-9c0d1e2f3a4b",
+        "investigation_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "plan": null,
+        "problem": "No model gave a plan: gemini-3.5-flash-lite: RateLimited: gemini 429: rate limited",
+        "models": [
+          {
+            "part": "plan",
+            "provider": "anthropic",
+            "model": "claude-opus-5-5",
+            "calls": 0,
+            "failed": 1,
+            "reason": "Refused: anthropic declined the request (category cyber)"
+          },
+          {
+            "part": "plan",
+            "provider": "gemini",
+            "model": "gemini-3.5-flash-lite",
+            "calls": 0,
+            "failed": 1,
+            "reason": "RateLimited: gemini 429: rate limited"
+          }
+        ],
+        "recorded_at": "2026-10-26T11:20:00Z"
       }
     ]
   },

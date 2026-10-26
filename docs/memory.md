@@ -208,6 +208,20 @@ From the approved design doc:
   - The monthly cap is one setting, `LLM_CLAUDE_MONTHLY_USD` (15), on every Anthropic role, evals included. It is checked like the daily cap, against each call's worst case. `available()` judges the largest call, so an eval pinned to Claude parks until the month ends, and a Claude model without prices fails at startup.
   - The agent records each investigation's tenant when it starts, which retention needs; the column already existed, so no migration.
   - Reason: the user's P1.10 and P1.11 scope, and the plan's budget (TC's $15 a month, evals included).
+- 2026-10-26: P2.1 to P2.4, built on branch `p2-planner` for one PR (user request: "Decide everything else yourself and list it"). Small decisions, the recommended options:
+  - A `planner` switch, default off, gates every plan (the plan's "later: planner" switch), so no plan is made before P2.5. A plan row is due only when the switch is on at the report; one switched off before the plan records that as its problem.
+  - The plan is one call per model, never retried: a skipped, refused, cut-off (stop reason `max_tokens`, `Truncated`), failed or invalid answer moves down the chain (planner's Claude, then Gemini, then NIM). The free models answer through one forced call of `submit_plan`, the tool path they already have.
+  - All of a plan's calls are recorded as role `planner`, whichever model served them. The daily caps count by role: the planner cap counts plans, the triage cap every other Claude call (evals included), and TC's monthly cap all of them; before, the triage cap counted every Claude call of the day.
+  - The planner's prompt is at most 40,000 bytes (bytes bound tokens, as for triage), so its worst case is $0.48: input at Opus's $4 (a plan marks nothing for the cache) and 16,000 output tokens at $20. Two plans at the worst fit $1.00. No `count_tokens` call is made.
+  - The planner reads the newest snapshot itself, from the gateway's alert context, and gets it without log lines; the cited results carry what the triage relied on. The check reads the same snapshot.
+  - A plan the check refuses is kept as no plan (`plan` null) with the reason in `problem`, and the chain does not go on: a refusal is a finding for the human, not a cue for a weaker model. A plan without a proposal takes no decision (409).
+  - The check refuses storage too (MinIO), as the 2026-10-25 catalog entry asked, and a code fix of anything but an app or worker. Code-fix files must match the app's source patterns (`SOURCES`: FA's `apps/` and `packages/` TypeScript, FL's `services/` and `packages/` Python, from TC's records of their layouts, not from reading the repos) and cross no hidden folder, config, migration or generated folder.
+  - Files stay on a code fix only; another kind's files are dropped, not refused.
+  - The plan's models ride in PlanRecorded v1 (part `plan`) and follow the report's in the detail's `models`; `ModelPart` gains `plan` (oasdiff warns, no error).
+  - Plan decisions get their own table and routes, not `approvals`, whose rows the executor's foreign key reads as approved actions; nothing is queued on approval in phase 2.
+  - The web form posts to a Next.js server action (its Origin check refuses cross-site posts), and the approver is the name typed until login.
+  - A decided plan does not change its group's status.
+  - Reason: the user's P2.1 to P2.4 scope and the approved plan (docs/context.md, Real Incidents).
 
 ## Preferences and Instructions
 
@@ -223,6 +237,9 @@ From the approved design doc:
 - 2026-10-15: Waits for a tenant slot used up SQS receives and could dead-letter work, and budget waits held every worker slot. Parking fixed both: the two-agent storm test shows no DLQ entry and every parked investigation running.
 
 ## Known Issues and Pitfalls
+
+- 2026-10-26: `anthropic.transform_schema` moves unsupported keywords (`maxLength`, `minLength`, numeric limits) into the property's description as text, so a schema sent to structured outputs still contains the word: check the property's keys, not the JSON string. The agent checks those limits on the answer (pydantic).
+- 2026-10-26: Mistake: I did not run the new gateway `plans.int.test.ts` red before writing its code. Why: a suite whose `beforeAll` throws hangs Jest (2026-10-25 entry), and the unit routes test had shown the routes missing. What we did: noted here and in the activity log; the suite passed against the code, and its routes' red came from `app.test.ts`.
 
 - 2026-10-24: `pnpm install` of a package younger than the release-age gate (about one day) silently writes `minimumReleaseAgeExclude` entries into `pnpm-workspace.yaml`. Check `git diff pnpm-workspace.yaml` after any dependency bump and pick an older release instead. `next` is 16.4.2, not 16.4.3, for this reason.
 - 2026-10-24: pillow cannot reach 13.0.0 (41 advisories fixed there) while fastembed requires `pillow<13` (0.8.1 and 0.9.0). The esbuild advisory under `drizzle-kit` 0.31.11 has no stable fix. Both are open (docs/todo.md); do not add audit ignore entries.

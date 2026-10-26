@@ -19,6 +19,7 @@ from agent.llm import Binding, Limiter, Router, spent
 from agent.model import Model, ScriptedModel
 from agent.outbox import Relay, sqs_sender
 from agent.partitions import maintain_partitions
+from agent.planner import Planner
 from agent.providers import make_provider
 from agent.retention import maintain_retention
 from agent.runbooks import FastEmbedder, RunbookSearch
@@ -48,7 +49,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         for role in (settings.role(n) for n in ("primary", "fallback", "small"))
     )
     limiter = Limiter(is_spent)
-    claude, triage = settings.claude(), settings.triage()
+    claude, triage, planner = settings.claude(), settings.triage(), settings.planner()
     on_rate_limit = settings.llm_fallback_on_rate_limit
     sim = Router(
         primary,
@@ -68,6 +69,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         limiter=limiter,
         claude=Binding(triage, make_provider(triage)) if triage else None,
         claude_first=True,
+        planner=Binding(planner, make_provider(planner)) if planner else None,
     )
     return sim, live
 
@@ -112,6 +114,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         live_model=live_model,
         live_token_cap=settings.live_investigation_token_cap,
         live_daily_token_budget=settings.live_daily_ai_token_budget,
+        # Real incidents' plans ask the live router's plan chain; the snapshots come from the
+        # gateway's alert context.
+        planner=Planner(live_model, alerts.get) if isinstance(live_model, Router) else None,
     )
     consumer = Consumer(
         sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight

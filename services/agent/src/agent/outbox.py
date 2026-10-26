@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 STEP = "step-recorded"
 REPORT = "report-recorded"
+PLAN = "plan-recorded"
 # Failed sends after which a row waits for a human (failed_at).
 MAX_ATTEMPTS = 10
 BATCH = 10

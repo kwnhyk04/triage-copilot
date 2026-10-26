@@ -2,8 +2,9 @@ import type { components } from '@triage/ts-clients/gateway';
 import { parseMessage } from '@triage/ts-clients/messages';
 import type { Sql } from 'postgres';
 
-import type { Decide } from './app.ts';
+import type { Decide, DecidePlan } from './app.ts';
 import { sha256 } from './intake.ts';
+import { type PlanRow, toPlan } from './investigations.ts';
 
 type ProposedAction = components['schemas']['ProposedAction'];
 interface ActionRow {
@@ -74,4 +75,35 @@ export function createDecide(sql: Sql, onQueued: () => void): Decide {
       decision_reason: reason ?? null,
     };
   };
+}
+
+/**
+ * Records a human decision on a plan in gateway.plan_decisions, whose primary key allows one per
+ * plan: a second decision inserts nothing and gets already_decided. A plan without a proposal takes
+ * none. Nothing is queued: in phase 2 a plan's approval runs nothing.
+ */
+export function createDecidePlan(sql: Sql): DecidePlan {
+  return (planId, verdict, { approver, reason }) =>
+    sql.begin(async (tx) => {
+      const [plan] = await tx<PlanRow[]>`
+        SELECT id, kind, target, files, rationale, problem, models, recorded_at,
+               NULL AS decision, NULL AS approver, NULL AS decided_at, NULL AS reason
+        FROM gateway.plans WHERE id = ${planId}`;
+      if (plan === undefined) return 'not_found';
+      if (plan.kind === null) return 'no_proposal';
+      // No conflict target, as for actions: a concurrent second decision inserts nothing.
+      const [decided] = await tx<{ decided_at: Date }[]>`
+        INSERT INTO gateway.plan_decisions (plan_id, approver, decision, reason)
+        VALUES (${planId}, ${approver}, ${verdict}, ${reason ?? null})
+        ON CONFLICT DO NOTHING
+        RETURNING decided_at`;
+      if (decided === undefined) return 'already_decided';
+      return toPlan({
+        ...plan,
+        decision: verdict,
+        approver,
+        decided_at: decided.decided_at,
+        reason: reason ?? null,
+      });
+    });
 }

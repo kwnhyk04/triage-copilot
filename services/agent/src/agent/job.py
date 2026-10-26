@@ -19,6 +19,10 @@ the report from what is known; if even that cannot fit or fails, the job writes 
 itself. The token cap (INVESTIGATION_TOKEN_CAP) and PROMPT_LIMIT are hard limits: every call's
 output gets only the tokens its input leaves, and no call's prompt passes PROMPT_LIMIT
 (agent.model.TurnBudget).
+
+A live triage's real verdict, with the planner switch on, adds a due plan row in its report's
+transaction; the plan is then made once (agent.planner) and sent as PlanRecorded v1 after the
+report. A redelivered message finishes a plan its run left due.
 """
 
 import asyncio
@@ -39,7 +43,7 @@ from pydantic import ValidationError
 from sqlalchemy import Connection, Date, Engine, case, cast, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, ProposedAction, ToolCall
+from agent.db import AiUsage, DeadLetter, Investigation, ModelCall, Plan, ProposedAction, ToolCall
 from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft, live_brief
 from agent.llm import SUMMARY_SYSTEM
 from agent.model import (
@@ -60,7 +64,8 @@ from agent.model import (
     is_model_turn,
 )
 from agent.model import ModelCall as Call
-from agent.outbox import REPORT, STEP, enqueue
+from agent.outbox import PLAN, REPORT, STEP, enqueue
+from agent.planner import PlanDraft, Planner
 from agent.prompt import (
     FORCED,
     PROPOSE_TOOL,
@@ -85,6 +90,7 @@ from agent.tools import (
 )
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
+from py_clients.generated.messages.plan_recorded_v1_schema import PlanRecordedV1
 from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 from py_clients.generated.messages.step_recorded_v3_schema import StepRecordedV3
 
@@ -172,6 +178,8 @@ LABEL = re.compile(r'(\w+)="([^"]*)"')
 FINISHED = ("awaiting_approval", "resolved", "cancelled")
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 PROPOSALS = UUID("2f3d0f7e-4a51-4c0e-9b8f-6d1f3c2a5e70")
+# A plan's id is derived from its investigation's, so a retried report keeps it.
+PLAN_IDS = UUID("6c0b9a1e-2d3f-4a5b-8c7d-9e0f1a2b3c4d")
 UTC_TODAY = cast(func.timezone("UTC", func.now()), Date)
 # Session locks: one per investigation, and `cap` slots per tenant.
 LOCK_INVESTIGATION = "SELECT pg_try_advisory_lock(hashtextextended(:key, 0))"
@@ -191,16 +199,18 @@ PARKED_AHEAD = text("""
 # The last turn whose output is in the history: the next input bound builds on its exact count.
 LAST_TURN = text("""
     SELECT model, input_tokens, output_tokens FROM agent.model_calls
-    WHERE investigation_id = :id AND outcome = 'ok' AND role <> 'small'
+    WHERE investigation_id = :id AND outcome = 'ok' AND role IN ('primary', 'fallback')
     ORDER BY id DESC LIMIT 1
 """)
-# Every model asked, per part, in the order first asked: ReportRecorded v2's models.
+# Every model asked, per part, in the order first asked: ReportRecorded v2's models, and with
+# :plan PlanRecorded v1's.
 MODELS = text("""
-    SELECT CASE WHEN role = 'small' THEN 'summary' ELSE 'triage' END AS part, provider, model,
+    SELECT CASE role WHEN 'small' THEN 'summary' WHEN 'planner' THEN 'plan' ELSE 'triage' END
+               AS part, provider, model,
            count(*) FILTER (WHERE outcome = 'ok') AS calls,
            count(*) FILTER (WHERE outcome <> 'ok') AS failed,
            (array_agg(error ORDER BY id DESC) FILTER (WHERE outcome <> 'ok'))[1] AS reason
-    FROM agent.model_calls WHERE investigation_id = :id
+    FROM agent.model_calls WHERE investigation_id = :id AND (role = 'planner') = :plan
     GROUP BY 1, 2, 3 ORDER BY min(id) LIMIT 20
 """)
 
@@ -267,10 +277,13 @@ class Job:
         live_model: Model | None = None,
         live_token_cap: int | None = None,
         live_daily_token_budget: int | None = None,
+        planner: Planner | None = None,
     ) -> None:
         self.engine = engine
         self.model = model
         self.tools = tools
+        # Plans a real verdict's fix once, while the planner switch is on (P2).
+        self.planner = planner
         # Live tenants' investigations run only while the live switch is on, on live triage's
         # prompt, tools, model chain, token cap and daily budget, so they never reach the sim.
         self.live_tenants = dict(live_tenants or {})
@@ -307,9 +320,22 @@ class Job:
         app = self.live_tenants.get(tenant) if tenant else None
         cap = self.token_cap if app is None else self.live_token_cap
         status, state = await asyncio.to_thread(_load, conn, request, cap, app)
-        if status in FINISHED:
-            return "done"
-        tools = self.tools if app is None else self.live_tools
+        if status not in FINISHED:
+            outcome = await self._investigate(conn, inv, state, tenant, stopping)
+            if outcome != "done":
+                return outcome
+        return await self._plan_due(conn, inv, state, stopping)
+
+    async def _investigate(
+        self,
+        conn: Connection,
+        inv: UUID,
+        state: State,
+        tenant: UUID | None,
+        stopping: asyncio.Event,
+    ) -> Outcome:
+        """Runs the investigation from its checkpoint to its report, or until it parks or stops."""
+        tools = self.tools if state.app is None else self.live_tools
         # The budget check comes before the tenant slot, so parking for budget never held a slot.
         available = self._model_available
         if not state.steps and not await asyncio.to_thread(available, conn, True, tenant):
@@ -621,11 +647,41 @@ class Job:
             latency_ms=None,
             tokens=tokens,
         )
+        # A real incident's plan is due from the report's own transaction, so a crash between the
+        # two leaves it for the redelivery to make.
+        plans = verdict == "real" and state.app is not None and self.planner is not None
+        if plans and not await asyncio.to_thread(is_on, conn, "planner"):
+            plans = False
+        plan_id = uuid5(PLAN_IDS, str(inv)) if plans else None
         await asyncio.to_thread(
-            _store_report, conn, inv, event, report, status, verdict, self.dual_write
+            _store_report, conn, inv, event, report, status, verdict, plan_id, self.dual_write
         )
         state.steps.append(event)
         self.on_commit()
+
+    async def _plan_due(
+        self, conn: Connection, inv: UUID, state: State, stopping: asyncio.Event
+    ) -> Outcome:
+        """Makes the investigation's due plan, once, and sends it after the report: done, or
+        stopped when shutdown began first, which keeps the plan due for the message's redelivery."""
+        due = None if self.planner is None else await asyncio.to_thread(_due_plan, conn, inv)
+        if self.planner is None or due is None or state.app is None:
+            return "done"
+        if stopping.is_set():
+            return "stopped"
+        plan_id, report = due
+        draft: PlanDraft | None = None
+        if self.ai_enabled and await asyncio.to_thread(is_on, conn, "planner"):
+            evidence = _results(state)
+            draft, problem, calls = await self.planner.plan(
+                inv, state.app, report, evidence, state.fired_at
+            )
+            await self._record_calls(conn, inv, state, calls)
+        else:
+            problem = "The planner was switched off before the plan was made."
+        await asyncio.to_thread(_store_plan, conn, inv, plan_id, draft, problem)
+        self.on_commit()
+        return "done"
 
     async def dead_letter(self, message_id: str, group_id: str, body: str, error: str) -> None:
         """Keeps a message that failed schema validation, for inspection and replay."""
@@ -1241,6 +1297,71 @@ def _store_result(
             conn.execute(pg_insert(ProposedAction).values(row).on_conflict_do_nothing())
 
 
+def _models(conn: Connection, inv: UUID, *, plan: bool) -> list[dict[str, Any]]:
+    """Every model the investigation asked for its report, or for its plan, as the messages list
+    them."""
+    return [
+        {
+            "part": row.part,
+            "provider": row.provider,
+            "model": row.model,
+            "calls": row.calls,
+            "failed": row.failed,
+            "reason": None if row.reason is None else row.reason[:500],
+        }
+        for row in conn.execute(MODELS, {"id": inv, "plan": plan})
+    ]
+
+
+def _results(state: State) -> dict[str, str]:
+    """Each successful tool result by its id: what a plan's evidence quotes."""
+    return {
+        step.tool_call_id: step.result
+        for step in state.steps
+        if step.tool_call_id is not None and step.result is not None
+    }
+
+
+def _due_plan(conn: Connection, inv: UUID) -> tuple[UUID, dict[str, Any]] | None:
+    """The plan the investigation's report made due and no run has made yet, with that report."""
+    with conn.begin():
+        row = conn.execute(
+            select(Plan.id, Investigation.final_report)
+            .join(Investigation, Investigation.id == Plan.investigation_id)
+            .where(Plan.investigation_id == inv, Plan.planned_at.is_(None))
+        ).one_or_none()
+    return None if row is None else (row.id, row.final_report or {})
+
+
+def _store_plan(
+    conn: Connection, inv: UUID, plan_id: UUID, draft: PlanDraft | None, problem: str | None
+) -> None:
+    """Completes the due plan, with the plan or why there is none, and queues PlanRecorded v1 after
+    the report, with every model asked for it. A plan another run completed stays as it is."""
+    plan = None if draft is None else draft.model_dump(mode="json")
+    with conn.begin():
+        planned_at = conn.execute(
+            update(Plan)
+            .where(Plan.investigation_id == inv, Plan.planned_at.is_(None))
+            .values(plan=plan, problem=problem, planned_at=func.now())
+            .returning(Plan.planned_at)
+        ).scalar_one_or_none()
+        if planned_at is None:
+            return
+        message = PlanRecordedV1.model_validate(
+            {
+                "schema_version": 1,
+                "plan_id": plan_id,
+                "investigation_id": inv,
+                "plan": plan,
+                "problem": problem,
+                "models": _models(conn, inv, plan=True),
+                "recorded_at": planned_at,
+            }
+        )
+        enqueue(conn, PLAN, str(inv), f"plan-{inv}", message.model_dump(mode="json"))
+
+
 def _store_report(
     conn: Connection,
     inv: UUID,
@@ -1248,10 +1369,11 @@ def _store_report(
     report: Report,
     status: Status,
     verdict: Verdict | None,
+    plan_id: UUID | None,
     dual_write: bool,
 ) -> None:
     """Records the report step, ends the investigation, and queues ReportRecorded v2 after it,
-    with the verdict and every model the investigation asked."""
+    with the verdict and every model the investigation asked; with a plan id, its plan is due."""
     with conn.begin():
         recorded_at = _step(conn, inv, event, dual_write).recorded_at
         conn.execute(
@@ -1259,17 +1381,10 @@ def _store_report(
             .where(Investigation.id == inv)
             .values(final_report=report.model_dump(mode="json"), status=status)
         )
-        models = [
-            {
-                "part": row.part,
-                "provider": row.provider,
-                "model": row.model,
-                "calls": row.calls,
-                "failed": row.failed,
-                "reason": None if row.reason is None else row.reason[:500],
-            }
-            for row in conn.execute(MODELS, {"id": inv})
-        ]
+        if plan_id is not None:
+            due = pg_insert(Plan).values(investigation_id=inv, id=plan_id)
+            conn.execute(due.on_conflict_do_nothing())
+        models = _models(conn, inv, plan=False)
         message = ReportRecordedV2.model_validate(
             {
                 "schema_version": 2,

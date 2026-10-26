@@ -1,7 +1,8 @@
 """Kill switches the operator flips without a restart: `live` lets live tenants' investigations
-run (default off), and `claude` lets any Claude model be called (default on). The job reads `live`
-before every model turn and the limiter reads `claude` before every Claude request, so a flip takes
-effect at the next one.
+run (default off), `claude` lets any Claude model be called (default on), and `planner` lets a real
+incident's report get a plan (default off; P2.5 turns it on). The job reads `live` before every
+model turn and `planner` before every plan, and the limiter reads `claude` before every Claude
+request, so a flip takes effect at the next one.
 
     uv run python -m agent.switches show
     uv run python -m agent.switches set live on
@@ -19,9 +20,9 @@ from agent.db import Switch as Row
 from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
-Switch = Literal["live", "claude"]
+Switch = Literal["live", "claude", "planner"]
 # A switch with no row is at its default.
-DEFAULTS: dict[Switch, bool] = {"live": False, "claude": True}
+DEFAULTS: dict[Switch, bool] = {"live": False, "claude": True, "planner": False}
 
 
 def is_on(conn: Connection, name: Switch) -> bool:

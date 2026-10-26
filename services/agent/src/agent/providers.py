@@ -3,6 +3,8 @@
 Gemini goes through the google-genai SDK and Claude through the anthropic SDK; NVIDIA NIM,
 OpenRouter and Ollama share one OpenAI-compatible client. All run on httpx2 clients with a
 timeout, and none retries: agent.llm.Router and the job decide what happens after a failure.
+A structured answer (the planner's) is one JSON object: Claude's comes from a streamed
+structured-output call, every other provider's from one forced call of the answer's tool.
 """
 
 import base64
@@ -17,6 +19,7 @@ import anthropic
 import httpx2
 from anthropic.types import (
     MessageParam,
+    OutputConfigParam,
     ToolChoiceParam,
     ToolParam,
     ToolResultBlockParam,
@@ -37,11 +40,14 @@ from agent.model import (
     RateLimited,
     Refused,
     ToolSpec,
+    Truncated,
     Usage,
 )
-from agent.settings import Role
+from agent.settings import Effort, Role
 
 REQUEST_TIMEOUT = 60.0
+# The planner's one call: streamed, so its 16,000 output tokens meet no read timeout of a turn.
+PLAN_TIMEOUT = 300.0
 DEFAULT_BASE_URLS = {
     "anthropic": "https://api.anthropic.com",
     "nvidia": "https://integrate.api.nvidia.com/v1",
@@ -81,6 +87,12 @@ class Provider(Protocol):
 
     async def complete(self, system: str, text: str, max_output_tokens: int) -> tuple[str, Usage]:
         """Plain text in, plain text out."""
+        ...
+
+    async def structured(
+        self, system: str, text: str, shape: ToolSpec, max_output_tokens: int, effort: Effort | None
+    ) -> tuple[dict[str, Any], Usage]:
+        """Text in, one JSON object out in the shape of `shape`'s parameters."""
         ...
 
 
@@ -164,6 +176,11 @@ class GeminiProvider:
         response = await self._generate(user, config)
         return response.text or "", _gemini_usage(response.usage_metadata)
 
+    async def structured(
+        self, system: str, text: str, shape: ToolSpec, max_output_tokens: int, effort: Effort | None
+    ) -> tuple[dict[str, Any], Usage]:
+        return await _by_tool_call(self, system, text, shape, max_output_tokens)
+
     async def _generate(
         self, contents: list[types.ContentUnion], config: types.GenerateContentConfig
     ) -> types.GenerateContentResponse:
@@ -173,6 +190,15 @@ class GeminiProvider:
             )
         except genai_errors.APIError as error:
             raise _gemini_error(error) from None
+
+
+async def _by_tool_call(
+    provider: Provider, system: str, text: str, shape: ToolSpec, max_output_tokens: int
+) -> tuple[dict[str, Any], Usage]:
+    """A structured answer as the arguments of one forced call of `shape`."""
+    messages = [Message("user", text=text)]
+    turn = await provider.generate(system, messages, [shape], (shape.name,), max_output_tokens)
+    return turn.args, turn.usage
 
 
 def _gemini_content(message: Message) -> types.Content:
@@ -319,6 +345,42 @@ class AnthropicProvider:
         _raise_if_refused(response, usage)
         reply = "".join(block.text for block in response.content if block.type == "text")
         return reply, usage
+
+    async def structured(
+        self, system: str, text: str, shape: ToolSpec, max_output_tokens: int, effort: Effort | None
+    ) -> tuple[dict[str, Any], Usage]:
+        """One streamed answer in `shape`'s JSON schema (structured output), as Opus and Sonnet 5.5
+        refuse a forced tool call: no tools, the model's own thinking, nothing marked for the
+        cache, and no server-side refusal fallback, so a refusal goes on down the chain."""
+        # The API takes no length or number limits; the caller checks them on the answer.
+        schema = anthropic.transform_schema(shape.parameters)
+        config: OutputConfigParam = {"format": {"type": "json_schema", "schema": schema}}
+        if effort is not None:
+            config["effort"] = effort
+        with _anthropic_errors():
+            async with self._client.messages.stream(
+                model=self.model,
+                system=system,
+                messages=[{"role": "user", "content": text}],
+                max_tokens=max_output_tokens,
+                output_config=config,
+                timeout=PLAN_TIMEOUT,
+            ) as stream:
+                response = await stream.get_final_message()
+        usage = _anthropic_usage(response.usage)
+        _raise_if_refused(response, usage)
+        if response.stop_reason == "max_tokens":
+            cut = f"anthropic stopped at {max_output_tokens:,} output tokens"
+            raise Truncated(f"{cut}, before the answer ended", usage=usage)
+        reply = "".join(block.text for block in response.content if block.type == "text")
+        try:
+            answer: object = json.loads(reply)
+        except json.JSONDecodeError:
+            raise ModelError("anthropic answered no JSON", retryable=False, usage=usage) from None
+        if not isinstance(answer, dict):
+            raise ModelError("anthropic answered no JSON object", retryable=False, usage=usage)
+        # A JSON object's keys are strings.
+        return cast("dict[str, Any]", answer), usage
 
 
 def _raise_if_refused(response: anthropic.types.Message, usage: Usage) -> None:
@@ -503,6 +565,11 @@ class OpenAICompatibleProvider:
         completion = await self._post(body)
         reply = completion.choices[0].message if completion.choices else _Reply()
         return reply.content or "", _openai_usage(completion.usage)
+
+    async def structured(
+        self, system: str, text: str, shape: ToolSpec, max_output_tokens: int, effort: Effort | None
+    ) -> tuple[dict[str, Any], Usage]:
+        return await _by_tool_call(self, system, text, shape, max_output_tokens)
 
     async def _post(self, body: dict[str, Any]) -> _Completion:
         response = await self._http.post(self._url, json=body, headers=self._headers)

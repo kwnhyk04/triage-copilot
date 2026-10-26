@@ -1,6 +1,7 @@
 import type {
   ActionApprovedV1,
   InvestigationRequestedV2,
+  PlanRecordedV1,
   ReportRecordedV2,
 } from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
@@ -50,6 +51,8 @@ export const stepKind = gateway.enum('step_kind', ['tool_call', 'hypothesis', 'a
 export const toolCallStatus = gateway.enum('tool_call_status', ['ok', 'error', 'timeout']);
 // A live triage's verdict (ReportRecorded v2).
 export const reportVerdict = gateway.enum('report_verdict', ['real', 'not_real']);
+// What a real incident's plan does (PlanRecorded v1).
+export const planKind = gateway.enum('plan_kind', ['none', 'restart_service', 'code_fix']);
 // Why a group got no investigation: every new alert had resolved, the tenant's 5-minute cap
 // (MAX_NEW_INVESTIGATIONS), or its daily one (MAX_DAILY_INVESTIGATIONS, a UTC day).
 export const notInvestigatedReason = gateway.enum('not_investigated_reason', [
@@ -259,6 +262,46 @@ export const investigationReports = gateway.table(
     }).onDelete('cascade'),
   ],
 );
+
+// The agent's plan for a real incident's fix (PlanRecorded v1, src/events.ts), one per
+// investigation. Without a proposal (kind null), problem says why.
+export const plans = gateway.table(
+  'plans',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    investigationId: uuid('investigation_id').notNull().unique(),
+    kind: planKind('kind'),
+    target: text('target'),
+    files: jsonb('files').$type<string[]>().notNull(),
+    rationale: text('rationale'),
+    problem: text('problem'),
+    models: jsonb('models').$type<PlanRecordedV1['models']>().notNull(),
+    recordedAt: timestamptz('recorded_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'plans_investigation_id_fk',
+      columns: [t.investigationId],
+      foreignColumns: [alertGroups.investigationId],
+    }),
+    check('plans_proposal_or_problem', sql`(${t.kind} is null) = (${t.problem} is not null)`),
+  ],
+);
+
+// One human decision per plan; the primary key refuses a second. Nothing runs from it in phase 2.
+export const planDecisions = gateway.table('plan_decisions', {
+  planId: uuid('plan_id')
+    .primaryKey()
+    .references(() => plans.id),
+  approver: text('approver').notNull(),
+  decision: decision('decision').notNull(),
+  reason: text('reason'),
+  decidedAt: timestamptz('decided_at').notNull().defaultNow(),
+});
 
 // Messages committed together with the rows that caused them. The relay (src/outbox.ts) sends
 // each to SQS and deletes it; a row that keeps failing gets failed_at until `pnpm outbox:replay`.

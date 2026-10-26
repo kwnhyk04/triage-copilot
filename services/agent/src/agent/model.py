@@ -5,7 +5,8 @@ plays fixed actions in tests. Every turn states its token budget, and a Model mu
 the input under `TurnBudget.limits`' bound and the output under its max output tokens.
 """
 
-from collections.abc import Sequence
+import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol
 
@@ -159,6 +160,14 @@ class Refused(ModelError):
         super().__init__(message, retryable=False, usage=usage)
 
 
+class Truncated(ModelError):
+    """The answer stopped at its output allowance before it ended (stop reason "max_tokens"):
+    never retried, since the same request stops there again; the call goes on down the chain."""
+
+    def __init__(self, message: str, *, usage: Usage = NO_USAGE) -> None:
+        super().__init__(message, retryable=False, usage=usage)
+
+
 class QuotaExhausted(ModelError):
     """The model's requests for the day are spent, by the limiter's count or the provider's."""
 
@@ -261,6 +270,27 @@ class TurnRequest:
     allowed: tuple[str, ...] | None = None
     # What submit_report must hold: live triage's report adds a verdict.
     report: type[ReportDraft] = ReportDraft
+
+
+@dataclass(frozen=True)
+class PlanRequest:
+    """One plan asked of the planner's chain (agent.planner): its prompt, the answer's shape, what
+    every answer must pass, and the sha its calls record."""
+
+    system: str
+    text: str
+    # The answer's JSON schema as a tool's parameters: Claude answers in it (structured output),
+    # the free models through one forced call of the tool.
+    shape: ToolSpec
+    # Why an answer is no plan, or None for one: the chain then asks its next model.
+    problems: Callable[[dict[str, Any]], str | None]
+    prompt_sha: str
+
+    @property
+    def bound(self) -> int:
+        """The prompt's UTF-8 bytes: no tokenizer makes more tokens than bytes."""
+        sent = (self.system, self.text, json.dumps(self.shape.parameters))
+        return sum(len(part.encode()) for part in sent) + PROMPT_OVERHEAD
 
 
 class Model(Protocol):

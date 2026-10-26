@@ -78,9 +78,30 @@ def test_every_claude_role_has_tc_s_monthly_cap_and_needs_a_priced_model() -> No
     assert settings.role("primary").monthly_usd is None
     lower: dict[str, Any] = {**keyed, "llm_claude_monthly_usd": 5}
     assert Settings(**lower).role("small").monthly_usd == 5
-    unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-opus-5-5"}
-    with pytest.raises(ValidationError, match=r"claude-opus-5-5 has no prices in agent/pricing\."):
+    unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-sonnet-5-5"}
+    with pytest.raises(ValidationError, match=r"claude-sonnet-5-5 has no prices in agent/"):
         Settings(**unpriced)
+
+
+def test_the_planner_is_opus_at_medium_effort_under_its_own_daily_cap() -> None:
+    assert OFFLINE.planner() is None
+    keyed: dict[str, Any] = {**OFFLINE.model_dump(), "anthropic_api_key": SecretStr("sk-ant-test")}
+    planner = Settings(**keyed).planner()
+    assert planner is not None
+    assert (planner.name, planner.provider, planner.model, planner.effort) == (
+        "planner",
+        "anthropic",
+        "claude-opus-5-5",
+        "medium",
+    )
+    # $1.00 a UTC day of its own, inside TC's $15 a month, until Claude's credits end.
+    caps = (planner.daily_usd, planner.monthly_usd, planner.until)
+    assert caps == (1.0, 15.0, date(2026, 11, 10))
+    assert planner.api_key == "sk-ant-test"
+    for bad in ({"llm_planner_model": "claude-sonnet-5-5"}, {"llm_planner_effort": "extreme"}):
+        changed: dict[str, Any] = {**keyed, **bad}
+        with pytest.raises(ValidationError):
+            Settings(**changed)
 
 
 def test_live_tenants_map_each_tenant_to_its_app(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,7 +3,14 @@ import { readFileSync } from 'node:fs';
 import type { Investigation } from '@triage/ts-clients/graphql';
 import type { FastifyInstance } from 'fastify';
 
-import { type AppDeps, buildApp, createUpdates, type Decide, REQUEST_TIMEOUT_MS } from './app.ts';
+import {
+  type AppDeps,
+  buildApp,
+  createUpdates,
+  type Decide,
+  type DecidePlan,
+  REQUEST_TIMEOUT_MS,
+} from './app.ts';
 import { loadGatewayConfig } from './config.ts';
 import { type FindTenant, type Intake, sha256, type Webhook } from './intake.ts';
 import type { GetInvestigation, ListInvestigations } from './investigations.ts';
@@ -76,6 +83,7 @@ const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
     },
   ],
   proposed_actions: [],
+  plan: null,
   steps: [
     {
       seq: 1,
@@ -105,6 +113,28 @@ const record: Decide = (actionId, verdict, decision) =>
   });
 const findTenant: FindTenant = (hash) =>
   Promise.resolve(hash === sha256(TOKEN) ? TENANT_ID : undefined);
+const PLAN_ID = '5b1c9d2e-7f3a-4e8b-9c6d-1a2b3c4d5e6f';
+/** Fake store: PLAN_ID is pending, any other plan id unknown. */
+const decidePlan: DecidePlan = (planId, verdict, decision) =>
+  Promise.resolve(
+    planId !== PLAN_ID
+      ? 'not_found'
+      : {
+          id: planId,
+          proposal: {
+            kind: 'none',
+            target: 'postgres',
+            files: [],
+            rationale: 'A human must look.',
+          },
+          problem: null,
+          status: verdict,
+          recorded_at: '2026-10-26T10:03:10.000Z',
+          decided_by: decision.approver,
+          decided_at: '2026-10-26T10:05:00.000Z',
+          decision_reason: decision.reason ?? null,
+        },
+  );
 
 describe('gateway', () => {
   let app: FastifyInstance;
@@ -126,6 +156,7 @@ describe('gateway', () => {
       ping: up,
       updates: createUpdates(),
       decide: record,
+      decidePlan,
       findTenant,
       intake,
       listInvestigations,
@@ -135,6 +166,47 @@ describe('gateway', () => {
     return app;
   };
   afterEach(() => app.close());
+
+  describe('plan decisions', () => {
+    const post = (headers: Record<string, string>, route = 'approve', id = PLAN_ID) =>
+      app.inject({
+        method: 'POST',
+        url: `/v1/plans/${id}/${route}`,
+        headers,
+        payload: { approver: 'oncall@example.com' },
+      });
+    const approver = { 'x-approver-key': APPROVER_KEY };
+
+    it('take the approver key only, and record the decision', async () => {
+      await start();
+      expect((await post({ 'x-api-key': API_KEY })).statusCode).toBe(403);
+      const missing = await post({});
+      expect(missing.statusCode).toBe(401);
+      expect(missing.headers['www-authenticate']).toBe('ApiKey header="X-Approver-Key"');
+      const approved = await post(approver);
+      expect(approved.statusCode).toBe(200);
+      expect(approved.json()).toMatchObject({ id: PLAN_ID, status: 'approved' });
+      expect((await post(approver, 'reject')).json()).toMatchObject({ status: 'rejected' });
+    });
+
+    it('map a bad id, an unknown plan, a decided one, one without a proposal and a failure', async () => {
+      await start({
+        decidePlan: (id) =>
+          id === PLAN_ID ? Promise.resolve('already_decided') : Promise.reject(new Error('down')),
+      });
+      expect((await post(approver, 'approve', 'not-a-uuid')).statusCode).toBe(400);
+      expect((await post(approver)).statusCode).toBe(409);
+      expect((await post(approver, 'approve', ACTION_ID)).statusCode).toBe(503);
+      await app.close();
+      await start({ decidePlan: () => Promise.resolve('no_proposal') });
+      const empty = await post(approver);
+      expect(empty.statusCode).toBe(409);
+      expect(empty.json<{ detail: string }>().detail).toMatch(/no proposal/);
+      await app.close();
+      await start();
+      expect((await post(approver, 'approve', ACTION_ID)).statusCode).toBe(404);
+    });
+  });
 
   describe('approve and reject', () => {
     const post = (

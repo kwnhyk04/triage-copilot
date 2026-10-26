@@ -30,6 +30,7 @@ describe('decision store against Postgres', () => {
       intake: unused,
       listInvestigations: unused,
       getInvestigation: unused,
+      decidePlan: unused,
     });
   }, 60_000);
   afterAll(async () => {

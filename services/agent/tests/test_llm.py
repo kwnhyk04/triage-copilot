@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import Connection
 
 from agent.job import REPORT_OUTPUT_CAP
-from agent.llm import LARGEST_CALL, Binding, Limiter, Router, spent
+from agent.llm import LARGEST_CALL, PLAN_OUTPUT_CAP, Binding, Limiter, Router, spent
 from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
@@ -21,12 +21,14 @@ from agent.model import (
     KeyRejected,
     Message,
     ModelError,
+    PlanRequest,
     QuotaExhausted,
     RateLimited,
     Refused,
     ReportDraft,
     ToolRequest,
     ToolSpec,
+    Truncated,
     TurnBudget,
     TurnRequest,
     Usage,
@@ -39,6 +41,12 @@ from agent.tools import TOOL_SPECS, DependenciesArgs, ToolContext, ToolInputErro
 from py_clients.clients import AlertContextClient
 from sim.catalog import CATALOG
 
+PLAN_ANSWER: dict[str, Any] = {
+    "kind": "none",
+    "target": "postgres",
+    "files": [],
+    "rationale": "Postgres refuses connections; a human must look at its disk.",
+}
 BUDGET = TurnBudget(
     remaining=150_000,
     prompt_bytes=10_000,
@@ -61,6 +69,9 @@ class Fake:
         self.model = f"{name}-model"
         self.errors = list(errors)
         self.max_outputs: list[int] = []
+        # What structured() answers, and the effort each of its calls asked for.
+        self.answer: dict[str, Any] = PLAN_ANSWER
+        self.efforts: list[str | None] = []
 
     async def generate(
         self,
@@ -80,6 +91,15 @@ class Fake:
         if self.errors:
             raise self.errors.pop(0)
         return "- 40 timeouts", Usage(input=500, output=10)
+
+    async def structured(
+        self, system: str, text: str, shape: ToolSpec, max_output_tokens: int, effort: str | None
+    ) -> tuple[dict[str, Any], Usage]:
+        self.max_outputs.append(max_output_tokens)
+        self.efforts.append(effort)
+        if self.errors:
+            raise self.errors.pop(0)
+        return dict(self.answer), Usage(input=12_000, output=900)
 
 
 def role(name: RoleName, model: str, rpm: int = 0, rpd: int = 0) -> Role:
@@ -558,6 +578,115 @@ def test_every_claude_role_is_held_to_tc_s_monthly_cap_by_each_call_s_worst_case
 def test_availability_is_judged_on_the_largest_call_a_turn_can_make() -> None:
     # A prompt at the limit and the forced report's output allowance.
     assert LARGEST_CALL == (PROMPT_LIMIT, REPORT_OUTPUT_CAP)
+
+
+# The planner's Claude: Opus at effort medium, held to its own $1.00 a UTC day and TC's $15 a month.
+PLANNER = Role(
+    "planner",
+    "anthropic",
+    "claude-opus-5-5",
+    None,
+    0,
+    0,
+    daily_usd=1.00,
+    monthly_usd=15.0,
+    effort="medium",
+)
+PLAN_REQUEST = PlanRequest(
+    "Plan the fix.",
+    "The report.",
+    ToolSpec("submit_plan", "Submit the plan.", {"type": "object"}),
+    lambda answer: None if answer.get("kind") else "it names no kind",
+    SHA,
+)
+
+
+def planners(
+    claude: Fake | None, primary: Fake, fallback: Fake, *, limiter: Limiter | None = None
+) -> Router:
+    """The live router's plan chain: the planner's Claude when there is one, then the free chain."""
+    return Router(
+        Binding(role("primary", primary.model), primary),
+        Binding(role("fallback", fallback.model), fallback),
+        Binding(role("small", "small-model"), Fake("small")),
+        fallback_on_rate_limit=True,
+        limiter=limiter or Limiter(None),
+        planner=None if claude is None else Binding(PLANNER, claude),
+    )
+
+
+def test_a_refused_plan_falls_to_the_free_chain_and_every_call_is_the_planner_s() -> None:
+    claude = Fake("claude", Refused("anthropic declined the request (category cyber)"))
+    primary = Fake("primary")
+
+    answer, calls = asyncio.run(planners(claude, primary, Fake("fallback")).plan(PLAN_REQUEST))
+
+    assert answer == PLAN_ANSWER
+    assert [(c.role, c.model, c.outcome) for c in calls] == [
+        ("planner", "claude-opus-5-5", "error"),
+        ("planner", "primary-model", "ok"),
+    ]
+    assert (calls[0].error or "").startswith("Refused: anthropic declined the request")
+    # Opus at effort medium, the free model at its own; both get the plan's 16,000 output tokens.
+    assert PLAN_OUTPUT_CAP == 16_000
+    assert (claude.efforts, primary.efforts) == (["medium"], [None])
+    assert claude.max_outputs == primary.max_outputs == [PLAN_OUTPUT_CAP]
+    assert {(c.prompt_sha, c.input_bound) for c in calls} == {(SHA, PLAN_REQUEST.bound)}
+
+
+def test_a_cut_off_failed_or_invalid_plan_moves_on_and_none_is_left_when_all_fail() -> None:
+    cut = Truncated("anthropic stopped at 16,000 output tokens, before the answer ended")
+    invalid = Fake("primary")
+    invalid.answer = {"rationale": "No kind."}
+
+    answer, calls = asyncio.run(
+        planners(Fake("claude", cut), invalid, Fake("fallback")).plan(PLAN_REQUEST)
+    )
+
+    assert answer == PLAN_ANSWER
+    assert [(c.model, c.outcome) for c in calls] == [
+        ("claude-opus-5-5", "error"),
+        ("primary-model", "error"),
+        ("fallback-model", "ok"),
+    ]
+    assert (calls[0].error or "").startswith("Truncated: ")
+    assert calls[1].error == "InvalidPlan: it names no kind"
+    # The invalid answer was billed, so its usage is recorded.
+    assert calls[1].usage.input == 12_000
+
+    failing = [Fake(name, ModelError(f"{name} 500")) for name in ("claude", "primary", "fallback")]
+    answer, calls = asyncio.run(planners(*failing).plan(PLAN_REQUEST))
+    assert (answer, [c.outcome for c in calls]) == (None, ["error", "error", "error"])
+
+
+def test_without_a_planner_claude_the_free_chain_plans() -> None:
+    free = planners(None, Fake("primary"), Fake("fallback"))
+    answer, calls = asyncio.run(free.plan(PLAN_REQUEST))
+    assert (answer, [c.model for c in calls]) == (PLAN_ANSWER, ["primary-model"])
+
+
+def test_the_planner_cap_is_checked_against_the_plan_s_worst_case_with_nothing_cached() -> None:
+    asked: list[tuple[str, float]] = []
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        asked.append((role.model, worst_usd))
+        over = role.daily_usd is not None
+        return "today's plans plus this call's worst case pass the planner cap" if over else None
+
+    claude = Fake("claude")
+    router = planners(claude, Fake("primary"), Fake("fallback"), limiter=Limiter(is_spent))
+
+    answer, calls = asyncio.run(router.plan(PLAN_REQUEST))
+
+    # A plan writes nothing to the cache: every input token at the input rate, and the whole output.
+    expected = worst(RATES["claude-opus-5-5"], PLAN_REQUEST.bound, PLAN_OUTPUT_CAP, caches=False)
+    assert asked == [("claude-opus-5-5", pytest.approx(expected)), ("primary-model", 0.0)]
+    assert [(c.model, c.outcome) for c in calls] == [
+        ("claude-opus-5-5", "skipped"),
+        ("primary-model", "ok"),
+    ]
+    assert "planner cap" in (calls[0].error or "")
+    assert (answer, claude.max_outputs) == (PLAN_ANSWER, [])
 
 
 def test_provider_text_is_masked_before_it_is_recorded_or_logged(
