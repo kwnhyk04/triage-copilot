@@ -19,6 +19,90 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-28: Python tools through `python -m`; step 9 items 7 to 11 built, every check green
+
+- What happened: Windows Smart App Control blocks the venv's unsigned launchers (os error 4551 on `alembic.exe`), but the venv's `python.exe` runs. The user gave one fix at the source: run every Python tool as `uv run python -m <tool>` with the same arguments, the same on Linux CI, and stop if `python.exe` is blocked or a tool has no `-m` form. Then: `make migrate`, and items 7 to 11 with the same approvals (`make migrate`, the demo export, `make test-int`, `make test-e2e`), one report, `make infra-down`, no commit.
+- Why: the policy blocks unsigned executables; pytest, ruff, pyright, alembic and pre-commit all ran through `python -m`.
+- What we did:
+  1. Searched every Makefile target, script, workflow and test for launcher use. Only the Makefile (10 lines) and one command in `docs/migrations.md` had any; CI calls make targets, and the tests use `sys.executable` or library APIs.
+  2. The project's own `agent`, `executor`, `sim` and `watch` had no `-m` form, which is a stop condition. I asked; the user chose a two-line `__main__.py` for each, calling the existing `main.run()`. The Makefile now runs `uv run python -m <tool>` everywhere.
+  3. `make migrate`: exit 0; the agent is at 0013 (head).
+  4. Item 7, tests first (`src/demo/demo.test.ts`, RED: 3). The export ran with `make demo-save` on five eval runs picked from `evals/reports/runs/` (README lists their ids). The 57 KB file was scanned for keys, tokens, hosts and tenant names: none. Then `src/demo/index.ts` and the `/demo` pages.
+  5. Item 8: `@playwright/test` 1.64.1 (published 2026-10-14) and `@axe-core/playwright` 4.14.0 (2026-10-15), both past pnpm's release-age gate; `pnpm-workspace.yaml` unchanged. Then `playwright.config.ts`, `e2e/shared.ts`, `e2e/fake-gateway.ts`, `auth.setup.ts` and the `auth`, `reports`, `demo` and `a11y` specs.
+     - The first `make test-e2e` downloaded Chrome for Testing 156 (chromium 1248) to `H:\.cache\ms-playwright`, which ran unblocked. 14 of 17 passed; all 3 failures were test bugs (docs/memory.md, 2026-10-28):
+       - two `getByRole('alert')` that also matched Next's route announcer;
+       - a check that ran before a click's navigation;
+       - the limit test losing typed passwords to React's form reset.
+     - The specs were written after the code they test, as the plan orders them, so their only red was those test bugs. The unit tests carry the red-first proof.
+  6. Item 9: the Makefile (`unexport LOGIN_PASSWORD_HASH SESSION_SECRET`, exported to `dev-ts`; `dev-ts` with `--continue=always`; `test-e2e`); `.env.example`; `scripts/ci_env.sh` (drops `PLAYWRIGHT_BROWSERS_PATH`); `.gitignore` (`test-results/`); `ci.yml` (an `e2e` job, which `ci-result` needs).
+  7. Item 10: every check (Validation), then `make infra-down`, which removed this project's three containers; the volumes stay.
+  8. Item 11: README, docs/context.md, docs/memory.md, docs/migrations.md and docs/todo.md. The todo also corrects the P2 line, which said `p2-planner` though P2 merged as #17.
+  - Why this was the best option: `python -m` is the same command on Windows and Linux and needs no policy change. The four `__main__.py` files are the user's choice.
+- Small events: GateGuard asked for facts before the first Bash call and the first edit of each file, about 28 times; stating them cleared each. Two of my lint mistakes were fixed in code: void returns in the fake gateway, and an optional chain on a literal type. Prettier's layout was applied by hand (5 files). The gitleaks hook was not run locally (its binary may meet the same policy); CI scans every push.
+- Validation (2026-10-28), each exit code:
+  - `make lint` 0; `make typecheck` 0; `make contracts-check` 0; `make contracts-breaking` 0 (no breaking change); `make build` 0.
+  - `make test` 0: Jest ts-config 2, ts-clients 52, gateway 54, web 82; pytest 611 passed.
+  - `make test-int` 0: Jest 9 suites and 46 tests; pytest 70 passed.
+  - `make test-e2e` 0: 17 passed.
+  - No model call, no eval, `live` and `planner` stay off, and FA and FL were not touched.
+- Final review: a fresh read-only reviewer (opus) read the whole branch and found 1 Important and 2 Minor.
+  - Fixed, Important: `/readyz` cached only answered results, so probes that arrived while a call was in flight each called the gateway with the server's key and could trip its 600-a-minute limit. It now caches the in-flight call. `readyz/route.test.ts` (50 parallel probes) went RED (50 calls), then GREEN (1).
+  - Fixed, re-graded to Important: `demo-save` read `LIVE_TENANTS` with the default `{}`, so in a shell without it a live investigation would read as simulated and could reach the public demo. It now needs the variable set (`liveTenantsRequired`). `config.test.ts` went RED, then GREEN.
+  - Deferred, Minor: the list keeps polling up to 6 minutes after a real verdict whose plan holds no proposal (docs/context.md, Known Limitations).
+  - After the fixes: `make lint` 0 (its first run failed once, on a void return in the new test, fixed), `make typecheck` 0, `make test` 0 (gateway Jest 55, web 83, pytest 611), `make test-e2e` 0 (17 passed).
+- Outstanding:
+  - The user's hand check: sign in at 127.0.0.1:3200 on desktop and in a phone-size window, in both themes, then stop the gateway and open `/demo`.
+  - Nothing is committed.
+
+### 2026-10-27: Step 9 (web UI) items 1 to 6 built on branch step-9-web; stopped when Windows blocked alembic
+
+- What happened: Two sessions today.
+  - In the planning session the user approved the step 9 plan. The FA and FL sign-in code was read, read-only, with the user's permission, and an independent review's fixes went into the plan.
+  - In the build session the user asked for all 11 items on `step-9-web`, tests first, with one report at the end. Approved: `make migrate`, the demo export, `make test-int` and `make test-e2e`. The rules: no live model call, no eval, FA and FL untouched, and stop and report if Windows blocks a program.
+  - Items 1 to 6 were built. At item 7, `make migrate` applied the gateway migrations. Then `uv run alembic -c services/agent/alembic.ini upgrade head` failed with "Failed to spawn: alembic, cause: An Application Control policy has blocked this file. (os error 4551)". The build stopped there, as the rule says.
+- Why: a Windows Application Control policy blocked the venv's `alembic` launcher. Which policy, and why now, is not confirmed; earlier sessions ran `make migrate`.
+- What we did:
+  1. Item 1, the contract, tests first. ts-clients type checks for `plan_status`, `cause` and the `source` query (RED: 3 type errors). Then gateway API 0.8.0 in `contracts/openapi/gateway.yaml`, and `make codegen`.
+  2. Item 2, the gateway, tests first. RED in `app.test.ts` (`?source=prod` got 200), `investigations.int.test.ts` (4 of 8 failed) and `investigations.test.ts` (`demoFile` missing).
+     - `investigations.ts`: one set of summary columns. `source` comes from `LIVE_TENANTS`. `cause` is the top hypothesis. `plan_status` is null without a proposal. `running` is derived from the newest step's `recorded_at`.
+     - `app.ts`; `config.ts` (the two settings shared with the CLI); `main.ts`.
+     - `cli.ts demo-save`, on a read-only connection; `package.json` `demo:save`; `Makefile` `demo-save`.
+  3. Item 3, sign-in, tests first, for password, session, guards, config, env-file, the sign-in action, the proxy and the logout route (RED: modules missing). Then `lib/{password,session,guards,env-file,config}.ts`, `app/login/*`, `app/logout/route.ts`, `src/proxy.ts` and `scripts/{hash-password,session-secret}.ts`.
+  4. Item 4, data access, tests first: `lib/data.test.ts`, `app/data-access.test.ts` and `readyz/route.test.ts`. The scan's RED found the 4 direct gateway imports.
+     - Then `lib/data.ts`, `GatewayOffline` with the 5 s timeout, and `decisionFrom(form, approver)`.
+     - Then readyz's 10 s cache, and a landing page with no gateway read.
+  5. Item 5, the pages, tests first (RED: 12).
+     - Fonts: google/fonts' OFL variable TTFs of Atkinson Hyperlegible Next and Mono, converted to WOFF2 with `uvx --with brotli --from fonttools==4.60.1 fonttools ttLib.woff2 compress` (uv cache on H:). They were copied into `src/app/fonts/` with `cp`, since the editing tools cannot write binary files, and one `OFL.txt` carries both copyright lines.
+     - The two pages moved under `(app)/` with `mv`, so nothing was staged.
+     - New: `globals.css`, the list, report and live-refresh components, the error and not-found pages, and the three live samples.
+  6. Item 6, live progress, tests first (RED: 6): `stillChanging`, `progressLine` and `LiveRefresh`.
+  7. Item 7: `make migrate`, which stopped as described. Then `make infra-down` removed this project's three containers; the volumes stay.
+  - Why this was the best option: the user's rule stops the build on a Windows block, and items 1 to 6 needed no blocked program.
+- Small events:
+  - GateGuard asked for facts before the first Bash call and before the first edit of each file, about 75 times. Stating them cleared each.
+  - The bundled Next docs name `unstable_doesProxyMatch`, but 16.4.2 exports `unstable_doesMiddlewareMatch` (docs/memory.md).
+  - The first `next build` warned that `node:crypto` reached the Edge runtime and a client bundle. The sign-in form imported `lib/password.ts` for its length limit, and `instrumentation.ts` loaded the config in the Edge runtime. Fix: the page passes the limit, and `register()` loads the config only when `NEXT_RUNTIME` is `nodejs`. The second build had no warning.
+  - `react-hooks/purity` refused `Date.now()` in the pages, so they use `requestTime()` from `lib/report.ts`.
+  - The local typecheck failed on stale `.next/types` that named the moved pages. `pnpm exec next typegen` regenerated them.
+  - My own test mistakes, each fixed in the test:
+    - `toMatchObject` with `undefined` values, which requires the keys to exist.
+    - The sign-in action test's mock of `lib/password.ts` dropped `parseHash`, which the config uses.
+  - Prettier's layout was applied by hand after printing each diff (two rounds, 16 files), so no formatter wrote a project file.
+  - FA and FL code was not read in the build session; the plan carries the values. The argon2 bounds are TC's own.
+- Validation:
+  - ts-clients: typecheck clean; Jest 52 passed.
+  - Gateway: Jest 54 passed; typecheck clean. `investigations.int.test.ts` and `plans.int.test.ts`: 11 passed, with `--forceExit` for those runs only.
+  - Web: Jest 79 passed in 17 suites. Typecheck, ESLint and Prettier clean. `next build` exit 0 with no warning.
+  - `make codegen` exit 0; `make contracts-breaking` exit 0 (no breaking change).
+  - Not run: `make lint`, `make test`, `make test-int`, `make contracts-check` and `make build` in full, and `make test-e2e` (item 8 is not built).
+- Outstanding:
+  - The `alembic` block is the user's to clear; then run `make migrate` again for the agent migrations.
+  - Item 7: the export (`make demo-save IDS=...`), the `/demo` pages and `demo.test.ts`.
+  - Item 8: Playwright.
+  - Item 9: the root files (`.env.example`, `scripts/ci_env.sh`, `.gitignore`, and the Makefile's `dev-ts` and `unexport`).
+  - Item 10: every check. Item 11: the docs.
+  - Nothing is committed.
+
 ### 2026-10-26: P2.1 to P2.4 (planner, plans, the check on real targets, plan decisions) on branch p2-planner
 
 - What happened: The user asked for P2.1 to P2.4 together on a new branch `p2-planner` from the updated main, with one report at the end and one PR. Their rules: tests first with fake Anthropic responses only; no live model call, since P2.5's measuring run waits for them; the frozen sim prompt and the eval cache-key tests stay green; the `live` switch stays off and the real FA and FL untouched; files edited with the editing tools only; stop only on a hook refusal or a needed key, decide the rest and list it (docs/memory.md, 2026-10-26); every check, then `make infra-down`.

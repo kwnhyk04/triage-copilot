@@ -59,6 +59,7 @@ Local ports (bound to 127.0.0.1; chosen so all three projects can run at once; c
 | sim admin listener (eval harness only) | 4231 |
 | watch (`make dev-watch`; only its probes listen) | 4240 |
 | web (Next.js) | 3200 |
+| browser tests (`make test-e2e`): web / isolated web / fake gateway | 3202 / 3203 / 4250 |
 | Grafana | 3201 |
 | Jaeger UI | 16688 |
 | Prometheus | 9092 |
@@ -74,7 +75,7 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 3. `services/agent` (Python): SQS consumer, agent loop, checkpoint after every step, visibility heartbeat. Work that must wait for a tenant slot or model budget parks in Postgres and gives up its message; the gateway's sweeper re-queues it.
 4. `services/executor` (Python): runs approved, allowlisted actions only, with idempotency keys.
 5. `sim/` (Python): metrics, paginated logs, and deploy history for scripted incidents.
-6. `apps/web` (Next.js): live timeline, hypotheses, approve and reject.
+6. `apps/web` (Next.js): sign-in, the reports as triage tags with live progress by polling, plan decisions, and a public demo of saved reports.
 
 ## Important Components
 
@@ -142,6 +143,15 @@ Design (steps 1 to 4 built intake, queueing and the resumable job; the model pro
 - Plan decisions (P2.4, `createDecidePlan`): one row per plan in `gateway.plan_decisions` (gateway 0008, beside `gateway.plans`); a second decision gets 409, as does a plan without a proposal, and nothing is queued: in phase 2 an approval runs nothing.
 - Gateway decisions (`apps/gateway/src/decisions.ts`): approve and reject insert into `approvals` (`ON CONFLICT DO NOTHING`; a second decision gets 409) and, for an approval, queue ActionApproved v1 through the outbox in the same transaction. Its FIFO group is the hash of tenant and target, so one service's actions run in order; its deduplication id is the action id. A store failure answers 503 with `Retry-After`.
 - Gateway list (`apps/gateway/src/investigations.ts`): `GET /v1/investigations`, investigated alert groups of every tenant, newest first by (created_at, investigation id), with an opaque base64url cursor holding created_at to the microsecond. `limit` defaults to 25; outside 1 to 100, or with a cursor the gateway never issued, it answers 400. The title is the first alert's alertname and service, and each item carries the report's `verdict` (gateway API 0.6.0, P1.10).
+- Gateway API 0.8.0 (step 9): the list takes `source` (`live`, `sim`, from `LIVE_TENANTS`), and every investigation carries `source`, `cause` (the top hypothesis) and `plan_status`. A `queued` group with a step under `SWEEPER_STUCK_AFTER_MINUTES` old reads `running`, derived on read. `make demo-save IDS=...` (`cli.ts demo-save`) writes eval runs to `apps/web/src/demo/generated/eval-runs.ts` on a read-only connection, refusing any live one. It refuses to run unless `LIVE_TENANTS` is set (`{}` while live is off), since unset would read every investigation as simulated.
+- Web (`apps/web`, step 9):
+  - Sign-in: one password, its argon2id hash in `LOGIN_PASSWORD_HASH` (`node:crypto`, 64 MiB, 3 passes, 4 lanes). An 8-hour HMAC session cookie `__Host-triage_session` (HttpOnly, Secure, Lax), signed with `SESSION_SECRET`. 5 attempts per address and 30 in all per 15 minutes, counted before the hash check. Both settings are required under `next start` and on Vercel; under `next dev` it is both or neither.
+  - `src/proxy.ts` sends every request without a session to `/login?next=...` (303), except `/`, `/login`, `/logout`, the probes and `/demo`. It sets a nonce CSP with `frame-ancestors 'none'`.
+  - `src/lib/data.ts` is the only way pages and actions reach the gateway, and each function checks the session first; `app/data-access.test.ts` scans for any other import. A gateway that does not answer (a throw, the 5 s timeout, 502, 503 or 504) sends the reader to `/demo?offline=1`. Decisions record the approver `operator`.
+  - Pages: the landing; the list with Live incidents and Eval runs tabs; the report (verdict tag, decision, cause and evidence, timeline, models, fallback notes); `(app)/error.tsx`; `not-found.tsx`. Design: `globals.css` (triage tags; light and dark from the system), fonts committed in `src/app/fonts/` with `OFL.txt`.
+  - Live progress: `LiveRefresh` calls `router.refresh()` every 3 s (report) or 10 s (list) while the tab is visible and not paused. It runs only while something can change: running, queued under 15 minutes, or up to 6 minutes after a real verdict for its plan.
+  - Demo (`/demo`): five recorded eval runs and three hand-written live samples (`src/demo/`), labeled illustrative, with no gateway or session; the plan buttons are disabled.
+  - Browser tests (`make test-e2e`, `apps/web/e2e`): Playwright 1.64.1 on Chromium with `@axe-core/playwright` 4.14.0, against `e2e/fake-gateway.ts` (`node:http`, 4250) and two `next start` servers (3202; 3203 with its own limiter and a closed gateway). Browsers live in `PLAYWRIGHT_BROWSERS_PATH` (`H:\.cache\ms-playwright`). CI's `e2e` job installs Chromium with `--with-deps`, and `ci-result` needs it.
 - Gateway detail (`createGetInvestigation`, P1.10): `GET /v1/investigations/{id}` behind X-API-Key; 400 for an id that is no uuid, 404 for an unknown one. It serves the group's status, the report (summary, hypotheses ranked in the report's order with their `service`, `missing_evidence`, `partial`), `verdict` and `models` from `investigation_reports`, the proposals with their decisions, and the mirrored steps; each piece of evidence quotes the first 2,000 characters of its cited result, or is empty when no result is kept. `tokens_used` sums the kept steps' tokens.
 - Retention (`apps/gateway/src/retention.ts`, P1.11): at start and then daily, for the tenants in `LIVE_TENANTS` (the agent's variable; the gateway reads its keys), the `snapshot` annotation of alerts stored over 30 days ago is removed (summary and description stay) and mirrored steps over 30 days old are deleted. Reports stay.
 - Gateway credentials (`apps/gateway/src/app.ts`): a `preParsing` hook asks for `GATEWAY_API_KEY` as X-API-Key (constant-time) on every route, unknown ones included, except the probes, the webhook and approve or reject; 401 problem details with `WWW-Authenticate: ApiKey header="X-API-Key"`. The web helpers send it.
@@ -415,7 +425,7 @@ Step 6b is done (2026-10-21, once the proposal check merged as `177839d`): the s
 Next, in this order:
 
 1. P0: proposal check version 2 on the sim is built (2026-10-25). The user runs its two dev passes, the Haiku one before 2026-11-10, and ships it (docs/todo.md).
-2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 merged as #13 (`883497d`). P1.4 to P1.6 (`watch`) merged as #14 (`bca8e9f`). P1.7 to P1.9 (report v2, live triage, flood guard) merged as #15 (`26d7d6e`). P1.10 and P1.11 (the report view, retention) and TC's monthly Claude cap merged as #16 (`cb132e6`). P1.12, the go-live, is the user's. Phase 2's P2.1 to P2.4 (the planner, plans, the check on real targets, plan decisions) are built on branch `p2-planner` (2026-10-26), one PR for the user to ship; P2.5, the measuring run and turning `planner` on, is the user's. Run `make migrate` (agent 0013, gateway 0008) before the agent or gateway from that branch starts.
+2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 merged as #13 (`883497d`). P1.4 to P1.6 (`watch`) merged as #14 (`bca8e9f`). P1.7 to P1.9 (report v2, live triage, flood guard) merged as #15 (`26d7d6e`). P1.10 and P1.11 (the report view, retention) and TC's monthly Claude cap merged as #16 (`cb132e6`). P1.12, the go-live, is the user's. Phase 2's P2.1 to P2.4 (the planner, plans, the check on real targets, plan decisions) merged as #17 (`bebbb1e`; this line said `p2-planner` until 2026-10-28). Step 9, the web UI, is built on branch `step-9-web` (2026-10-27 and 2026-10-28), not committed. P2.5, the measuring run and turning `planner` on, is the user's. Run `make migrate` (agent 0013, gateway 0008) before the agent or gateway from that branch starts.
    - P1.2: `LIVE_TENANTS` maps a tenant to its app. `agent.switches` holds `live` (default off) and `claude` (default on), flipped with `make switch NAME=<name> STATE=on|off`. The job reads `live` before every model turn of a live tenant, which parks as `budget` while it is off, and the limiter reads `claude` before every Claude request. Live tenants get their own tools, none until P1.8, so they never reach the sim. They still get the sim's prompt until then, so `live` stays off.
    - P1.3: the gateway keeps each alert's annotations (gateway 0005, API 0.5.0). `get_alert_context` shows summary, description and runbook_url only for a tool set built with `annotations=True`. The sim's tools keep their old results, so eval runs stay comparable.
 3. Whether to size the 15-call cap with another Haiku run (the user's call). A test split after version 2 would be a third attempt informed by test failures, not a held-out result.
@@ -424,6 +434,13 @@ Next, in this order:
 
 ## Known Limitations
 
+- Web sign-in (step 9):
+  - The sign-in limit lives in one server's memory, and Vercel may run several instances; step 10 adds a firewall rule on `POST /login`.
+  - Sessions are stateless: signing out drops the cookie, but a copied cookie holds until it expires (8 hours). Rotating `SESSION_SECRET` signs everyone out.
+  - Off Vercel every client shares one limiter bucket, since the server trusts no client address header.
+- The demo's three live samples are hand-written and labeled illustrative; real live reports replace them after P1.12's shadow run (docs/todo.md).
+- The list cannot tell "no plan yet" from "a plan without a proposal" (`plan_status` null), so after a real verdict it polls up to 6 minutes either way.
+- On this PC, Windows Smart App Control blocks the venv's unsigned launchers (`.venv\Scripts\*.exe`), so Python tools run as `uv run python -m <tool>` (docs/memory.md, 2026-10-28).
 - The counted test split (2026-10-20) failed: the forbidden-proposal gate broke and 13 of the 18 measured targets missed (Targets above). 25 scenarios run 3 times give wide 95% intervals.
 - The proposal check (`refusal`) has known limits:
   - It cannot stop a revert of a harmless change made inside the metric window.

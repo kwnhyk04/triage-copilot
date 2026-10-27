@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.7.0
+  version: 0.8.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
@@ -106,6 +106,13 @@ paths:
             type: string
             minLength: 1
             maxLength: 512
+        - name: source
+          in: query
+          description: >-
+            Only live or only simulated investigations; omit for every tenant's. Another value gets
+            400.
+          schema:
+            $ref: '#/components/schemas/InvestigationSource'
       responses:
         '200':
           description: One page of investigations.
@@ -785,10 +792,45 @@ components:
           description: Pass as cursor to read the next page; null on the last page.
     InvestigationStatus:
       type: string
+      description: >-
+        queued: waiting for the agent, parked for a slot or the model budget, or stuck; running:
+        queued with a step recorded within the gateway's SWEEPER_STUCK_AFTER_MINUTES (10), read
+        from the steps when served; then awaiting_approval, resolved, failed or cancelled from the
+        report.
       enum: [queued, running, awaiting_approval, resolved, failed, cancelled]
+    InvestigationSource:
+      type: string
+      description: >-
+        live: an alert from a tenant in the gateway's LIVE_TENANTS, a real app; sim: any other
+        tenant's, such as an eval run on a simulated incident.
+      enum: [live, sim]
+    Cause:
+      type: object
+      description: The top hypothesis in brief.
+      required: [root_cause_class, service, confidence]
+      properties:
+        root_cause_class:
+          $ref: '#/components/schemas/RootCauseClass'
+        service:
+          type: string
+          description: The service where the root cause lives.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
     InvestigationSummary:
       type: object
-      required: [id, group_id, title, status, verdict, created_at, updated_at]
+      required:
+        - id
+        - group_id
+        - title
+        - status
+        - verdict
+        - created_at
+        - updated_at
+        - source
+        - cause
+        - plan_status
       properties:
         id:
           type: string
@@ -815,6 +857,20 @@ components:
         updated_at:
           type: string
           format: date-time
+        source:
+          $ref: '#/components/schemas/InvestigationSource'
+        cause:
+          description: The report's top hypothesis; null until the report, and when it names none.
+          anyOf:
+            - $ref: '#/components/schemas/Cause'
+            - type: 'null'
+        plan_status:
+          description: >-
+            The plan's status, as plan.status gives it; null while no plan holds a proposal to
+            decide.
+          anyOf:
+            - $ref: '#/components/schemas/ActionStatus'
+            - type: 'null'
     Verdict:
       type: string
       description: Whether a live alert shows an incident a human must look at.

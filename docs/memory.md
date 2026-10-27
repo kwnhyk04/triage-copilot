@@ -223,6 +223,15 @@ From the approved design doc:
   - A decided plan does not change its group's status.
   - Reason: the user's P2.1 to P2.4 scope and the approved plan (docs/context.md, Real Incidents).
 
+- 2026-10-27: Step 9, the web UI (plan approved by the user on 2026-10-27; built on `step-9-web`). Decisions:
+  - One user and one approver name, `operator`; no user table. Sign-in as in FA and FL: argon2id from `node:crypto` (no dependency), an 8-hour stateless HMAC cookie, 5 attempts per address per 15 minutes counted before the hash check, plus TC's global cap of 30. The argon2 bounds that a stored hash may ask for are TC's own.
+  - Polling (the user's choice), not GraphQL subscriptions: every 3 s on the report and 10 s on the list, only while something can change. GraphQL resolvers wait until a GraphQL consumer exists.
+  - `running` is derived on read from the newest step's `recorded_at`, so the sweeper still sees `queued`.
+  - The demo holds real eval runs and three hand-written live samples labeled illustrative (the user's choice); sim proposals stay read-only (the user's answer).
+  - Fonts: Atkinson Hyperlegible Next and Mono as committed WOFF2 files with `OFL.txt`, through `next/font/local` (the user's change). Why: `next/font/google` broke FreightAudit's Turbopack builds on 2026-10-24, and local files make the build fetch nothing.
+  - The design: triage tags, whose band colors mean the verdict and appear nowhere else. Approve and Reject are the only filled buttons. The decision comes first on a phone, and the running pulse animates the tag's hole, never its text.
+  - Reason: the user's step 9 scope and answers (docs/todo.md, In Progress).
+
 ## Preferences and Instructions
 
 - 2026-10-14: The three portfolio projects run in parallel Claude Code sessions on one PC, sharing Docker. Each project has its own port range and compose project name; never prune or remove another project's Docker resources (user setup).
@@ -237,6 +246,19 @@ From the approved design doc:
 - 2026-10-15: Waits for a tenant slot used up SQS receives and could dead-letter work, and budget waits held every worker slot. Parking fixed both: the two-agent storm test shows no DLQ entry and every parked investigation running.
 
 ## Known Issues and Pitfalls
+
+- 2026-10-28: Windows Smart App Control blocks the venv's unsigned launchers (`.venv\Scripts\alembic.exe` gave os error 4551; the 2026-10-27 entry below), but `.venv\Scripts\python.exe` runs.
+  - What we did, with the user's OK for one fix at the source: every make target, script and doc runs Python tools as `uv run python -m <tool>` with the same arguments. That covers pytest, ruff, pyright, alembic and pre_commit, plus `agent`, `executor`, `sim` and `watch`, which got a two-line `__main__.py` each (the user chose that over leaving four dev targets blocked).
+  - It works the same on Linux CI. The Dockerfiles keep their launchers, since Linux has no such policy.
+  - Read older entries' `uv run pytest`, `uv run alembic` and `uv run agent` as `uv run python -m ...`.
+  - `python -m ruff` runs the `ruff.exe` binary, which was not blocked; if it is one day, stop and report.
+- 2026-10-28: In a Playwright test, typing the next password while the last form action is pending loses it. React resets an action form when the action ends, so the field is cleared, and `required` stops the next submit. The limit test let the 6th attempt through because fewer than 5 had reached the server. What we did: each attempt waits for its POST response.
+- 2026-10-28: Next's route announcer has `role="alert"`, so `getByRole('alert')` finds two elements on a page with its own alert. Locate the form's message by its id.
+- 2026-10-28: A generated module that ends `satisfies Investigation[]` keeps literal types, so a runtime check such as `run.source !== 'sim'` is a lint error (`no-unnecessary-condition`). `src/demo/index.ts` re-exports `EVAL_RUNS` as `readonly Investigation[]`.
+
+- 2026-10-27: A Windows Application Control policy blocked `uv run alembic` with "An Application Control policy has blocked this file. (os error 4551)" during `make migrate`, after the gateway migrations had applied. Why: not confirmed; earlier sessions ran it. What we did: stopped and reported, as the user's rule says; nothing tried another way around. Clear the block, then run `make migrate` again.
+- 2026-10-27: Next 16.4.2's bundled docs name the proxy test helper `unstable_doesProxyMatch`, but `next/experimental/testing/server` exports `unstable_doesMiddlewareMatch`. `src/proxy.test.ts` uses the exported name.
+- 2026-10-27: A client component that imports a server module pulls it, and its `node:crypto`, toward the browser bundle, and `instrumentation.ts` also runs in the Edge runtime. `next build` warned about both. What we did: the sign-in page passes the password limit to its form as a prop, and `register()` loads the config only when `NEXT_RUNTIME` is `nodejs`. Check `next build`'s warnings after adding an import to a `'use client'` file.
 
 - 2026-10-26: `anthropic.transform_schema` moves unsupported keywords (`maxLength`, `minLength`, numeric limits) into the property's description as text, so a schema sent to structured outputs still contains the word: check the property's keys, not the JSON string. The agent checks those limits on the answer (pydantic).
 - 2026-10-26: Mistake: I did not run the new gateway `plans.int.test.ts` red before writing its code. Why: a suite whose `beforeAll` throws hangs Jest (2026-10-25 entry), and the unit routes test had shown the routes missing. What we did: noted here and in the activity log; the suite passed against the code, and its routes' red came from `app.test.ts`.

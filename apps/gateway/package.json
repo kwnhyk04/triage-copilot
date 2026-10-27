@@ -13,7 +13,8 @@
     "tenant:token": "node src/cli.ts tenant-token",
     "outbox:replay": "node src/cli.ts outbox-replay",
     "events:replay": "node src/cli.ts events-replay",
-    "digest": "node src/cli.ts digest"
+    "digest": "node src/cli.ts digest",
+    "demo:save": "node src/cli.ts demo-save"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.1150.0",

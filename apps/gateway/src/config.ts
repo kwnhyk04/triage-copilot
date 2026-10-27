@@ -9,6 +9,26 @@ const CREDENTIALS = [
 ] as const;
 // The agent's LIVE_TENANTS, {"<tenant uuid>": "freight-audit"}; the gateway needs the tenants only.
 const liveTenants = z.record(z.guid(), z.enum(['freight-audit', 'filing-lens']));
+// LIVE_TENANTS's JSON as the tenant uuids, or an issue naming the shape it must have.
+const liveTenantIds = (text: string, ctx: z.RefinementCtx) => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  const tenants = liveTenants.safeParse(parsed);
+  if (tenants.success) return Object.keys(tenants.data);
+  const message = 'must map tenant uuids to freight-audit or filing-lens, as JSON';
+  ctx.addIssue({ code: 'custom', message });
+  return z.NEVER;
+};
+/** LIVE_TENANTS as the gateway reads it: the uuids of the tenants whose alerts are real incidents. */
+export const liveTenantsSetting = z.string().default('{}').transform(liveTenantIds);
+/** LIVE_TENANTS with no default ({} while live is off): demo-save's guard against live data. */
+export const liveTenantsRequired = z.string().transform(liveTenantIds);
+/** Minutes without a step (or a message without a receive) before an investigation counts as stuck. */
+export const stuckAfterMinutesSetting = z.coerce.number().int().positive().default(10);
 
 export const loadGatewayConfig = (env?: Env) =>
   loadConfig(
@@ -40,30 +60,17 @@ export const loadGatewayConfig = (env?: Env) =>
         MAX_NEW_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(5),
         // And within one UTC day: 30 triages a day per app (each app is one tenant).
         MAX_DAILY_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(30),
-        // Tenants whose alerts are real incidents: their snapshots and steps go after 30 days.
-        LIVE_TENANTS: z
-          .string()
-          .default('{}')
-          .transform((text, ctx) => {
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(text);
-            } catch {
-              parsed = undefined;
-            }
-            const tenants = liveTenants.safeParse(parsed);
-            if (tenants.success) return Object.keys(tenants.data);
-            const message = 'must map tenant uuids to freight-audit or filing-lens, as JSON';
-            ctx.addIssue({ code: 'custom', message });
-            return z.NEVER;
-          }),
+        // Tenants whose alerts are real incidents: their snapshots and steps go after 30 days, and
+        // the list serves them as live.
+        LIVE_TENANTS: liveTenantsSetting,
         // The agent's internal API, which the recovery sweeper asks with the service token.
         AGENT_URL: z.url().default('http://127.0.0.1:4210'),
         AGENT_SERVICE_TOKEN: z.string().min(32),
         // How often the recovery sweeper runs, and how long an investigation may go without a
-        // step (or a message without a receive) before it counts as stuck.
+        // step (or a message without a receive) before it counts as stuck. A queued investigation
+        // with a newer step reads as running.
         SWEEPER_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
-        SWEEPER_STUCK_AFTER_MINUTES: z.coerce.number().int().positive().default(10),
+        SWEEPER_STUCK_AFTER_MINUTES: stuckAfterMinutesSetting,
         LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
       })
       .superRefine((config, ctx) => {

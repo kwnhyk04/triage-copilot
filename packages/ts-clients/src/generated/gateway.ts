@@ -349,8 +349,23 @@ export interface components {
             /** @description Pass as cursor to read the next page; null on the last page. */
             next_cursor: string | null;
         };
-        /** @enum {string} */
+        /**
+         * @description queued: waiting for the agent, parked for a slot or the model budget, or stuck; running: queued with a step recorded within the gateway's SWEEPER_STUCK_AFTER_MINUTES (10), read from the steps when served; then awaiting_approval, resolved, failed or cancelled from the report.
+         * @enum {string}
+         */
         InvestigationStatus: "queued" | "running" | "awaiting_approval" | "resolved" | "failed" | "cancelled";
+        /**
+         * @description live: an alert from a tenant in the gateway's LIVE_TENANTS, a real app; sim: any other tenant's, such as an eval run on a simulated incident.
+         * @enum {string}
+         */
+        InvestigationSource: "live" | "sim";
+        /** @description The top hypothesis in brief. */
+        Cause: {
+            root_cause_class: components["schemas"]["RootCauseClass"];
+            /** @description The service where the root cause lives. */
+            service: string;
+            confidence: number;
+        };
         InvestigationSummary: {
             /** Format: uuid */
             id: string;
@@ -367,6 +382,11 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            source: components["schemas"]["InvestigationSource"];
+            /** @description The report's top hypothesis; null until the report, and when it names none. */
+            cause: components["schemas"]["Cause"] | null;
+            /** @description The plan's status, as plan.status gives it; null while no plan holds a proposal to decide. */
+            plan_status: components["schemas"]["ActionStatus"] | null;
         };
         /**
          * @description Whether a live alert shows an incident a human must look at.
@@ -809,6 +829,8 @@ export interface operations {
                 limit?: number;
                 /** @description The next_cursor of the previous page; omit for the first page. */
                 cursor?: string;
+                /** @description Only live or only simulated investigations; omit for every tenant's. Another value gets 400. */
+                source?: components["schemas"]["InvestigationSource"];
             };
             header?: never;
             path?: never;

@@ -1,0 +1,579 @@
+/* Triage tags: each investigation is an ER triage tag, a card with a colored band and a punched
+   hole. The band's colors mean the verdict and appear nowhere else; the chrome stays quiet.
+   Light and dark follow the system setting. Every text pair meets WCAG AA. */
+:root {
+  color-scheme: light dark;
+  --wall: #e8ecf0;
+  --surface: #ffffff;
+  --ink: #18202b;
+  --quiet: #4a5566;
+  --line: #c5cdd6;
+  --real: #b3261e;
+  --not-real: #1e7a46;
+  --simulated: #5b6675;
+  --running: #1b5fc1;
+  --link: #1b5fc1;
+  --amber: #f4b400;
+  --amber-text: #7a5200;
+  --on-amber: #18202b;
+  --on-band: #ffffff;
+  --shadow: 0 1px 2px rgb(24 32 43 / 0.12), 0 4px 12px rgb(24 32 43 / 0.08);
+  --sans: var(--font-sans), system-ui, sans-serif;
+  --mono: var(--font-mono), ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wall: #11161c;
+    --surface: #1a212a;
+    --ink: #e6ebf1;
+    --quiet: #a7b1be;
+    --line: #33404e;
+    --real: #f2766b;
+    --not-real: #4cc38a;
+    --simulated: #8e99a8;
+    --running: #7ab0ff;
+    --link: #7ab0ff;
+    --amber-text: #f4b400;
+    --on-band: #11161c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.35);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--wall);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  /* Ids, versions and log lines wrap instead of pushing the page sideways. */
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+p,
+ul,
+ol,
+figure,
+pre {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 1.125rem;
+  line-height: 1.3;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--link);
+  outline-offset: 2px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+}
+
+label {
+  font-weight: 700;
+}
+
+.skip {
+  position: absolute;
+  top: -4rem;
+  left: 1rem;
+  z-index: 10;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.skip:focus {
+  top: 1rem;
+}
+
+/* Layout: one column, two from 64rem. */
+.page {
+  display: grid;
+  align-content: start;
+  gap: 1.25rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 4rem;
+}
+
+.narrow {
+  max-width: 36rem;
+}
+
+.page p,
+.page li {
+  max-width: 70ch;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0.75rem 1rem 0;
+}
+
+.brand,
+.brand a {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.landing {
+  padding-top: 3rem;
+}
+
+.lede,
+.summary {
+  font-size: 1.125rem;
+}
+
+.quiet,
+.note,
+.tag-status {
+  color: var(--quiet);
+}
+
+.note {
+  font-size: 0.875rem;
+}
+
+.actions,
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.stack {
+  display: grid;
+  gap: 0.5rem;
+}
+
+/* Controls: outlined, with Approve and Reject the only filled buttons. */
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 2px solid var(--ink);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button.quiet {
+  border-color: var(--quiet);
+  color: var(--ink);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.approve,
+.reject {
+  background: var(--ink);
+  color: var(--surface);
+  font-weight: 700;
+}
+
+input[type='password'],
+textarea {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem;
+  border: 2px solid var(--quiet);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.error {
+  padding-left: 0.5rem;
+  border-left: 0.25rem solid var(--ink);
+  font-weight: 700;
+}
+
+.empty {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.tabs ul {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0;
+  border-bottom: 1px solid var(--quiet);
+  list-style: none;
+}
+
+.tabs a {
+  display: block;
+  margin-bottom: -1px;
+  padding: 0.5rem 0.875rem;
+  border-bottom: 3px solid transparent;
+  color: var(--quiet);
+  text-decoration: none;
+}
+
+.tabs a[aria-current='page'] {
+  border-bottom-color: var(--ink);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* The triage tag, the one bold element. */
+.tags {
+  display: grid;
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.tag {
+  --band: var(--simulated);
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.tag[data-kind='real'] {
+  --band: var(--real);
+}
+
+.tag[data-kind='not-real'] {
+  --band: var(--not-real);
+}
+
+.tag[data-kind='open'] {
+  --band: var(--running);
+}
+
+.band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 1rem;
+  background: var(--band);
+  color: var(--on-band);
+  font-weight: 700;
+}
+
+.hole {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--wall);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+.chip {
+  margin-left: auto;
+  padding: 0.125rem 0.625rem;
+  border-radius: 999px;
+  background: var(--amber);
+  color: var(--on-amber);
+  font-size: 0.875rem;
+}
+
+.tag-body {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.875rem 1rem 1rem;
+}
+
+.tag-title a {
+  color: var(--ink);
+}
+
+.tag-cause {
+  font-weight: 700;
+}
+
+.illustrative {
+  justify-self: start;
+  padding: 0.125rem 0.5rem;
+  border: 1px dashed var(--quiet);
+  border-radius: 0.25rem;
+  color: var(--quiet);
+  font-size: 0.875rem;
+}
+
+/* The one motion: a running tag's hole pulses, never its text. */
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+    transform: scale(0.6);
+  }
+}
+
+.tag[data-running] .hole {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tag[data-running] .hole {
+    animation: none;
+  }
+}
+
+/* The report. On a phone: tag, decision, cause, timeline, models, fallback notes. */
+.report,
+.report-body,
+.decide-col,
+.main-col {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.panel,
+.main-col > section {
+  display: grid;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.decision {
+  border-top: 0.375rem solid var(--amber);
+}
+
+.decision h2 {
+  color: var(--amber-text);
+}
+
+.plan-what,
+.decided {
+  font-weight: 700;
+}
+
+.plan-what {
+  font-size: 1.125rem;
+}
+
+.files {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0;
+  list-style: none;
+}
+
+.decide {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hypotheses {
+  display: grid;
+  gap: 1rem;
+  padding-left: 1.25rem;
+}
+
+.hypotheses > li,
+.evidence-item {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.evidence-item figcaption {
+  color: var(--quiet);
+  font-size: 0.875rem;
+}
+
+/* Evidence reads like the tool's own output, wrapped: no sideways scroll boxes. */
+pre.evidence {
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  background: var(--wall);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.more summary {
+  color: var(--link);
+  cursor: pointer;
+}
+
+.more[open] summary {
+  margin-bottom: 0.25rem;
+}
+
+.timeline {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline > li {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.seq {
+  color: var(--quiet);
+  font-family: var(--mono);
+  text-align: right;
+}
+
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+}
+
+.outcome[data-outcome='error'],
+.outcome[data-outcome='timeout'] {
+  font-weight: 700;
+}
+
+.live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.models {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.models th,
+.models td {
+  padding: 0.375rem 0.75rem 0.375rem 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* On a phone the models table stacks into rows; the roles in the markup keep it a table. */
+@media (max-width: 40rem) {
+  .models thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .models,
+  .models tbody,
+  .models tr,
+  .models td {
+    display: block;
+  }
+
+  .models tr {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .models td {
+    padding: 0.125rem 0;
+    border: 0;
+  }
+
+  .models td::before {
+    color: var(--quiet);
+    content: attr(data-label) ': ';
+  }
+}
+
+.demo-banner {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.demo-banner > div {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0.75rem 1rem;
+}
+
+@media (min-width: 64rem) {
+  body {
+    font-size: 1.0625rem;
+  }
+
+  .landing h1 {
+    font-size: 2.5rem;
+  }
+
+  .tags {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-body {
+    grid-template-areas: 'main decide';
+    grid-template-columns: minmax(0, 1fr) 22rem;
+    align-items: start;
+  }
+
+  .decide-col {
+    position: sticky;
+    top: 1rem;
+    grid-area: decide;
+  }
+
+  .main-col {
+    grid-area: main;
+  }
+}

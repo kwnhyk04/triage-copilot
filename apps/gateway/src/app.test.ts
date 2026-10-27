@@ -50,6 +50,9 @@ const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
   verdict: 'real',
   created_at: '2026-10-25T09:52:30.000Z',
   updated_at: '2026-10-25T09:54:10.000Z',
+  source: 'live',
+  cause: { root_cause_class: 'database', service: 'postgres', confidence: 0.8 },
+  plan_status: null,
   summary: "freight-audit's api fails its readiness check: postgres restarts.",
   tokens_used: 6240,
   hypotheses: [
@@ -436,6 +439,19 @@ describe('gateway', () => {
       }
       expect((await get(`?cursor=${'c'.repeat(513)}`)).statusCode).toBe(400);
       expect(listed).toEqual([{ limit: 25 }, { limit: 100, cursor: 'abc' }]);
+    });
+
+    it('passes a source on and refuses any other', async () => {
+      await start();
+      expect((await get('?source=live')).statusCode).toBe(200);
+      expect((await get('?source=sim&limit=5')).statusCode).toBe(200);
+      for (const query of ['?source=prod', '?source=', '?source=LIVE']) {
+        expect([query, (await get(query)).statusCode]).toEqual([query, 400]);
+      }
+      expect(listed).toEqual([
+        { limit: 25, source: 'live' },
+        { limit: 5, source: 'sim' },
+      ]);
     });
 
     it('refuses a cursor it never issued', async () => {

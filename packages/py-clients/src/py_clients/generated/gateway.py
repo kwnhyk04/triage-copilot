@@ -63,12 +63,25 @@ class AlertAccepted(BaseModel):
 
 
 class InvestigationStatus(StrEnum):
+    """
+    queued: waiting for the agent, parked for a slot or the model budget, or stuck; running: queued with a step recorded within the gateway's SWEEPER_STUCK_AFTER_MINUTES (10), read from the steps when served; then awaiting_approval, resolved, failed or cancelled from the report.
+    """
+
     queued = "queued"
     running = "running"
     awaiting_approval = "awaiting_approval"
     resolved = "resolved"
     failed = "failed"
     cancelled = "cancelled"
+
+
+class InvestigationSource(StrEnum):
+    """
+    live: an alert from a tenant in the gateway's LIVE_TENANTS, a real app; sim: any other tenant's, such as an eval run on a simulated incident.
+    """
+
+    live = "live"
+    sim = "sim"
 
 
 class Verdict(StrEnum):
@@ -267,6 +280,16 @@ class StoredAlert(BaseModel):
     status: AlertStatus
 
 
+class Cause(BaseModel):
+    """
+    The top hypothesis in brief.
+    """
+
+    root_cause_class: RootCauseClass
+    service: Annotated[str, Field(description="The service where the root cause lives.")]
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+
+
 class InvestigationSummary(BaseModel):
     id: UUID
     group_id: Annotated[UUID, Field(description="Alert group that triggered the investigation.")]
@@ -280,6 +303,19 @@ class InvestigationSummary(BaseModel):
     ]
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    source: InvestigationSource
+    cause: Annotated[
+        Cause | None,
+        Field(
+            description="The report's top hypothesis; null until the report, and when it names none."
+        ),
+    ]
+    plan_status: Annotated[
+        ActionStatus | None,
+        Field(
+            description="The plan's status, as plan.status gives it; null while no plan holds a proposal to decide."
+        ),
+    ]
 
 
 class ModelUse(BaseModel):

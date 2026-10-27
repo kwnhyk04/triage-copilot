@@ -6,6 +6,8 @@ dist/
 coverage/
 *.tsbuildinfo
 next-env.d.ts
+# Playwright's output and its saved sign-in (make test-e2e)
+test-results/
 
 # Python
 .venv/
