@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port ${WEB_PORT:-3200}",
     "test": "jest",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "hash-password": "node scripts/hash-password.ts",
+    "session-secret": "node scripts/session-secret.ts"
   },
   "dependencies": {
     "@triage/ts-clients": "workspace:*",
@@ -17,7 +19,9 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@graphql-typed-document-node/core": "^3.2.0",
+    "@playwright/test": "1.64.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0"
   }

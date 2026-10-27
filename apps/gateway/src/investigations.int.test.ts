@@ -37,11 +37,15 @@ describe('investigation list against Postgres', () => {
   let scratch: Awaited<ReturnType<typeof scratchDb>>;
   let db: ReturnType<typeof connectDb>;
   let app: FastifyInstance;
+  // The one tenant in LIVE_TENANTS; every other tenant's investigations are simulated.
+  let live: string;
   const unused = () => Promise.reject(new Error('unused by this test'));
 
   beforeAll(async () => {
     scratch = await scratchDb();
     db = connectDb(scratch.url);
+    live = (await newTenant(db.sql)).tenantId;
+    const settings = { liveTenants: [live], stuckAfterMinutes: 10 };
     app = await buildApp({
       config: APP_CONFIG,
       ping: db.ping,
@@ -49,8 +53,8 @@ describe('investigation list against Postgres', () => {
       decide: unused,
       findTenant: unused,
       intake: unused,
-      listInvestigations: createListInvestigations(db.sql),
-      getInvestigation: createGetInvestigation(db.sql),
+      listInvestigations: createListInvestigations(db.sql, settings),
+      getInvestigation: createGetInvestigation(db.sql, settings),
       decidePlan: unused,
     });
   }, 60_000);
@@ -60,6 +64,8 @@ describe('investigation list against Postgres', () => {
     await scratch.drop();
   });
   beforeEach(async () => {
+    await db.sql`DELETE FROM gateway.plan_decisions`;
+    await db.sql`DELETE FROM gateway.plans`;
     await db.sql`DELETE FROM gateway.approvals`;
     await db.sql`DELETE FROM gateway.proposed_actions`;
     await db.sql`DELETE FROM gateway.alerts`;
@@ -206,7 +212,7 @@ describe('investigation list against Postgres', () => {
   };
 
   it('serves a live triage as its report and steps hold it, and lists its verdict', async () => {
-    const { tenantId } = await newTenant(db.sql);
+    const tenantId = live;
     const [id = '', other = ''] = await insert(tenantId, 2);
     await alert(tenantId, id);
     const snapshot = `postgres: restarting (exit 137)\n${'log line\n'.repeat(400)}`;
@@ -279,6 +285,9 @@ describe('investigation list against Postgres', () => {
       verdict: 'real',
       created_at: group.created_at.toISOString(),
       updated_at: group.updated_at.toISOString(),
+      source: 'live',
+      cause: { root_cause_class: 'database', service: 'postgres', confidence: 0.8 },
+      plan_status: null,
       summary,
       // The turns' tokens, the report's included.
       tokens_used: 18_460,
@@ -320,10 +329,10 @@ describe('investigation list against Postgres', () => {
       })),
     });
     const listed = await page('');
-    expect(listed.items.map((item) => [item.id, item.verdict])).toEqual(
+    expect(listed.items.map((item) => [item.id, item.verdict, item.cause?.service])).toEqual(
       expect.arrayContaining([
-        [id, 'real'],
-        [other, null],
+        [id, 'real', 'postgres'],
+        [other, null, undefined],
       ]),
     );
   });
@@ -405,5 +414,135 @@ describe('investigation list against Postgres', () => {
       ],
     });
     expect((await get(randomUUID())).statusCode).toBe(404);
+  });
+
+  it('keeps live and simulated investigations apart, a page at a time', async () => {
+    const { tenantId: simulated } = await newTenant(db.sql);
+    const real = await insert(live, 2);
+    const runs = await insert(simulated, 3);
+    const listed = async (query: string) =>
+      (await page(query)).items.map((item) => [item.id, item.source]);
+
+    expect(await listed('source=live')).toEqual((await ordered(real)).map((id) => [id, 'live']));
+    const sims = (await ordered(runs)).map((id) => [id, 'sim']);
+    expect(await listed('source=sim')).toEqual(sims);
+    // Without a source, every tenant's.
+    expect(await listed('')).toEqual(expect.arrayContaining([...sims, [real[0], 'live']]));
+    const first = await page('source=sim&limit=2');
+    expect(await listed(`source=sim&limit=2&cursor=${first.next_cursor ?? ''}`)).toEqual(
+      sims.slice(2),
+    );
+  });
+
+  /** A ReportRecorded v2 for a real incident with these hypotheses, best first. */
+  const report = (investigationId: string, causes: [string, string, number][]) =>
+    store('report-recorded', {
+      schema_version: 2,
+      investigation_id: investigationId,
+      status: 'resolved',
+      report: {
+        summary: 'The worker exited with 137.',
+        hypotheses: causes.map(([root_cause_class, service, confidence]) => ({
+          root_cause_class,
+          service,
+          confidence,
+          summary: `${service} is at fault.`,
+          evidence_ids: [],
+        })),
+        missing_evidence: [],
+        proposed_actions: [],
+        partial: false,
+      },
+      verdict: 'real',
+      models: MODELS,
+      recorded_at: '2026-10-26T10:01:30Z',
+    });
+  /** A PlanRecorded v1; without a proposal it carries its problem. Returns the plan id. */
+  const plan = async (investigationId: string, proposal: boolean) => {
+    const planId = randomUUID();
+    expect(
+      await storeEvent(
+        db.sql,
+        'plan-recorded',
+        JSON.stringify({
+          schema_version: 1,
+          plan_id: planId,
+          investigation_id: investigationId,
+          plan: proposal
+            ? { kind: 'restart_service', target: 'worker', files: [], rationale: 'It exited.' }
+            : null,
+          problem: proposal ? null : 'No model gave a plan: claude-opus-5-5: Refused',
+          models: [{ ...MODELS[1], part: 'plan', calls: 1 }],
+          recorded_at: '2026-10-26T10:03:10Z',
+        }),
+      ),
+    ).toBe('stored');
+    return planId;
+  };
+
+  it('lists the top cause and the plan status the detail holds', async () => {
+    const [pending = '', approved = '', empty = '', unreported = '', causeless = ''] = await insert(
+      live,
+      5,
+    );
+    for (const id of [pending, approved, empty]) {
+      await report(id, [
+        ['resource_exhaustion', 'worker', 0.7],
+        ['database', 'postgres', 0.2],
+      ]);
+    }
+    await report(causeless, []);
+    await plan(pending, true);
+    const decided = await plan(approved, true);
+    await db.sql`
+      INSERT INTO gateway.plan_decisions (plan_id, approver, decision)
+      VALUES (${decided}, 'operator', 'approved')`;
+    await plan(empty, false);
+
+    const top = { root_cause_class: 'resource_exhaustion', service: 'worker', confidence: 0.7 };
+    const expected = {
+      [pending]: { cause: top, plan_status: 'pending' },
+      [approved]: { cause: top, plan_status: 'approved' },
+      // A plan without a proposal takes no decision.
+      [empty]: { cause: top, plan_status: null },
+      [unreported]: { cause: null, plan_status: null },
+      [causeless]: { cause: null, plan_status: null },
+    };
+    const listed = (await page('source=live')).items;
+    expect(
+      Object.fromEntries(
+        listed.map((item) => [item.id, { cause: item.cause, plan_status: item.plan_status }]),
+      ),
+    ).toEqual(expected);
+    for (const [id, brief] of Object.entries(expected)) {
+      expect(await detail(id)).toMatchObject(brief);
+    }
+  });
+
+  it('reads running while the newest step is fresh, queued once it is stale or with none', async () => {
+    const [fresh = '', stale = '', none = '', done = ''] = await insert(live, 4);
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    await step(fresh, 1, { recorded_at: ago(30) });
+    await step(fresh, 2, { recorded_at: ago(1) });
+    await step(stale, 1, { recorded_at: ago(11) });
+    await step(done, 1, { recorded_at: ago(1) });
+    await db.sql`
+      UPDATE gateway.alert_groups SET status = 'resolved' WHERE investigation_id = ${done}`;
+
+    const listed = Object.fromEntries(
+      (await page('source=live')).items.map((item) => [item.id, item.status]),
+    );
+    expect([fresh, stale, none, done].map((id) => listed[id])).toEqual([
+      'running',
+      'queued',
+      'queued',
+      'resolved',
+    ]);
+    expect((await detail(fresh)).status).toBe('running');
+    expect((await detail(stale)).status).toBe('queued');
+    // Derived when read: the sweeper still finds the group queued.
+    expect(
+      await db.sql`SELECT status FROM gateway.alert_groups WHERE investigation_id = ${fresh}`,
+    ).toEqual([{ status: 'queued' }]);
   });
 });

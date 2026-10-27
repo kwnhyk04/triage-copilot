@@ -1,10 +1,14 @@
 # One entry point for both toolchains: pnpm + Turborepo (TypeScript) and uv (Python).
 # Recipes stay shell-neutral: from PowerShell make runs them with cmd.exe, from Git Bash or CI with sh.
+# Python tools run as `uv run python -m <tool>`: Windows Smart App Control blocks the venv's unsigned
+# launchers (.venv\Scripts\*.exe), and the same command works on Linux.
 
 -include .env
 export
 # Only dev-ts (gateway and web) gets the approver key; the Python services, tests and tools never do.
 unexport APPROVER_API_KEY
+# Only dev-ts gets the web's sign-in hash and session secret; test-e2e makes its own.
+unexport LOGIN_PASSWORD_HASH SESSION_SECRET
 # Only the agent gets the model provider keys; tests use fake models and never see them.
 unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
 # Only the eval harness gets the sim's admin address: its state names each scenario's answer.
@@ -16,12 +20,12 @@ COMPOSE = docker compose -f infra/docker-compose.yml
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	scenarios-check dlq-replay embed-model runbooks smoke switch digest
+	scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e
 
 install:
 	pnpm install
 	uv sync
-	uv run pre-commit install
+	uv run python -m pre_commit install
 
 infra-up:
 	$(COMPOSE) up -d --wait
@@ -33,10 +37,13 @@ infra-down:
 dev: infra-up
 	$(MAKE) -j4 dev-ts dev-agent dev-executor dev-sim
 
-# Loose env mode lets turbo pass the .env variables through to the dev servers.
+# Loose env mode lets turbo pass the .env variables through to the dev servers. --continue=always
+# keeps the gateway running when the web stops at start (a bad sign-in setting, say).
 dev-ts: export APPROVER_API_KEY := $(APPROVER_API_KEY)
+dev-ts: export LOGIN_PASSWORD_HASH := $(LOGIN_PASSWORD_HASH)
+dev-ts: export SESSION_SECRET := $(SESSION_SECRET)
 dev-ts:
-	pnpm turbo run dev --env-mode=loose
+	pnpm turbo run dev --env-mode=loose --continue=always
 
 # The agent's reloader watches the whole repo; for evals pass AGENT_RELOAD= so no edit restarts it.
 AGENT_RELOAD ?= --reload
@@ -45,10 +52,10 @@ dev-agent: export NVIDIA_API_KEY := $(NVIDIA_API_KEY)
 dev-agent: export OPENROUTER_API_KEY := $(OPENROUTER_API_KEY)
 dev-agent: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
 dev-agent:
-	uv run agent $(AGENT_RELOAD)
+	uv run python -m agent $(AGENT_RELOAD)
 
 dev-executor:
-	uv run executor --reload
+	uv run python -m executor --reload
 
 # Polls FreightAudit and FilingLens (docker ps and logs, git log, health URLs) and posts their
 # state changes to the gateway's webhook. Not part of make dev: it reads the real apps. No
@@ -56,10 +63,10 @@ dev-executor:
 dev-watch: export WATCH_FA_TOKEN := $(WATCH_FA_TOKEN)
 dev-watch: export WATCH_FL_TOKEN := $(WATCH_FL_TOKEN)
 dev-watch:
-	uv run watch
+	uv run python -m watch
 
 dev-sim:
-	uv run sim --reload
+	uv run python -m sim --reload
 
 build:
 	pnpm turbo run build
@@ -67,21 +74,29 @@ build:
 
 test:
 	pnpm turbo run test
-	uv run pytest -m "not integration"
+	uv run python -m pytest -m "not integration"
+
+# The web's browser tests (Playwright, Chromium only): builds the web, installs Chromium into
+# PLAYWRIGHT_BROWSERS_PATH, then runs apps/web/e2e against two `next start` servers and a fake
+# gateway, all on 127.0.0.1. No database, queue or model is used.
+test-e2e:
+	pnpm --filter @triage/web build
+	pnpm --filter @triage/web exec playwright install chromium
+	pnpm --filter @triage/web exec playwright test
 
 test-int: infra-up
 	pnpm -r --if-present run test:int
-	uv run pytest -m integration
+	uv run python -m pytest -m integration
 
 lint:
 	pnpm eslint .
 	pnpm prettier --check .
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run python -m ruff check .
+	uv run python -m ruff format --check .
 
 typecheck:
 	pnpm turbo run typecheck
-	uv run pyright
+	uv run python -m pyright
 
 codegen:
 	pnpm --filter @triage/ts-clients codegen
@@ -111,7 +126,7 @@ contracts-breaking:
 
 migrate: infra-up
 	pnpm --filter @triage/gateway db:migrate
-	uv run alembic -c services/agent/alembic.ini upgrade head
+	uv run python -m alembic -c services/agent/alembic.ini upgrade head
 
 # Fake history for both schemas. SEED_ARGS=--reset replaces existing rows; --large adds 2M steps.
 seed:
@@ -161,6 +176,11 @@ switch:
 # by default): what the flood guard kept from triage.
 digest:
 	pnpm --filter @triage/gateway digest $(DAY)
+
+# Saves recorded eval runs for the web demo (IDS="<investigation id> ..."), read-only; refuses any
+# live investigation. Writes apps/web/src/demo/generated/eval-runs.ts.
+demo-save:
+	pnpm --filter @triage/gateway demo:save $(IDS)
 
 # Replays every failure store: parked gateway outbox messages (the running gateway sends them),
 # agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then

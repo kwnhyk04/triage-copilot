@@ -3,14 +3,19 @@
 //   pnpm --filter @triage/gateway outbox:replay                re-queues parked outbox messages
 //   pnpm --filter @triage/gateway events:replay                moves the agent events DLQ back
 //   pnpm --filter @triage/gateway digest [YYYY-MM-DD]           a UTC day's uninvestigated groups
+//   pnpm --filter @triage/gateway demo:save <id>...             saves eval runs for the web demo
 import { randomBytes } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import { loadConfig, z } from '@triage/ts-config';
+import postgres from 'postgres';
 
+import { liveTenantsRequired, stuckAfterMinutesSetting } from './config.ts';
 import { connectDb } from './db.ts';
 import { replayDeadLetters } from './events.ts';
 import { sha256 } from './intake.ts';
-import { createDigest } from './investigations.ts';
+import { createDigest, createGetInvestigation, demoFile } from './investigations.ts';
 import { replayParked, sqsClient } from './outbox.ts';
 
 const settings = z.object({
@@ -19,7 +24,10 @@ const settings = z.object({
   AWS_REGION: z.string().min(1).default('us-east-1'),
   AGENT_EVENTS_QUEUE: z.string().min(1).default('agent-events.fifo'),
   AGENT_EVENTS_DLQ: z.string().min(1).default('agent-events-dlq.fifo'),
+  SWEEPER_STUCK_AFTER_MINUTES: stuckAfterMinutesSetting,
 });
+// The web demo's eval runs, which demo-save replaces.
+const DEMO_FILE = new URL('../../web/src/demo/generated/eval-runs.ts', import.meta.url);
 let config: z.infer<typeof settings>;
 try {
   config = loadConfig(settings);
@@ -50,6 +58,32 @@ try {
     // Today (UTC) unless a day is given.
     const day = name ?? new Date().toISOString().slice(0, 10);
     console.log(JSON.stringify(await createDigest(sql)(day), null, 2));
+  } else if (command === 'demo-save') {
+    // On a read-only connection: the export only reads, and refuses any live investigation.
+    const readOnly = postgres(config.GATEWAY_DATABASE_URL, {
+      max: 1,
+      connect_timeout: 5,
+      connection: { default_transaction_read_only: true, statement_timeout: 5000 },
+    });
+    const ids = process.argv.slice(3);
+    try {
+      // Set, to {} while live is off: unset would read every investigation as simulated.
+      const live = loadConfig(z.object({ LIVE_TENANTS: liveTenantsRequired }));
+      const reads = {
+        liveTenants: live.LIVE_TENANTS,
+        stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
+      };
+      const file = await demoFile(createGetInvestigation(readOnly, reads), ids);
+      await mkdir(new URL('.', DEMO_FILE), { recursive: true });
+      await writeFile(DEMO_FILE, file);
+      const path = fileURLToPath(DEMO_FILE);
+      console.log(JSON.stringify({ msg: 'demo eval runs saved', count: ids.length, path }));
+    } catch (error) {
+      console.error(`gateway: demo-save: ${(error as Error).message}`);
+      process.exitCode = 1;
+    } finally {
+      await readOnly.end();
+    }
   } else if (command === 'tenant-token' && name) {
     // Creates the tenant if it is new and replaces any earlier token; only the hash is stored.
     const token = randomBytes(32).toString('base64url');
@@ -62,7 +96,7 @@ try {
   } else {
     console.error(
       'usage: node src/cli.ts tenant-token <tenant name> | outbox-replay | events-replay' +
-        ' | digest [YYYY-MM-DD]',
+        ' | digest [YYYY-MM-DD] | demo-save <investigation id>...',
     );
     process.exitCode = 2;
   }

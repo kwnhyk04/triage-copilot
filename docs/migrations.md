@@ -2,6 +2,16 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-10-27: Live or simulated, cause and plan status in the list (gateway API 0.8.0; no schema change)
+
+- Expand only. `GET /v1/investigations` takes an optional `source` (`live` or `sim`; any other value gets 400). Without it the list spans every tenant as before, which the eval harness and the Python clients rely on.
+- `InvestigationSummary`, and so `Investigation`, gains three required response fields:
+  - `source`: `live` for a tenant in `LIVE_TENANTS`, else `sim`.
+  - `cause`: the top hypothesis's class, service and confidence, or null.
+  - `plan_status`: `ActionStatus`, or null while no plan holds a proposal to decide.
+- `running` is now served: a `queued` group whose newest mirrored step is under `SWEEPER_STUCK_AFTER_MINUTES` (10) old reads `running`. It is derived when read; the stored status stays `queued`, which the sweeper sweeps.
+- oasdiff reports no breaking change. The fields are additions to responses, so older clients keep working: the generated Python response models ignore unknown fields (only the request bodies forbid them).
+
 ## 2026-10-26: Plans for real incidents (agent 0013, gateway 0008, gateway API 0.7.0, PlanRecorded v1)
 
 - Agent 0013, expand only under `lock_timeout` 3 s: `agent.model_role` gains `planner` (added in the revision's transaction, used by nothing before its commit), `agent.switches`' check also allows `planner`, and a new table `agent.plans` (one row per investigation: `id`, `plan jsonb`, `problem`, `created_at`, `planned_at`). The downgrade drops the table and the `planner` switch row, and rebuilds the enum without `planner`, keeping a plan's calls as `primary`.
@@ -158,7 +168,7 @@ No DDL. `agent.investigation_steps.event` holds a StepRecorded event; `schema_ve
 
 ## 2026-10-14: Story A, investigation_steps partitioned online
 
-Agent revisions 0002 to 0004, each in its own release. On an empty database, `make migrate` applies them all at once, each revision in its own transaction. On a live database, upgrade one revision at a time (`uv run alembic -c services/agent/alembic.ini upgrade 0003`). `upgrade head` would run 0004 right after the swap, before every agent has turned the flag off. Every step sets `lock_timeout` 3 s, so none queues for long ahead of the step writers.
+Agent revisions 0002 to 0004, each in its own release. On an empty database, `make migrate` applies them all at once, each revision in its own transaction. On a live database, upgrade one revision at a time (`uv run python -m alembic -c services/agent/alembic.ini upgrade 0003`). `upgrade head` would run 0004 right after the swap, before every agent has turned the flag off. Every step sets `lock_timeout` 3 s, so none queues for long ahead of the step writers.
 
 1. Expand (0002): `investigation_steps_p`, partitioned by month on `created_at` (UTC bounds), with this and next month's partitions, a default partition, and the backfill cursor table `steps_backfill`. Its primary key is `(investigation_id, seq, created_at)`: unique keys of a partitioned table must include the partition column. `(investigation_id, seq)` stays unique because `record_step` takes `seq` from `investigations.step_count` under the row lock.
 2. Dual-write: set `STEPS_DUAL_WRITE=true` in every agent. `record_step` then writes each step to both tables in one transaction, live table first.

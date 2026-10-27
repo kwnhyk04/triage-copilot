@@ -42,7 +42,7 @@ describe('plans against Postgres', () => {
       findTenant: unused,
       intake: unused,
       listInvestigations: unused,
-      getInvestigation: createGetInvestigation(db.sql),
+      getInvestigation: createGetInvestigation(db.sql, { liveTenants: [], stuckAfterMinutes: 10 }),
     });
   }, 60_000);
   afterAll(async () => {

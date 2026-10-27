@@ -51,19 +51,23 @@ describe('decisionFrom', () => {
     return data;
   };
 
-  it('reads the verdict, the approver and an optional reason from the form', () => {
-    expect(decisionFrom(form({ verdict: 'approve', approver: ' Ana ', reason: '' }))).toEqual({
+  it('reads the verdict and an optional reason from the form, for the signed-in approver', () => {
+    expect(decisionFrom(form({ verdict: 'approve', reason: '' }), 'operator')).toEqual({
       verdict: 'approve',
-      decision: { approver: 'Ana' },
+      decision: { approver: 'operator' },
     });
-    expect(decisionFrom(form({ verdict: 'reject', approver: 'Ana', reason: 'Too risky' }))).toEqual(
-      { verdict: 'reject', decision: { approver: 'Ana', reason: 'Too risky' } },
-    );
+    // A name in the form is never the approver.
+    const named = form({ verdict: 'reject', approver: 'Mallory', reason: ' Too risky ' });
+    expect(decisionFrom(named, 'operator')).toEqual({
+      verdict: 'reject',
+      decision: { approver: 'operator', reason: 'Too risky' },
+    });
   });
 
-  it('refuses a form without an approver or with another verdict', () => {
-    expect(decisionFrom(form({ verdict: 'approve', approver: '  ' }))).toBeUndefined();
-    expect(decisionFrom(form({ verdict: 'execute', approver: 'Ana' }))).toBeUndefined();
-    expect(decisionFrom(form({ verdict: 'approve', approver: 'x'.repeat(201) }))).toBeUndefined();
+  it('refuses another verdict and a reason over 2,000 characters', () => {
+    expect(decisionFrom(form({ verdict: 'execute' }), 'operator')).toBeUndefined();
+    expect(decisionFrom(form({}), 'operator')).toBeUndefined();
+    const long = form({ verdict: 'approve', reason: 'x'.repeat(2001) });
+    expect(decisionFrom(long, 'operator')).toBeUndefined();
   });
 });

@@ -168,7 +168,18 @@ Model calls (`AI_ENABLED=true`) run on Gemini's free tier, falling back to NVIDI
 
 `make install` also installs the gitleaks pre-commit hook, which blocks commits that stage secrets.
 
-CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, contract and scenario checks, a gitleaks scan of the full history and the image builds on every pull request and push to main; `ci-result` is the required check. `publish.yml` pushes the gateway, agent, executor and sim images to GHCR from main. `eval.yml` stays off until the repository variable `EVAL_ENABLED` is `true`; its only secret is `GEMINI_API_KEY`, and CI never calls Claude. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
+Python tools run as `uv run python -m <tool>` (pytest, ruff, pyright, alembic, pre-commit, and the agent, executor, sim and watch): Windows Smart App Control blocks the venv's unsigned launchers in `.venv\Scripts`, and the same commands work on Linux.
+
+Sign-in: the web has one password. Make its two settings once, in a terminal; neither script prints a secret:
+
+```sh
+pnpm --filter @triage/web hash-password --write-env   # asks twice, unechoed; writes LOGIN_PASSWORD_HASH
+pnpm --filter @triage/web session-secret              # writes a random SESSION_SECRET
+```
+
+`next start` and Vercel refuse to start without both. Under `make dev` they are optional, but both or neither; without them sign-in is off and only the landing, the demo and the probes work. For Vercel, run `hash-password` without `--write-env` and paste the hash it prints.
+
+CI (GitHub Actions): `ci.yml` runs lint, types, unit, integration and browser tests, contract and scenario checks, a gitleaks scan of the full history and the image builds on every pull request and push to main; `ci-result` is the required check. `publish.yml` pushes the gateway, agent, executor and sim images to GHCR from main. `eval.yml` stays off until the repository variable `EVAL_ENABLED` is `true`; its only secret is `GEMINI_API_KEY`, and CI never calls Claude. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
 
 ## Usage
 
@@ -178,6 +189,8 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `make build` | Next.js build and Python wheels |
 | `make test` | Jest and pytest unit tests; for repeated runs use `pnpm turbo run test --force`, since Turbo replays cached output |
 | `make test-int` | Integration tests against the infra, about 3 minutes (the partitioning test seeds 2,000,000 steps). Each test gets a scratch database `triage_test_*`, dropped afterwards; tests never touch the dev database |
+| `make test-e2e` | Builds the web, installs Chromium into `PLAYWRIGHT_BROWSERS_PATH`, and runs `apps/web/e2e` (sign-in, reports, plan decisions, live progress, the demo, and axe for WCAG 2.2 A and AA in light and dark, on desktop and a 390x844 phone) against two `next start` servers (3202, 3203) and a fake gateway (4250); no database or model |
+| `make demo-save` | Saves recorded eval runs for the public demo (`IDS="<investigation id> ..."`), read-only; refuses any live investigation, and refuses to run unless `LIVE_TENANTS` is set (`{}` while live is off) |
 | `make lint` | ESLint, Prettier, ruff |
 | `make typecheck` | tsc and pyright |
 | `make codegen` | Regenerates clients from `contracts/` |
@@ -197,9 +210,11 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit and integration tests, cont
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
 
-Reports: with `make dev` running, `http://127.0.0.1:3200/investigations` lists every investigation, newest first, each linked to its report (the verdict, the cause with its evidence, the models asked and any fallback). The web server reads them from the gateway with its own API key; the pages have no login yet (step 9) and listen on 127.0.0.1 only. A live tenant's snapshots and steps are purged after 30 days, by the gateway and the agent each; its reports stay.
+Reports: with `make dev` running, sign in at `http://127.0.0.1:3200`. Investigations list as triage tags in two tabs, Live incidents and Eval runs, each linked to its report: the verdict, the decision, the cause with its evidence, the steps, the models asked and any fallback. A running investigation's report refreshes every 3 s and the list every 10 s, with a Pause button. The browser talks only to the Next.js server, which reads the gateway with its own keys. A live tenant's snapshots and steps are purged after 30 days, by the gateway and the agent each; its reports stay.
 
-Plans: with the `planner` switch on (off until the P2.5 measuring run), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report page shows it with a form to approve or reject it; the decision is recorded once, and nothing runs from it yet.
+Demo: `/demo` is public and reads no gateway, so it works while the PC is off; a signed-in page goes there when the gateway does not answer. It holds five recorded eval runs (`make demo-save`: bad-deploy-1 run 1 `59787641-d31c-47d7-a1de-f06c7af65275`, a right cause with a pending rollback; bad-deploy-2 run 1 `0d25cd1d-7a50-4739-a74a-abae2c2db81e`, a degraded tool; bad-config-1 run 1 `58728e0f-9005-4b4b-ab1b-ea311430acb8`, a partial report; bad-config-1 run 1 on Haiku `de2a7b93-d3d6-4f8a-8a53-4b4c4bc31a24`; noisy-neighbor-4 run 3 `dac2fc6a-7bee-469c-bf12-84e7bf516753`, the test split's forbidden rollback, held for approval) and three hand-written live samples, each labeled illustrative. Its plan buttons are disabled.
+
+Plans: with the `planner` switch on (off until the P2.5 measuring run), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report shows it first, with Approve plan and Reject plan; the decision is recorded once, as the signed-in `operator`, and nothing runs from it yet.
 
 Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:
 

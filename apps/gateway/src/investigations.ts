@@ -8,9 +8,15 @@ type Schemas = components['schemas'];
 export type ListInvestigations = (query: {
   limit: number;
   cursor?: string | undefined;
+  source?: Schemas['InvestigationSource'] | undefined;
 }) => Promise<Schemas['InvestigationPage'] | 'bad_cursor'>;
 /** One investigation; undefined when no alert group has its id. */
 export type GetInvestigation = (id: string) => Promise<Schemas['Investigation'] | undefined>;
+/** What reads take from the settings: LIVE_TENANTS, and SWEEPER_STUCK_AFTER_MINUTES. */
+export interface ReadSettings {
+  liveTenants: readonly string[];
+  stuckAfterMinutes: number;
+}
 
 interface Group {
   id: string;
@@ -21,6 +27,9 @@ interface Group {
   created_at: Date;
   updated_at: Date;
   labels: Record<string, string> | null;
+  live: boolean;
+  top: ReportRecordedV2['report']['hypotheses'][number] | null;
+  plan_status: Schemas['ActionStatus'] | null;
 }
 type Row = Group & { cursor_at: string };
 // The contract's Evidence.excerpt cap: the start of the cited result.
@@ -202,23 +211,43 @@ export const createDigest =
     return { day, tenants: [...tenants.values()] };
   };
 
+/**
+ * A summary's columns over alert group g and its report r. A queued group whose newest step is
+ * fresh reads running; the stored status stays queued, which the sweeper sweeps. A plan without a
+ * proposal takes no decision, so it has no status.
+ */
+const summaryColumns = (sql: Sql, { liveTenants, stuckAfterMinutes }: ReadSettings) => sql`
+  g.investigation_id AS id, g.id AS group_id, g.group_key, r.verdict, g.created_at, g.updated_at,
+  g.tenant_id = ANY(${liveTenants}::uuid[]) AS live, r.report->'hypotheses'->0 AS top,
+  CASE WHEN g.status = 'queued' AND (
+         SELECT s.recorded_at FROM gateway.investigation_steps s
+         WHERE s.investigation_id = g.investigation_id ORDER BY s.seq DESC LIMIT 1
+       ) > now() - make_interval(mins => ${stuckAfterMinutes})
+       THEN 'running' ELSE g.status::text END AS status,
+  (SELECT CASE WHEN p.kind IS NULL THEN NULL ELSE coalesce(d.decision::text, 'pending') END
+   FROM gateway.plans p LEFT JOIN gateway.plan_decisions d ON d.plan_id = p.id
+   WHERE p.investigation_id = g.investigation_id) AS plan_status,
+  (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
+   ORDER BY a.created_at, a.id LIMIT 1) AS labels`;
+
 /** Keyset pagination over investigated alert groups, ordered by (created_at, id) descending. */
 export const createListInvestigations =
-  (sql: Sql): ListInvestigations =>
-  async ({ limit, cursor }) => {
+  (sql: Sql, settings: ReadSettings): ListInvestigations =>
+  async ({ limit, cursor, source }) => {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
     if (cursor !== undefined && after === undefined) return 'bad_cursor';
     // ponytail: sorts every tenant's investigated groups; index (created_at, investigation_id)
     // past ~100k groups.
     const rows = await sql<Row[]>`
-      SELECT g.investigation_id AS id, g.id AS group_id, g.group_key, g.status, r.verdict,
-             g.created_at, g.updated_at,
-             to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,
-             (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
-              ORDER BY a.created_at, a.id LIMIT 1) AS labels
+      SELECT ${summaryColumns(sql, settings)},
+             to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
       FROM gateway.alert_groups g
       LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
       WHERE g.investigation_id IS NOT NULL ${
+        source === undefined
+          ? sql``
+          : sql`AND (g.tenant_id = ANY(${settings.liveTenants}::uuid[])) = ${source === 'live'}`
+      } ${
         after === undefined
           ? sql``
           : // A text parameter: postgres.js turns a timestamptz one into a JS Date, which drops
@@ -245,6 +274,16 @@ const investigationSummary = (group: Group): Schemas['InvestigationSummary'] => 
   verdict: group.verdict,
   created_at: group.created_at.toISOString(),
   updated_at: group.updated_at.toISOString(),
+  source: group.live ? 'live' : 'sim',
+  cause:
+    group.top === null
+      ? null
+      : {
+          root_cause_class: group.top.root_cause_class,
+          service: group.top.service,
+          confidence: group.top.confidence,
+        },
+  plan_status: group.plan_status,
 });
 
 /**
@@ -253,7 +292,7 @@ const investigationSummary = (group: Group): Schemas['InvestigationSummary'] => 
  * retention.ts) leaves an empty excerpt; the report itself stays.
  */
 export const createGetInvestigation =
-  (sql: Sql): GetInvestigation =>
+  (sql: Sql, settings: ReadSettings): GetInvestigation =>
   async (id) => {
     const [group] = await sql<
       (Group & {
@@ -261,10 +300,7 @@ export const createGetInvestigation =
         models: ReportRecordedV2['models'] | null;
       })[]
     >`
-      SELECT g.investigation_id AS id, g.id AS group_id, g.group_key, g.status, r.verdict,
-             g.created_at, g.updated_at, r.report, r.models,
-             (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
-              ORDER BY a.created_at, a.id LIMIT 1) AS labels
+      SELECT ${summaryColumns(sql, settings)}, r.report, r.models
       FROM gateway.alert_groups g
       LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
       WHERE g.investigation_id = ${id}`;
@@ -372,3 +408,26 @@ export const createGetInvestigation =
       })),
     };
   };
+
+/**
+ * The web demo's saved eval runs as a TypeScript module (`make demo-save`). Only simulated
+ * investigations go in: a live one holds a real app's data, and the demo is public.
+ */
+export async function demoFile(get: GetInvestigation, ids: readonly string[]): Promise<string> {
+  if (ids.length === 0) throw new Error('name at least one investigation');
+  const runs: Schemas['Investigation'][] = [];
+  for (const id of ids) {
+    if (!z.guid().safeParse(id).success) throw new Error(`${id} is no uuid`);
+    const investigation = await get(id);
+    if (investigation === undefined) throw new Error(`no investigation has id ${id}`);
+    if (investigation.source !== 'sim') {
+      throw new Error(`${id} is live: only simulated investigations may be saved`);
+    }
+    runs.push(investigation);
+  }
+  return (
+    '// Generated by `make demo-save` from recorded eval runs. Do not edit.\n\n' +
+    "import type { Investigation } from '../../lib/investigations.ts';\n\n" +
+    `export const EVAL_RUNS = ${JSON.stringify(runs, null, 2)} satisfies Investigation[];\n`
+  );
+}

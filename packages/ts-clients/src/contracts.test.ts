@@ -65,7 +65,15 @@ const enumsAgree: [
   Equal<Omit<PlanModelUse, 'part'>, Omit<ModelUse, 'part'>>,
   Equal<Rest['PlanKind'], Planned['kind']>,
   Equal<Rest['PlanProposal'], Planned>,
+  // A listed investigation's plan status and cause (0.8.0) are the detail's, in brief.
+  Equal<Rest['InvestigationSummary']['plan_status'], Rest['Plan']['status'] | null>,
+  Equal<
+    Rest['InvestigationSummary']['cause'],
+    Pick<Rest['Hypothesis'], 'root_cause_class' | 'service' | 'confidence'> | null
+  >,
 ] = [
+  true,
+  true,
   true,
   true,
   true,
@@ -259,6 +267,17 @@ describe('gateway clients', () => {
 
     expect(error).toEqual(problem);
     expect(sent(spy).headers.get('X-API-Key')).toBe('key-1');
+  });
+
+  it('asks for live or simulated investigations only', async () => {
+    const spy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ items: [], next_cursor: null }));
+    const client = createGatewayClient({ baseUrl: 'http://gateway.test', apiKey: 'key-1' });
+
+    await client.GET('/v1/investigations', { params: { query: { source: 'live' } } });
+
+    expect(new URL(sent(spy).url).searchParams.get('source')).toBe('live');
   });
 
   it('sends only the approver key on decisions', async () => {

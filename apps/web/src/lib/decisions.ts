@@ -2,13 +2,18 @@ import { type components, createDecisionClient } from '@triage/ts-clients/gatewa
 import { z } from '@triage/ts-config';
 
 import type { WebConfig } from './config.ts';
+import { GATEWAY_TIMEOUT_MS } from './investigations.ts';
 
 type Approver = Pick<WebConfig, 'GATEWAY_URL' | 'APPROVER_API_KEY'>;
 type Decision = components['schemas']['Decision'];
 type Verdict = 'approve' | 'reject';
 
 const client = (config: Approver) =>
-  createDecisionClient({ baseUrl: config.GATEWAY_URL, approverKey: config.APPROVER_API_KEY });
+  createDecisionClient({
+    baseUrl: config.GATEWAY_URL,
+    approverKey: config.APPROVER_API_KEY,
+    timeoutMs: GATEWAY_TIMEOUT_MS,
+  });
 
 /**
  * Records a human approval or rejection at the gateway. Server code only: it sends the approver
@@ -36,19 +41,22 @@ export function decidePlan(config: Approver, planId: string, verdict: Verdict, d
 
 const decisionForm = z.object({
   verdict: z.enum(['approve', 'reject']),
-  // There is no login until step 9: the approver is the name the form gives.
-  approver: z.string().trim().min(1).max(200),
   reason: z.string().trim().max(2000).optional(),
 });
 
-/** The verdict and decision a submitted form holds, or undefined when it holds none. */
-export function decisionFrom(form: FormData): { verdict: Verdict; decision: Decision } | undefined {
+/**
+ * The verdict and decision a submitted form holds, made by `approver` (the signed-in user, never
+ * a name the form gives), or undefined when the form holds none.
+ */
+export function decisionFrom(
+  form: FormData,
+  approver: string,
+): { verdict: Verdict; decision: Decision } | undefined {
   const parsed = decisionForm.safeParse({
     verdict: form.get('verdict'),
-    approver: form.get('approver'),
     reason: form.get('reason') || undefined,
   });
   if (!parsed.success) return undefined;
-  const { verdict, approver, reason } = parsed.data;
+  const { verdict, reason } = parsed.data;
   return { verdict, decision: reason ? { approver, reason } : { approver } };
 }

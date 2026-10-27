@@ -1,5 +1,5 @@
-import { getInvestigation, listInvestigations } from './investigations.ts';
-import { LIVE_TRIAGE } from './testing.ts';
+import { GatewayOffline, getInvestigation, listInvestigations } from './investigations.ts';
+import { WORKER_OUT_OF_MEMORY as LIVE_TRIAGE } from '../demo/live-samples.ts';
 
 const config = {
   GATEWAY_URL: 'http://gateway.test',
@@ -12,12 +12,18 @@ describe('investigations through the gateway', () => {
     jest.restoreAllMocks();
   });
 
-  it('lists a page with the API key, passing the cursor on', async () => {
+  it('lists a page of one source with the API key, passing the cursor on', async () => {
     const spy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(PAGE));
-    await expect(listInvestigations(config, 'abc')).resolves.toEqual(PAGE);
+    await expect(listInvestigations(config, { source: 'live', cursor: 'abc' })).resolves.toEqual(
+      PAGE,
+    );
     const request = spy.mock.calls[0]?.[0] as Request;
     const url = new URL(request.url);
-    expect([url.pathname, url.searchParams.get('cursor')]).toEqual(['/v1/investigations', 'abc']);
+    expect([url.pathname, url.searchParams.get('source'), url.searchParams.get('cursor')]).toEqual([
+      '/v1/investigations',
+      'live',
+      'abc',
+    ]);
     expect(request.headers.get('X-API-Key')).toBe(config.GATEWAY_API_KEY);
   });
 
@@ -39,9 +45,24 @@ describe('investigations through the gateway', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('fails when the gateway cannot answer, so the page shows an error instead of nothing', async () => {
-    const down = Response.json({ title: 'Service Unavailable', status: 503 }, { status: 503 });
-    jest.spyOn(globalThis, 'fetch').mockResolvedValue(down);
-    await expect(listInvestigations(config)).rejects.toThrow('gateway answered 503');
+  it('fails as offline when the gateway does not answer, and plainly on any other error', async () => {
+    const answer = (status: number) => () =>
+      Promise.resolve(Response.json({ title: 'x', status }, { status }));
+    const spy = jest.spyOn(globalThis, 'fetch');
+    for (const offline of [
+      () => Promise.reject(new TypeError('fetch failed')),
+      () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
+      answer(502),
+      answer(503),
+      answer(504),
+    ]) {
+      spy.mockImplementation(offline);
+      await expect(listInvestigations(config, {})).rejects.toBeInstanceOf(GatewayOffline);
+      await expect(getInvestigation(config, LIVE_TRIAGE.id)).rejects.toBeInstanceOf(GatewayOffline);
+    }
+    spy.mockImplementation(answer(500));
+    const failed = listInvestigations(config, {});
+    await expect(failed).rejects.toThrow('gateway answered 500');
+    await expect(failed).rejects.not.toBeInstanceOf(GatewayOffline);
   });
 });

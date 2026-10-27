@@ -104,17 +104,16 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - The live prompt is new and has run on no real model; the shadow run (P1.12) is its first test. Check its verdicts there before trusting not_real.
   - `test_partition_swap_while_a_writer_runs` failed once in this branch's first `make test-int`, then passed alone and in two full runs; the assertion line was not captured (docs/activity-log.md).
 - [ ] Report view and retention follow-ups (P1.10 and P1.11, 2026-10-25), none needed before go-live:
-  - The report pages have no login (step 9) and listen on 127.0.0.1 only; step 9's login must come before step 10 puts the web on Vercel.
-  - The list spans every tenant, eval runs included. Add a live-only filter if eval runs crowd out the live reports.
-  - GraphQL's `Investigation` lacks what REST 0.6.0 serves beside it (`Hypothesis.service`, `missingEvidence`, `partial`); add them when step 9 builds the GraphQL resolvers.
+  - Done (step 9, 2026-10-28): sign-in, and the list's Live incidents and Eval runs tabs (`source`, gateway API 0.8.0).
+  - When a GraphQL consumer exists: GraphQL's `Investigation` lacks what REST serves beside it (`Hypothesis.service`, `missingEvidence`, `partial`, and 0.8.0's `source`, `cause`, `plan_status`). Step 9 polls REST and built no resolvers.
   - Retention keeps the steps of a live investigation that has not finished (queued or running), since its next turn replays them; they go on the first pass after it ends.
   - Investigations created before this branch recorded a tenant only when they parked, so retention cannot tell an older live one; none exists, since `live` has never been on.
   - The gateway reads `LIVE_TENANTS` with tenant uuids in the hyphenated form `tenant:token` prints; the agent's parser also takes other uuid spellings, which would stop the gateway at startup with a `LIVE_TENANTS:` error.
 - [ ] Plan follow-ups (P2.1 to P2.4, 2026-10-26), none needed before P2.5:
   - The code-fix source allowlist (`SOURCES` in `agent/planner.py`) comes from TC's records of each repo's layout, not from reading the repos; P4.1 checks it against FA and FL before the coder runs.
   - A plan's decision does not move its alert group to `awaiting_approval`; the plan carries its own status. Phase 3 decides whether an approved restart queues ActionApproved v2.
-  - Until login (step 9) the approver is the name typed into the form.
-  - GraphQL has no plans; add them when step 9 builds the GraphQL resolvers.
+  - Done (step 9, 2026-10-28): decisions record the signed-in approver, `operator`.
+  - When a GraphQL consumer exists: GraphQL has no plans.
   - Shutdown waits for a plan call in flight, up to 305 s for Opus; the plan stays due if shutdown begins before it.
   - Like the triage cap, the planner cap's check and its call are not one transaction: 5 plans at once could each pass it.
 - [ ] (The user's call) Size the 15-call cap for Haiku from data: it forced 47 of the second configuration's 75 reports, so how many calls Haiku would use is not measured. Measuring it takes a run with a higher call cap, which breaks the design's 15-call gate by construction.
@@ -158,13 +157,96 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - [ ] Set `EVAL_ENABLED=true` (the user's switch): both the Gemini split and the Haiku comparison are recorded (2026-10-21). The `dev-ci-1` floors are set by hand (2026-10-20, docs/memory.md): validity 0.92, median tool calls 12, median tokens 80,425, and no floor for the two p95 times, which CI only reports. Never rerun `make eval SUBSET=ci SET_FLOORS=1`: it would put the targets back. Optionally ask for a role's key only when the router can call it, which drops the NIM placeholder.
   - [ ] The manual quota-stop check, once `EVAL_ENABLED=true` (while it is off a manual run fails at once): on a day Google has refused the project's Gemini requests ("daily quota spent"), run eval.yml by hand; it must end red with "rerun after the quota resets". CI's database starts empty, so in CI only Google's refusal stops a run, never the agent's count of 260.
 - [ ] 8. Instrumentation: OpenTelemetry traces span services end to end; dashboard and alerts committed; screenshots saved. Include an alert on executions stuck in claimed (the sweeper only logs them now) and a count of payload fingerprints that differ from the computed ones.
-- [ ] 9. Review UI and demo mode: resolvers, login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass
-- [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off
+- [x] 9. Review UI and demo mode: login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass (built 2026-10-27 and 2026-10-28 on `step-9-web`, not committed; resolvers moved to "when a GraphQL consumer exists"). The user's hand check, signing in on desktop and phone in both themes, is open (In Progress).
+- [ ] After P1.12's shadow run, and the user's review (FA and FL data is private): replace the demo's three illustrative live samples (`apps/web/src/demo/live-samples.ts`) with real live reports.
+- [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off. Also: a Vercel firewall rule on `POST /login` (the sign-in limit holds per server instance), and refuse the `.env.example` placeholder keys and any empty or reused web secret at startup.
 
 ## In Progress
 
 - P0, proposal check version 2: built and merged as #12 (`58fdd00`; corrected 2026-10-26, this line said nothing was committed). The two dev passes are the user's to run, with the steps and estimates under Pending (P0, step 3).
-- P2.1 to P2.4 are built on branch `p2-planner` (2026-10-26), one PR for the user to ship; nothing is committed. P2.5, the measuring run, is the user's.
+- P2.1 to P2.4 merged as #17 (`bebbb1e`; corrected 2026-10-28, this line said they sat uncommitted on `p2-planner`). P2.5, the measuring run, is the user's.
+- Step 9, the web UI.
+  - Status: the user approved the plan on 2026-10-27. Branch `step-9-web` was cut from main (`bebbb1e`, #17). Nothing is committed.
+  - Build session (2026-10-27): items 1 to 6 are built, tests first, with their checks green (docs/activity-log.md). The build stopped at item 7, step 1: `make migrate` applied the gateway migrations, then Windows Application Control blocked `alembic` (os error 4551). The user's rule for that is to stop and report.
+  - 2026-10-28: Python tools now run as `uv run python -m <tool>` (the user's fix). `make migrate` passed, and items 7 to 11 are built; every check in item 10 exits 0. Waiting: the user's hand check (Verification, step 2), then ship.
+  - Full plan: `%USERPROFILE%\.claude\plans\pasted-content-id-7bc6-plan-mode-polished-willow.md`.
+  - The user's choices:
+    - Live progress by polling.
+    - A demo of real eval runs plus 3 hand-written live samples, labeled illustrative on the page.
+    - `make migrate` on the dev database, and the read-only export, are approved.
+    - A CI e2e job.
+    - Sign-in as in FA and FL. Their auth code was read, read-only, with the user's permission.
+    - The fonts come from committed files through `next/font/local`, with their OFL licence beside them, because `next/font/google` broke FA's Turbopack builds on 2026-10-24.
+    - The per-instance sign-in limit is accepted, with step 10's firewall rule.
+    - Sim proposals stay read-only.
+  - Rules: one PR; tests first, each run red before its code; no model call; only this project's ports and containers.
+  - Done when every check in item 10 passes and the user has signed in by hand (the plan's Verification, step 2).
+  - [x] 1. Contract: gateway API 0.8.0, expand-only.
+    - `GET /v1/investigations` gains an optional `source` (`live`, `sim`). Without it, the list spans every tenant.
+    - `InvestigationSummary`, and so `Investigation`, gains `source`, `cause` and `plan_status` (`ActionStatus` or null).
+    - `running` is documented.
+    - Done when `make codegen` runs and `make contracts-breaking` shows no ERR.
+  - [x] 2. Gateway, tests first (`app.test.ts`, `investigations.int.test.ts`).
+    - `source` comes from `LIVE_TENANTS`. `cause` and `plan_status` are filled.
+    - A `queued` group reads `running` while its newest step is under `SWEEPER_STUCK_AFTER_MINUTES` old. This is derived on read; the stored status stays `queued` for the sweeper.
+    - `cli.ts demo-save`, run by `make demo-save IDS=`, is read-only and reuses `createGetInvestigation`. It refuses any investigation that is not `sim`.
+  - [x] 3. Sign-in, tests first.
+    - `lib/password.ts`: FL's argon2id cost and bounds, tested with FA's reference vector.
+    - `lib/session.ts`: FL's `v1.<expiry>.<mac>` token in `__Host-triage_session`, which is HttpOnly, Secure and Lax, and lasts 8 hours.
+    - `lib/guards.ts`: FL's limiter (5 per address per 15 minutes, counted before argon2), plus a global 30 per 15 minutes; `safeNext`; `isSameOrigin`.
+    - Config: `LOGIN_PASSWORD_HASH` and `SESSION_SECRET` are required in production, and both or neither in dev. The secret must differ from the two gateway keys.
+    - Scripts: `hash-password`, whose `--write-env` writes each `$` as `$$`, and `session-secret`.
+    - `/login` with a password-only form; `POST /logout`.
+    - `src/proxy.ts` with FL's public pattern and nonce CSP.
+  - [x] 4. Data access, tests first.
+    - `lib/data.ts` calls `requireSession()` before every gateway call, and records the approver as `operator`.
+    - An unanswered gateway redirects to `/demo?offline=1`: a throw, the 5 s timeout, or a 502, 503 or 504.
+    - A Jest scan fails when `src/app` or `src/components` reaches the gateway any other way. Readyz's health read is the one exception.
+    - `decidePlanAction` without a session sends nothing.
+    - `/readyz` caches the gateway's answer for 10 s.
+  - [x] 5. Pages, tests first.
+    - The route group `(app)`, with the signed-in header.
+    - The public landing at `/`.
+    - The list, with Live incidents and Eval runs tabs.
+    - The report: the verdict tag, cause and evidence, the plan's decision panel, the timeline, models and fallback notes.
+    - `(app)/error.tsx` (with retry, and links to `/demo` and `/login`), and `not-found.tsx`.
+    - The plan's triage-tag design in `globals.css`: its palette, light and dark from the system setting, and a phone layout with no sideways scroll.
+    - Atkinson Hyperlegible Next and Mono as committed woff2 files, with `OFL.txt`, in `src/app/fonts/`, through `next/font/local`.
+  - [x] 6. Live progress.
+    - `live-refresh.tsx` refreshes the report every 3 s and the list every 10 s, within the plan's windows.
+    - It pauses in hidden tabs and has a Pause updates button.
+    - A `role="status"` line reports progress.
+  - [x] 7. Demo.
+    1. Run `make infra-up`, then `make migrate`.
+    2. Run `make demo-save IDS="..."` for 4 or 5 eval runs, and list their ids in README.
+    3. Run `make infra-down`.
+    4. Write three live samples in `src/demo/live-samples.ts`, each marked "Illustrative sample, not a real incident".
+    5. Build the `/demo` pages, with the plan buttons disabled and no action.
+    6. Add a test that every eval run is `sim` and every sample is labeled.
+  - [x] 8. Playwright, tests first.
+    - `@playwright/test` and `@axe-core/playwright`, at versions past the release-age gate.
+    - A fake gateway on 4250, the web on 3202, and an isolated web on 3203.
+    - A saved sign-in.
+    - Specs `auth`, `reports`, `demo` and `a11y`: axe with WCAG 2.2 A and AA, light and dark, on desktop and a 390x844 phone.
+    - `make test-e2e`, with browsers in `H:\.cache\ms-playwright`.
+    - CI: an `e2e` job in `ci.yml`, listed in `ci-result`'s needs.
+  - [x] 9. Root files.
+    - Makefile: the two secrets unexported except for `dev-ts`; `dev-ts` runs turbo with `--continue=always`; new targets `test-e2e` and `demo-save`.
+    - `.env.example`, `scripts/ci_env.sh`, and `.gitignore` (`test-results/`).
+  - [x] 10. Checks, each exit code recorded (2026-10-28, all 0; docs/activity-log.md): `make lint`, `make typecheck`, `make test`, `make test-int`, `make contracts-check`, `make contracts-breaking`, `make build`, `make test-e2e`. Then `make infra-down`.
+  - [x] 11. Docs.
+    - README.
+    - docs/context.md: ports 3202, 3203 and 4250, and the Playwright cache.
+    - docs/memory.md: the plan's decisions, and the FA font lesson.
+    - docs/migrations.md: API 0.8.0.
+    - docs/todo.md:
+      - step 9, and the follow-ups it closes;
+      - the GraphQL items, moved to "when a GraphQL consumer exists";
+      - a new item: replace the illustrative live samples with real live reports after P1.12's shadow run, after the user's review;
+      - step 10: a Vercel firewall rule on `POST /login`, and refusing placeholder web secrets;
+      - fix the P2 line above, which merged as #17 (`bebbb1e`).
+    - docs/activity-log.md, covering this planning session too: the FA and FL auth code read with permission, and the review's fixes.
+  - Commit message for ship: `Web: sign in to see live reports and decide plans, or open the demo`
 
 ## Completed
 

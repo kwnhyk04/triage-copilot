@@ -89,6 +89,7 @@ const decisionBody = z.strictObject({
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
   cursor: z.string().min(1).max(512).optional(),
+  source: z.enum(['live', 'sim']).optional(),
 });
 
 const digest = (value: string) => createHash('sha256').update(value).digest();

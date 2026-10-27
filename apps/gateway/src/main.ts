@@ -33,6 +33,10 @@ let nudgeRelay: () => void = () => undefined;
 const nudge = () => {
   nudgeRelay();
 };
+const reads = {
+  liveTenants: config.LIVE_TENANTS,
+  stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
+};
 const app = await buildApp({
   config,
   ping: db.ping,
@@ -46,8 +50,8 @@ const app = await buildApp({
     config.MAX_NEW_INVESTIGATIONS,
     config.MAX_DAILY_INVESTIGATIONS,
   ),
-  listInvestigations: createListInvestigations(db.sql),
-  getInvestigation: createGetInvestigation(db.sql),
+  listInvestigations: createListInvestigations(db.sql, reads),
+  getInvestigation: createGetInvestigation(db.sql, reads),
 });
 const internal = buildInternalApp({
   config,
