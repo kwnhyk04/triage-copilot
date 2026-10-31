@@ -17,10 +17,15 @@ unexport SIM_ADMIN_URL
 unexport WATCH_FA_TOKEN WATCH_FL_TOKEN
 
 COMPOSE = docker compose -f infra/docker-compose.yml
+# Production is its own compose project (own containers, network and volumes). Compose's own values
+# come from .env.prod, and each service reads its own env file (README, Deploy).
+PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
+	-f infra/docker-compose.prod.yml --env-file .env.prod
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e
+	scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
+	prod-up prod-down prod-token prod-switch prod-digest
 
 install:
 	pnpm install
@@ -181,6 +186,28 @@ digest:
 # live investigation. Writes apps/web/src/demo/generated/eval-runs.ts.
 demo-save:
 	pnpm --filter @triage/gateway demo:save $(IDS)
+
+# Production (README, Deploy): pulls the images, migrates, loads the runbooks, starts the gateway,
+# the agent and the Funnel sidecar, and waits until they are ready. The timeout ends the wait when a
+# container crash-loops, as the gateway does on a setting it refuses; its logs name the setting.
+prod-up:
+	$(PROD) up -d --wait --wait-timeout 300
+
+# Stops and removes production's containers and network. Never -v: the volumes hold its data.
+prod-down:
+	$(PROD) down
+
+# The production database has no host port, so these run inside its containers: a tenant's
+# webhook token (NAME=freight-audit), the kill switches (NAME= STATE=, or none to show them), and a
+# UTC day's uninvestigated alert groups (DAY=YYYY-MM-DD, today by default).
+prod-token:
+	$(PROD) exec -T gateway node src/cli.ts tenant-token $(NAME)
+
+prod-switch:
+	$(PROD) exec -T agent python -m agent.switches $(if $(NAME),set $(NAME) $(STATE),show)
+
+prod-digest:
+	$(PROD) exec -T gateway node src/cli.ts digest $(DAY)
 
 # Replays every failure store: parked gateway outbox messages (the running gateway sends them),
 # agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then

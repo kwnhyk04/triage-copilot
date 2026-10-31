@@ -242,6 +242,23 @@ From the approved design doc:
   - No LLM judge or grader exists; any added later stays off Claude (the user's rule).
   - P2.5 waits (the user, 2026-10-31): after 2026-11-10 the planner starts on the free chain, as decided on 2026-10-24.
 
+- 2026-11-01: Step 10 deploy (PR 2), built on branch `step-10-deploy`. These are the approved plan's decisions, the user's changes, and rulings made while building (each with its cost):
+  - Project: production is its own compose project, `triagecopilot-prod`, with its own volumes (the user's change). `make prod-*` pass `-p` too. Nothing in the Makefile runs `down -v`, and a test checks that.
+  - Ports: only the gateway publishes, on `127.0.0.1:4202` (the user's change), and `watch` posts there through `WATCH_GATEWAY_URL`. Toxiproxy and the observability services also get `ports: !reset []` in production. Otherwise a `COMPOSE_PROFILES` setting would publish them and clash with dev's ports. Cost: step 8 picks production ports for them.
+  - Tailscale image: pinned by digest (the user's addition, 2026-11-01, as FA and FL do), `v1.104.4@sha256:ed6480b3...`, the multi-arch index digest. The other images keep their tags.
+  - Egress: production containers keep open egress until the next PR, which the user builds during the shadow run (the user's addition). FA and FL use internal networks behind a squid egress proxy (docs/threat-notes.md).
+  - Env files: one per service.
+    - `gateway-migrate` gets none, since `drizzle.config.ts` reads only the database URL that `environment:` sets.
+    - The AWS settings for ElasticMQ (`local`) are fixed in `environment:`, since both SDKs need credentials from the default chain.
+  - Healthchecks: the gateway and the agent get `/readyz` healthchecks, and `make prod-up` waits at most 300 s (`--wait-timeout`). This is a correction of my first version, found by the final review: a container that exits at start under `restart: unless-stopped` loops between restarting and starting, its health stays `starting`, and `--wait` alone never ends. So `make prod-up` would have hung on a refused setting instead of failing.
+  - Failed credential checks: counted in memory per address, in fixed one-minute windows (a `ponytail:` note: up to twice the limit across a minute's edge, one gateway).
+    - They count 401s, not 403s. Retry-After runs to the window's end.
+    - The rate limit plugin already sets `RateLimit-*` on every response, so the 429 matches the contract's `TooManyRequests`, and the contract is unchanged.
+  - `GATEWAY_TRUST_PROXY` takes addresses and CIDRs only, a change from the plan's "hop count or CIDR list" (see Known Issues, 2026-11-01). The go-live check reads `remoteAddress` in the request log line, which is `request.ip`, after sending a fake X-Forwarded-For through Funnel. Fastify logs no headers, so the plan's "read x-forwarded-for in the log" could not work as written.
+  - The Funnel check on `/internal/...` reads the 401's challenge (the public listener's `ApiKey header="X-API-Key"` against the internal one's `Bearer`). A 404 there needs the API key on the command line.
+  - Web: the two keys must differ in every environment, as the gateway already requires of its credentials. The placeholders are refused only under production.
+  - P0's records did not ride in PR 2: the passes had not run when it was built.
+
 ## Preferences and Instructions
 
 - 2026-10-14: The three portfolio projects run in parallel Claude Code sessions on one PC, sharing Docker. Each project has its own port range and compose project name; never prune or remove another project's Docker resources (user setup).
@@ -256,6 +273,13 @@ From the approved design doc:
 - 2026-10-15: Waits for a tenant slot used up SQS receives and could dead-letter work, and budget waits held every worker slot. Parking fixed both: the two-agent storm test shows no DLQ entry and every parked investigation running.
 
 ## Known Issues and Pitfalls
+
+- 2026-11-01: Fastify 5.12.7 trusts nothing on a numeric `trustProxy`. Its `lib/request.js` says "Hop-count-only trust cannot validate the immediate peer. Fail closed", and a probe with `trustProxy: 1` gave `request.ip` as the peer, with the X-Forwarded-For entry dropped. Why: a hardening in Fastify 5; the approved plan expected the documented hop-count behavior. What we did:
+  1. `GATEWAY_TRUST_PROXY` refuses numbers and takes addresses or CIDRs.
+  2. The tests went red on that first (`config.test.ts`).
+  3. The go-live check sets the production network's subnet (README, Deploy, check 5).
+
+  Why that was best: a CIDR is the only form Fastify still honors, and without it the gateway stays safe on the sidecar's address.
 
 - 2026-10-28: Windows Smart App Control blocks the venv's unsigned launchers (`.venv\Scripts\alembic.exe` gave os error 4551; the 2026-10-27 entry below), but `.venv\Scripts\python.exe` runs.
   - What we did, with the user's OK for one fix at the source: every make target, script and doc runs Python tools as `uv run python -m <tool>` with the same arguments. That covers pytest, ruff, pyright, alembic and pre_commit, plus `agent`, `executor`, `sim` and `watch`, which got a two-line `__main__.py` each (the user chose that over leaving four dev targets blocked).

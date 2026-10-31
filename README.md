@@ -205,7 +205,7 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit, integration and browser te
 | `make smoke` | One scenario (`SCENARIO=bad-deploy-1`) against the running stack; needs `make dev` with `AI_ENABLED=true` and the provider keys in `.env`. Prints the report, each tool call, tokens and latency per model turn, and the gateway's copy; results go to `evals/reports/runs/` |
 | `make dlq-replay` | Re-queues failed messages: parked gateway outbox rows, `agent-events-dlq.fifo`, `investigations-dlq.fifo`, and the agent's `dead_letters` |
 | `make switch` | Shows the kill switches; `NAME=live\|claude\|planner STATE=on\|off` flips one (live and planner are off, claude on, by default) |
-| `make dev-watch` | Runs `watch` against the apps whose `WATCH_*_TOKEN` is set in `.env` (none by default; see `.env.example`). It reads the real apps, so it is not part of `make dev` |
+| `make dev-watch` | Runs `watch` against the apps whose `WATCH_*_TOKEN` is set in `.env` (none by default; see `.env.example`), posting to `WATCH_GATEWAY_URL`, the production gateway (`127.0.0.1:4202`) by default. It reads the real apps, so it is not part of `make dev` |
 | `make digest` | Lists a UTC day's alert groups that got no investigation, per tenant, with why (only resolved alerts, the 5-minute cap, or the 30-a-day cap); `DAY=YYYY-MM-DD`, today by default |
 | `pnpm --filter @triage/gateway tenant:token <name>` | Issues a tenant's Alertmanager webhook token (creates the tenant if new); prints it once, stores only its SHA-256 |
 | `make infra-down` | Removes this project's containers; data volume stays |
@@ -216,11 +216,66 @@ Demo: `/demo` is public and reads no gateway, so it works while the PC is off; a
 
 Plans: with the `planner` switch on (off until the P2.5 measuring run), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report shows it first, with Approve plan and Reject plan; the decision is recorded once, as the signed-in `operator`, and nothing runs from it yet.
 
-Production runs the same compose file plus an override that unpublishes the database and queue ports and adds restart policies and memory limits:
+## Deploy
 
-```sh
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
-```
+The web runs on Vercel. The backend runs on this PC as its own compose project, `triagecopilot-prod`, with its own containers, network and volumes, so dev, test and eval work run beside it (`docker compose ls` lists both). Production runs the images `publish.yml` pushes from main.
+
+Only the gateway's public port leaves production: on `127.0.0.1:4202` (`PROD_GATEWAY_PORT`) for `watch`, and through a Tailscale Funnel sidecar at `https://triage-copilot.<tailnet>.ts.net`. Postgres, ElasticMQ, the gateway's internal listener (4201) and the agent publish nothing. The sim and the executor are not deployed.
+
+The containers can still reach the internet and this PC. Egress lockdown is the next PR (`docs/threat-notes.md`).
+
+The three env files are never committed (`.gitignore` covers `.env.*`). Make every secret fresh on this PC with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. In production, the gateway and the web refuse the `.env.example` keys.
+
+| File | Read by | Holds |
+| --- | --- | --- |
+| `.env.prod` | compose, for interpolation | `PROD_POSTGRES_PASSWORD`, `PROD_GATEWAY_DB_PASSWORD`, `PROD_AGENT_DB_PASSWORD`; `TC_IMAGES` (`ghcr.io/<owner>`, lower case); `TC_TAG` (`sha-` and the merged commit's first 12 characters, once `publish.yml` has pushed it); `TS_AUTHKEY` (a one-off, tagged, pre-approved auth key: the container keeps it in its environment) |
+| `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY` once checked (check 5) |
+| `.env.prod.agent` | the agent, its migration and the runbook load | the same `AGENT_SERVICE_TOKEN`, `AI_ENABLED=true`, `ANTHROPIC_API_KEY` (the TC workspace's), `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `LIVE_TENANTS` |
+
+The compose file fixes everything container-side: hosts, ports, database URLs, the queue and service addresses, `FASTEMBED_CACHE_PATH` and `NODE_ENV=production`. So a line copied from `.env` cannot point a container at 127.0.0.1 or an H: path.
+
+The agent never holds the approver key, and no container holds the web's sign-in secrets. `.env` keeps `PROD_GATEWAY_PORT`, and `FASTEMBED_CACHE_PATH`, the cache mounted read-only into the agent.
+
+| Target | Does |
+| --- | --- |
+| `make prod-up` | Pulls the images; migrates both schemas and loads the runbooks in one-shot containers; starts Postgres, ElasticMQ, the gateway, the agent and the Funnel sidecar; waits at most 300 s for the gateway and the agent to answer `/readyz`. If the wait ends there, `docker compose -p triagecopilot-prod ps -a` shows which service is not up, and `docker compose -p triagecopilot-prod logs <service> --tail 30` names the setting it refused |
+| `make prod-down` | Removes production's containers and network; the volumes stay (never `-v`) |
+| `make prod-token NAME=<tenant>` | Issues a tenant's webhook token in the production database (it has no host port) |
+| `make prod-switch [NAME= STATE=]` | The production agent's kill switches |
+| `make prod-digest [DAY=]` | A UTC day's uninvestigated alert groups in production |
+
+Tailscale: turn on MagicDNS and HTTPS certificates, and allow Funnel for the auth key's tag in the policy file (the `funnel` node attribute).
+
+GHCR: if the `triage-copilot-*` packages are private, run `docker login ghcr.io` once with a read-only token (`read:packages`) before `make prod-up`.
+
+Vercel: import the GitHub repo as a project, with root directory `apps/web` and Node 24.
+- Production environment variables:
+  - `GATEWAY_URL`: the Funnel URL.
+  - `GATEWAY_API_KEY` and `APPROVER_API_KEY`: as in `.env.prod.gateway`.
+  - `LOGIN_PASSWORD_HASH`: what `pnpm --filter @triage/web hash-password` prints.
+  - `SESSION_SECRET`: a fresh secret.
+- Add a Firewall rate-limit rule on path `/login`, method POST, since the sign-in limit holds per server instance.
+- If the first build fails on pnpm 12, add `ENABLE_EXPERIMENTAL_COREPACK=1`.
+
+Checks after `make prod-up`, in PowerShell:
+
+1. Run `docker compose -p triagecopilot-prod ps`. Only the gateway shows a port: `127.0.0.1:4202->4200/tcp`.
+2. Run `docker compose -p triagecopilot-prod exec tailscale tailscale funnel status`. Funnel is on, and `https://triage-copilot.<tailnet>.ts.net` proxies `/` to `http://gateway:4200` and nothing else.
+
+Run checks 3 to 5 from a device that is not on the tailnet. On a tailnet device the name resolves over the tailnet, not through Funnel. A 429 there means strangers used up this minute's failed checks: wait a minute.
+
+3. Run `curl.exe -si https://triage-copilot.<tailnet>.ts.net/internal/actions/00000000-0000-4000-8000-000000000000/execution`. Expect 401 with `www-authenticate: ApiKey header="X-API-Key"`, the public listener's challenge, never the internal listener's `Bearer`.
+4. Run `curl.exe -s -o NUL -w "%{http_code}" https://triage-copilot.<tailnet>.ts.net/v1/investigations`. Expect 401.
+5. The client address. This check is optional: without the setting, every Funnel client shares the sidecar's address, and the web, which always sends its key, is never held back.
+   1. Read the network's subnet: `docker network inspect triagecopilot-prod_default --format "{{range .IPAM.Config}}{{.Subnet}}{{end}}"`.
+   2. Put the subnet in `.env.prod.gateway` as `GATEWAY_TRUST_PROXY`, then run `make prod-up`.
+   3. Run `curl.exe -s -H "X-Forwarded-For: 192.0.2.1" https://triage-copilot.<tailnet>.ts.net/healthz`.
+   4. Run `docker compose -p triagecopilot-prod logs gateway --since 2m | Select-String healthz`. The healthcheck asks for `/readyz`, so this shows only your request. Its `remoteAddress` must be your own public address, never 192.0.2.1 or the sidecar's.
+   5. If it is not, remove the line and run `make prod-up` again.
+
+   A re-created network can get another subnet. The gateway then falls back to the sidecar's address.
+6. On Vercel, sign in on desktop and phone, in both themes, and open a report. Then run `make prod-down` and reload: the site shows the demo with the offline note. Run `make prod-up` again.
+7. With production up, run `make infra-up` and `make test-int`. They run beside production, and `docker compose ls` lists `triagecopilot` and `triagecopilot-prod`. Then run `make infra-down`.
 
 ## Known gaps
 

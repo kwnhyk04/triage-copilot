@@ -1,4 +1,4 @@
-import { type Env, loadConfig, z } from '@triage/ts-config';
+import { type Env, isPlaceholder, loadConfig, z } from '@triage/ts-config';
 
 import { parseHash } from './password.ts';
 
@@ -39,6 +39,17 @@ export const loadWebConfig = (env?: Env) =>
         if (secret === config.GATEWAY_API_KEY || secret === config.APPROVER_API_KEY) {
           const message = 'must differ from GATEWAY_API_KEY and APPROVER_API_KEY';
           ctx.addIssue({ code: 'custom', path: ['SESSION_SECRET'], message });
+        }
+        // The approver key alone may decide plans, so it is never the read key too.
+        if (config.APPROVER_API_KEY === config.GATEWAY_API_KEY) {
+          const message = 'must differ from GATEWAY_API_KEY';
+          ctx.addIssue({ code: 'custom', path: ['APPROVER_API_KEY'], message });
+        }
+        for (const name of ['GATEWAY_API_KEY', 'APPROVER_API_KEY'] as const) {
+          if (config.NODE_ENV === 'production' && isPlaceholder(config[name])) {
+            const message = 'is the .env.example placeholder; make a fresh one';
+            ctx.addIssue({ code: 'custom', path: [name], message });
+          }
         }
       }),
     env,

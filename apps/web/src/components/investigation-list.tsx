@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 import type { Investigation, Source } from '../lib/investigations.ts';
 import { ago, band, causeBrief, STATUSES, stillChanging } from '../lib/report.ts';
@@ -21,9 +22,15 @@ type Summary = Pick<
 >;
 
 export const ILLUSTRATIVE_LABEL = 'Illustrative sample, not a real incident';
-const EMPTY: Record<Source, string> = {
+const EMPTY: Record<Source, ReactNode> = {
   live: 'No live incidents yet.',
-  sim: 'No eval runs yet.',
+  // Production keeps no eval runs; the demo shows recorded ones.
+  sim: (
+    <>
+      No eval runs here. <Link href="/demo?source=sim">See the recorded eval runs in the demo</Link>
+      .
+    </>
+  ),
 };
 export const TABS: Record<Source, string> = { live: 'Live incidents', sim: 'Eval runs' };
 

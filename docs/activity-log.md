@@ -19,6 +19,86 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-01: PR 2, step 10 deploy and the "Before step 10" items, built on branch step-10-deploy
+
+- What happened: the user asked for PR 2 of the go-live plan approved on 2026-10-31, with their changes. The changes: production as its own compose project and volumes, the prod gateway on 127.0.0.1:4202 with `watch` pointed there, and `next` 16.4.3. Claude Code wrote an execution plan. The user turned down its first version with two additions:
+  - pin the Tailscale image by digest, as FA and FL do;
+  - record TC's missing egress lockdown (FA and FL use internal networks behind a squid egress proxy) as the next PR, built during the shadow run.
+
+  Then PR 2 was built, tests first, on `step-10-deploy` from `origin/main` (`39f4549`, #19). Nothing is committed, and no production container was started.
+- Why: production has to run on this PC beside dev work, reachable only through Funnel. Key guessing has to be throttled, and the `.env.example` keys must never run in production, all before the credits end on 2026-11-10.
+- What we did:
+  1. Read-only checks first: main equalled origin/main; 4202 was free (netstat, docker ps); no `triagecopilot` container ran; P0's passes had not run. The user's message named the plan as "<plan file path>"; it was found by searching `%USERPROFILE%\.claude\plans` for the section title.
+  2. `git fetch origin`, then `git switch -c step-10-deploy origin/main`. That set `origin/main` as the branch's upstream, so `git branch --unset-upstream` removed it, and no bare push could ever aim at main.
+  3. RED then GREEN per task:
+     - `PLACEHOLDERS` and `isPlaceholder` in `@triage/ts-config`, with a test that keeps them equal to `.env.example`;
+     - the gateway settings (`NODE_ENV`, `AUTH_FAILURES_PER_MINUTE`, `GATEWAY_TRUST_PROXY`, the placeholder refusal);
+     - the gateway's `credentialLimit` and trust proxy;
+     - the web's key checks;
+     - the Eval runs tab's empty text;
+     - watch's `WATCH_GATEWAY_URL`;
+     - `test_prod_compose.py`, then `infra/docker-compose.prod.yml`, `infra/tailscale/serve.json` and the Makefile's `prod-*` targets.
+  4. Found while testing: Fastify 5.12.7 trusts nothing on a numeric `trustProxy` (docs/memory.md, Known Issues, 2026-11-01). So `GATEWAY_TRUST_PROXY` refuses hop counts, a change from the plan's "hop count or CIDR list". The tests went red on that first.
+  5. `next` and `eslint-config-next` 16.4.3 through `pnpm install`. The store already held them (0 downloads), `pnpm-workspace.yaml` stayed unchanged, and no 16.4.2 is left in the lockfile.
+  6. A read-only `docker compose config --no-env-resolution` render, with fake values from a scratchpad file. With and without the `chaos` and `observability` profiles, only `127.0.0.1:4202->4200` is published.
+  7. Docs: README (a Deploy section in place of the old raw compose command), AGENTS.md (the second project name), the new docs/threat-notes.md, docs/context.md, docs/memory.md, docs/todo.md, and this entry.
+  8. A fresh read-only reviewer (opus) read the whole diff (Final review, below).
+  - Why this was the best option: the plan was approved and reviewed. The rulings in docs/memory.md (2026-11-01, PR 2) cover only what it left open or what turned out wrong.
+- Small events:
+  - GateGuard asked for facts before the first Bash call and before the first edit or creation of each file, about 30 times; stating them cleared each.
+  - One scratchpad write was blocked by the gate. The config render that ran in the same batch failed with "couldn't find env file", then passed once the file was written.
+  - `git rev-parse --short HEAD origin/main` failed ("Needed a single revision"), since `--short` takes one revision; two calls fixed it.
+  - `make lint` failed twice on my own mistakes:
+    - ESLint `no-unsafe-assignment` on a tuple swap that built `new Map()` (now `failures.clear()`);
+    - Prettier on one long line in `config.test.ts`, and ruff E501 in `test_prod_compose.py`, fixed by hand. The third run passed.
+  - `make typecheck` failed once: pyright knows no types for PyYAML's loader API, so `add_constructor` is called through `cast("Any", ...)`.
+  - The gateway Jest logs two expected error lines (the 503 tests).
+  - The gitleaks hook was not run locally, as before; CI scans every push.
+- Files:
+  - `Makefile`, `.env.example`, `package.json`, `apps/web/package.json`, `pnpm-lock.yaml`;
+  - `packages/ts-config/src/index{,.test}.ts`;
+  - `apps/gateway/src/{app,app.test,config,config.test,testing}.ts`;
+  - `apps/web/src/lib/config{,.test}.ts`, `apps/web/src/components/investigation-list{,.test}.tsx`;
+  - `services/watch/src/watch/main.py`, `services/watch/tests/test_watch_api.py`, `services/agent/tests/test_prod_compose.py`;
+  - `infra/docker-compose.prod.yml`, `infra/tailscale/serve.json`;
+  - `README.md`, `AGENTS.md`, `docs/{threat-notes,context,memory,todo,activity-log}.md`.
+- Validation (2026-11-01), each exit code:
+  - `make lint` 2, 2, then 0;
+  - `make typecheck` 2, then 0;
+  - `make test` 0 (Jest ts-config 3, ts-clients 52, gateway 72, web 84; pytest 644);
+  - `make contracts-check` 0;
+  - `make contracts-breaking` 0 (no changes);
+  - `make build` 0 (Next.js 16.4.3, no warnings);
+  - `make test-int` 0 (Jest 46, pytest 71, 169 s), on infra it started, then `make infra-down` 0;
+  - `make test-e2e` 0 (17 passed);
+  - after the fix pass, `make lint` 0 and `make test` 0 (pytest 644).
+
+  No model call, no eval, no production container, and nothing of FA or FL was touched.
+- Final review, verdict "with fixes", no Critical:
+  - Fixed, Important: `make prod-up` would have hung forever on a refused setting. The gateway exits at start, `restart: unless-stopped` loops it, its health stays `starting`, and `--wait` alone never ends. That contradicted my Ruling 2 and its docs.
+    - Fix: `--wait-timeout 300`.
+    - Test: `test_prod_compose.py` went RED, then GREEN.
+    - Docs: context.md, memory.md and README corrected; README says how to read the refused setting.
+  - Fixed, Important: this entry was missing.
+  - Re-graded to Important and fixed, README only:
+    - an unconfirmed fallback socket path, removed;
+    - no GHCR login step, added;
+    - check 5's log command could miss the request; it now filters for `healthz`;
+    - checks 3 to 5 must run off the tailnet;
+    - a one-off auth key.
+  - Deferred, Minor:
+    - the read-only model mount relies on the cache's NTFS symlinks resolving inside Linux containers (a failure would show at `agent-runbooks`);
+    - `/readyz` is reachable through Funnel with no limit (docs/threat-notes.md);
+    - the sidecar shares the network with Postgres and ElasticMQ, and subnet trust covers the agent and the host bridge (docs/threat-notes.md, egress PR);
+    - `GATEWAY_TRUST_PROXY` accepts `0.0.0.0/0` and `::/0`;
+    - the failure 429 carries the request budget's `RateLimit-Remaining`;
+    - production inherits dev's `COMPOSE_PROFILES` (its ports are reset, so nothing clashes).
+- Outstanding:
+  - The user ships PR 2.
+  - Once `publish.yml` has pushed the merge commit's images: the env files and the go-live checks (README, Deploy), Vercel, the GHCR login if the packages are private, and P1.12 with its shadow run.
+  - P0's two passes are still to run; their records go in a later PR.
+  - The egress lockdown PR, during the shadow run.
+
 ### 2026-10-31 to 2026-11-01: Go-live plan approved; PR 1, Claude first everywhere, built on branch claude-first
 
 - What happened: the user asked for the shortest path to go-live before the Claude credits end on 2026-11-10. Claude Code read the docs and code, had the draft checked by an independent read-only review (its defects were fixed in the plan), and the user approved the plan on 2026-10-31 with four changes: a separate production compose project and volumes on its own gateway port, `next` 16.4.3 in PR 2, the broader Claude fall-through, and P2.5 left out. Then PR 1 was built, tests first, on branch `claude-first` from `main` (`d425141`). Nothing is committed.

@@ -1,41 +1,186 @@
-# Production override, applied on top of docker-compose.yml:
-#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
-# Postgres and the queue publish no ports; only containers on the compose network reach them.
+# Production, on top of docker-compose.yml, as its own compose project: its containers, network and
+# volumes (triagecopilot-prod_pgdata, _elasticmq-data, _tailscale-state) never mix with dev's, so
+# dev, test and eval work run beside it. Run it through make (prod-up, prod-down, prod-token,
+# prod-switch, prod-digest), which loads .env and reads .env.prod for the names below.
+# Only the gateway's public port leaves it: on 127.0.0.1 for watch, and through Tailscale Funnel.
+name: triagecopilot-prod
+
+# Fixed here, not in the env files, so a line copied from .env never points a container at
+# 127.0.0.1 or an H: path. environment beats env_file.
+x-agent-env: &agent-env
+  AGENT_HOST: 0.0.0.0
+  AGENT_PORT: 4210
+  AGENT_DATABASE_URL: postgresql+psycopg://agent:${PROD_AGENT_DB_PASSWORD:?set PROD_AGENT_DB_PASSWORD in .env.prod}@postgres:5432/triage
+  SQS_ENDPOINT_URL: http://elasticmq:9324
+  # ElasticMQ takes any credentials; the SDKs still want some.
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: local
+  AWS_SECRET_ACCESS_KEY: local
+  GATEWAY_INTERNAL_URL: http://gateway:4201
+  FASTEMBED_CACHE_PATH: /models/fastembed
+
 services:
   postgres:
     ports: !reset []
     restart: unless-stopped
     mem_limit: 512m
+    # Production's own passwords; the init script gives the two roles theirs on the first start.
+    environment:
+      POSTGRES_PASSWORD: ${PROD_POSTGRES_PASSWORD:?set PROD_POSTGRES_PASSWORD in .env.prod}
+      GATEWAY_DB_PASSWORD: ${PROD_GATEWAY_DB_PASSWORD:?set PROD_GATEWAY_DB_PASSWORD in .env.prod}
+      AGENT_DB_PASSWORD: ${PROD_AGENT_DB_PASSWORD:?set PROD_AGENT_DB_PASSWORD in .env.prod}
 
   elasticmq:
     ports: !reset []
     restart: unless-stopped
     mem_limit: 256m
-    # Repeated from the base file so production keeps queued messages even if dev drops the volume.
-    volumes:
-      - elasticmq-data:/data
 
-  # Fault injection is for tests; in production it starts only with --profile chaos.
+  # Fault injection is for tests; in production it starts only with --profile chaos. Neither it nor
+  # the observability services publish a port, so no profile ever clashes with dev's ports.
   toxiproxy:
     profiles: [chaos]
+    ports: !reset []
     restart: unless-stopped
     mem_limit: 64m
 
   otel-collector:
+    ports: !reset []
     restart: unless-stopped
     mem_limit: 256m
 
   jaeger:
+    ports: !reset []
     restart: unless-stopped
     mem_limit: 512m
 
   prometheus:
+    ports: !reset []
     restart: unless-stopped
     mem_limit: 256m
 
   grafana:
+    ports: !reset []
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # The images publish.yml pushes from main, pinned to the merged commit (TC_TAG=sha-<12>).
+  gateway-migrate:
+    image: &gateway-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-gateway:${TC_TAG:?set TC_TAG in .env.prod}
+    command: [pnpm, db:migrate]
+    environment:
+      GATEWAY_DATABASE_URL: &gateway-db postgres://gateway:${PROD_GATEWAY_DB_PASSWORD:?set PROD_GATEWAY_DB_PASSWORD in .env.prod}@postgres:5432/triage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    image: *gateway-image
+    env_file: ../.env.prod.gateway
+    environment:
+      NODE_ENV: production
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 4200
+      # The agent's alert context (and one day the executor's claims): on this network only.
+      GATEWAY_INTERNAL_HOST: 0.0.0.0
+      GATEWAY_INTERNAL_PORT: 4201
+      GATEWAY_DATABASE_URL: *gateway-db
+      SQS_ENDPOINT_URL: http://elasticmq:9324
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AGENT_URL: http://agent:4210
+    # The only published port: watch posts here, and the Funnel sidecar reaches gateway:4200.
+    ports:
+      - 127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4200
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:4200/readyz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticmq:
+        condition: service_started
+      gateway-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 512m
+
+  agent-migrate:
+    image: &agent-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-agent:${TC_TAG:?set TC_TAG in .env.prod}
+    command: [alembic, -c, services/agent/alembic.ini, upgrade, head]
+    env_file: ../.env.prod.agent
+    environment: *agent-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Embeds runbooks/ into the fresh database; it replaces earlier chunks, so every start may rerun it.
+  agent-runbooks:
+    image: *agent-image
+    command: [python, -m, agent.runbooks, ingest]
+    env_file: ../.env.prod.agent
+    environment: *agent-env
+    volumes:
+      - ${FASTEMBED_CACHE_PATH:?set FASTEMBED_CACHE_PATH in .env}:/models/fastembed:ro
+    depends_on:
+      agent-migrate:
+        condition: service_completed_successfully
+
+  agent:
+    image: *agent-image
+    env_file: ../.env.prod.agent
+    environment: *agent-env
+    volumes:
+      - ${FASTEMBED_CACHE_PATH:?set FASTEMBED_CACHE_PATH in .env}:/models/fastembed:ro
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4210/readyz', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticmq:
+        condition: service_started
+      agent-migrate:
+        condition: service_completed_successfully
+      agent-runbooks:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 2g
+
+  # Tailscale Funnel: https://triage-copilot.<tailnet>.ts.net to the gateway's public port only
+  # (tailscale/serve.json). Pinned by digest.
+  tailscale:
+    image: tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c
+    hostname: triage-copilot
+    environment:
+      # A tagged, pre-approved auth key, used once: the state volume keeps the node after that.
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env.prod}
+      TS_AUTH_ONCE: 'true'
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    depends_on: [gateway]
     restart: unless-stopped
     mem_limit: 256m
 
 volumes:
-  elasticmq-data:
+  tailscale-state:

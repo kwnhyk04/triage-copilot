@@ -46,9 +46,11 @@ describe('InvestigationList', () => {
     expect(shown()).not.toContain('Older');
   });
 
-  it('says when a tab is empty', () => {
+  it('says when a tab is empty, and points to the demo for eval runs, which production keeps none of', () => {
     expect(shown({ items: [] })).toContain('No live incidents yet.');
-    expect(shown({ items: [], source: 'sim' })).toContain('No eval runs yet.');
+    const sim = shown({ items: [], source: 'sim' });
+    expect(sim).toContain('No eval runs here.');
+    expect(sim).toContain('<a href="/demo?source=sim">');
   });
 
   it('labels the illustrative samples it is told of', () => {

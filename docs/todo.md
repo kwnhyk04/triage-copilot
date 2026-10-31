@@ -118,7 +118,7 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - Like the triage cap, the planner cap's check and its call are not one transaction: 5 plans at once could each pass it.
 - [ ] (The user's call) Size the 15-call cap for Haiku from data: it forced 47 of the second configuration's 75 reports, so how many calls Haiku would use is not measured. Measuring it takes a run with a higher call cap, which breaks the design's 15-call gate by construction.
 - [ ] Two advisories have no fix inside current constraints (docs/activity-log.md, 2026-10-24): pillow 12.3.0 (41, fix 13.0.0, blocked by fastembed `pillow<13`) and esbuild <=0.24.2 (GHSA-67mh-4wv8-2f99, via `drizzle-kit` 0.31.11 `@esbuild-kit/esm-loader`; only drizzle-kit 1.0 beta/rc drops it). Done when `pnpm audit` and `uv audit` list nothing, with no ignore entries.
-- [ ] Move `next` and `eslint-config-next` from 16.4.2 to 16.4.3 once it is past pnpm's release-age gate (published 2026-10-23).
+- [x] Move `next` and `eslint-config-next` from 16.4.2 to 16.4.3 once it is past pnpm's release-age gate (published 2026-10-23). Done in PR 2 (2026-11-01, branch `step-10-deploy`): `pnpm-workspace.yaml` unchanged, the lockfile holds 16.4.3 only.
 - [ ] Add `pnpm audit` and `uv audit` to CI (`.github/workflows/ci.yml` has only gitleaks and actionlint), so advisories fail in the pull request, not later.
 - [ ] (Later, the user's call) Haiku with thinking. Every Claude turn forces its tool call, so Haiku 5.5 never thinks (0 thought tokens on all 864 calls of run 1), while Gemini thinks at LOW. Turning it on needs: `tool_choice` `auto` on investigation turns; a path for a reply without a tool call (a nudge text would change the prompt sha); thinking blocks stored in `tool_calls.provider_state` and replayed unchanged, with a test that each rebuilt request matches the previous one byte for byte (Haiku 5.5 answers 400 when a replayed block follows an edited turn); a larger turn output cap, so a larger token cap; explicit `thinking` and `effort`; a cache key and report label for it; then one Haiku dev pass (about $0.15) before any test split.
 - [ ] (manual) Get free API keys: Google AI Studio (Gemini) and NVIDIA build. Put them in `.env`, never in the repo.
@@ -146,11 +146,11 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
   - Fidelity gaps: `direction` is case-sensitive, there is no POST form for query_range, and `/api/v1/labels`, `/api/v1/series` and the Loki label routes answer 404 outside the Prometheus envelope.
   - Activation with an anchor outside 1970 to 3000 answers 500 on Windows (timestamp formatting); bound `Activation.anchor`.
 - [x] (Done as P1.3, 2026-10-25; the tool shows them only for the live tool set) Store Alertmanager annotations (`summary`, `description`, `runbook_url`) in the gateway with an expand-only migration (a nullable `alerts.annotations jsonb`, written at intake), and return them from `GET /internal/investigations/{id}/alerts` (a new optional field in `StoredAlert`, gateway API minor version) and from `get_alert_context`. Real alerts carry key evidence there; today only labels are stored. Done when an alert posted with annotations shows its summary, description and runbook URL in the tool's result.
-- [ ] Before step 10: the gateway's internal listener (4201) binds only the internal Docker network in `docker-compose.prod.yml` and is never published; check that Tailscale Funnel exposes only the public port.
-- [ ] Before step 10: check which client address the gateway sees behind Tailscale Funnel. If it is the proxy's, set Fastify `trustProxy`, or every request without a credential shares one rate-limit count. Then limit failed credential checks per address: today each invented key gets its own rate-limit count, unknown routes included, so key guessing is never throttled (independent review, 2026-10-15). Also refuse the `.env.example` placeholder keys at startup.
+- [ ] Before step 10: the gateway's internal listener (4201) binds only the internal Docker network in `docker-compose.prod.yml` and is never published; check that Tailscale Funnel exposes only the public port. Built in PR 2 (2026-11-01): 4201 is on the production network only, never published (`test_prod_compose.py`). Open: the user's Funnel checks after `make prod-up` (README, Deploy, checks 1 to 3).
+- [ ] Before step 10: check which client address the gateway sees behind Tailscale Funnel. If it is the proxy's, set Fastify `trustProxy`, or every request without a credential shares one rate-limit count. Then limit failed credential checks per address: today each invented key gets its own rate-limit count, unknown routes included, so key guessing is never throttled (independent review, 2026-10-15). Also refuse the `.env.example` placeholder keys at startup. Built in PR 2 (2026-11-01): `GATEWAY_TRUST_PROXY` (addresses or CIDRs; Fastify 5.12.7 trusts nothing on a hop count), `AUTH_FAILURES_PER_MINUTE` (20, then 429), and production refuses the placeholder keys in the gateway and the web. Open: the user's client-address check (README, Deploy, check 5).
 - [ ] Per-kind parameter schemas for ActionProposed and ActionApproved (for example `rollback_deploy` requires `to_version`): the executor rejects unknown or missing parameters.
 - [ ] Emit an early hypothesis step, so time to first hypothesis is measured directly instead of by its proxy (webhook intake to the report, an upper bound) and step 9's timeline can show it. Today hypotheses exist only in the final report. A new step kind needs StepRecorded v4 (expand, migrate, contract) or a `hypothesis` step with the existing kind; the job records it the first time the model names a likely cause, and the eval harness reads its `recorded_at`. Done when the eval report measures time to first hypothesis from that step and the timeline shows it.
-- [ ] Before step 10: the sim's admin port (`SIM_ADMIN_PORT`, 4231) is never published in `docker-compose.prod.yml`, and only the eval harness gets `SIM_ADMIN_URL`.
+- [x] Before step 10: the sim's admin port (`SIM_ADMIN_PORT`, 4231) is never published in `docker-compose.prod.yml`, and only the eval harness gets `SIM_ADMIN_URL`. Done in PR 2 (2026-11-01): production deploys neither the sim nor the executor, and `test_prod_compose.py` finds no published 4231 and no `SIM_ADMIN_URL` in any service.
 - [ ] 7. CI/CD: GitHub Actions for test, build, docker push; actionlint passes; test PR green
   - [x] Built locally (2026-10-17): `ci.yml`, `publish.yml`, `eval.yml`, the setup action, `scripts/ci_env.sh`, `infra/docker/` images and `.dockerignore`. actionlint passes; all four images build; lint, typecheck, unit tests, build, contracts and scenario checks pass; gitleaks finds nothing.
   - [x] The GitHub steps (now under Completed), then the test PR green on `ci-result` and the images in GHCR: done, the user confirmed on 2026-10-18 (PR #1 is `0779d77` on origin/main).
@@ -161,11 +161,34 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 - [x] 9. Review UI and demo mode: login, backend-for-frontend, demo snapshot shown when the backend is offline; Playwright tests pass (built 2026-10-27 and 2026-10-28 on `step-9-web`, not committed; resolvers moved to "when a GraphQL consumer exists"). The user's hand check, signing in on desktop and phone in both themes, is open (In Progress).
 - [ ] After P1.12's shadow run, and the user's review (FA and FL data is private): replace the demo's three illustrative live samples (`apps/web/src/demo/live-samples.ts`) with real live reports.
 - [ ] 10. Deploy: UI on Vercel, backend on the PC via Tailscale Funnel; phone test passes; 401 without API key; demo mode when the PC is off. Also: a Vercel firewall rule on `POST /login` (the sign-in limit holds per server instance), and refuse the `.env.example` placeholder keys and any empty or reused web secret at startup.
+  - Built in PR 2 (2026-11-01, branch `step-10-deploy`, not committed):
+    - the production compose project `triagecopilot-prod`, with the Funnel sidecar pinned by digest;
+    - the `make prod-*` targets;
+    - the gateway's and the web's key checks;
+    - README, Deploy.
+  - Open, the user's:
+    - the env files;
+    - `make prod-up`;
+    - the README checks;
+    - the Vercel project with its firewall rule;
+    - the phone test.
+- [ ] Next PR, built during the shadow run (the user, 2026-11-01): egress lockdown for production, as FreightAudit and FilingLens have (docs/threat-notes.md). It covers:
+  - internal networks for Postgres, ElasticMQ, the gateway and the agent;
+  - a squid egress proxy that allows only the model providers' hosts, used by the agent;
+  - the Tailscale sidecar's own route out;
+  - a routed edge for the gateway's 127.0.0.1:4202 that gives the gateway no way out;
+  - a compose test.
+
+  Done when no production app container reaches the internet or this PC's listeners except through the proxy's allowlist.
 
 ## In Progress
 
 - Go-live before 2026-11-10 (plan approved 2026-10-31: `%USERPROFILE%\.claude\plans\pasted-content-id-9a4f-read-docs-todo-m-abstract-donut.md`): PR 1, Claude first everywhere, is built on branch `claude-first` with every check green (docs/activity-log.md, 2026-11-01), not committed; the user ships it. Then P0's two passes (P0 step 3), PR 2 (step 10, the four "Before step 10" items, `next` 16.4.3, production as its own compose project `triagecopilot-prod`), and P1.12.
 - Correction (2026-11-01): step 9 merged as #18 (`d425141`); the step 9 lines below that say nothing is committed are out of date. Only its hand check is open, and it folds into step 10's phone test.
+- 2026-11-01: PR 1 merged as #19 (`39f4549`).
+  - PR 2 was built on branch `step-10-deploy` from it, with every check green (docs/activity-log.md, 2026-11-01), and is not committed. It holds step 10, the "Before step 10" items, `next` 16.4.3 and production as its own compose project. The user ships it.
+  - P0's passes have not run yet; their records go in a later PR.
+  - After PR 2 come the user's go-live steps (README, Deploy; the plan's go-live section), P1.12 with its 3-day shadow run, and, during the shadow run, the egress lockdown PR (Pending).
 - P0, proposal check version 2: built and merged as #12 (`58fdd00`; corrected 2026-10-26, this line said nothing was committed). The two dev passes are the user's to run, with the steps and estimates under Pending (P0, step 3).
 - P2.1 to P2.4 merged as #17 (`bebbb1e`; corrected 2026-10-28, this line said they sat uncommitted on `p2-planner`). P2.5, the measuring run, is the user's.
 - Step 9, the web UI.

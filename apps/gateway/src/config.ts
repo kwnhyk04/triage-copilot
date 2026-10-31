@@ -1,4 +1,4 @@
-import { type Env, loadConfig, z } from '@triage/ts-config';
+import { type Env, isPlaceholder, loadConfig, z } from '@triage/ts-config';
 
 // Each grants different powers, so no two may be the same secret.
 const CREDENTIALS = [
@@ -29,11 +29,26 @@ export const liveTenantsSetting = z.string().default('{}').transform(liveTenantI
 export const liveTenantsRequired = z.string().transform(liveTenantIds);
 /** Minutes without a step (or a message without a receive) before an investigation counts as stuck. */
 export const stuckAfterMinutesSetting = z.coerce.number().int().positive().default(10);
+const proxyAddress = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);
+// The proxies in front, as Fastify's trustProxy: their addresses and CIDRs. Never true, which would
+// take any client's X-Forwarded-For as its address, nor a hop count, on which Fastify trusts nothing.
+const trustProxySetting = z
+  .string()
+  .transform((value, ctx) => {
+    const proxies = value.split(',').map((item) => item.trim());
+    if (proxies.every((item) => proxyAddress.safeParse(item).success)) return proxies;
+    const message = 'takes the proxies as addresses or CIDRs, never true or a hop count';
+    ctx.addIssue({ code: 'custom', message });
+    return z.NEVER;
+  })
+  .optional();
 
 export const loadGatewayConfig = (env?: Env) =>
   loadConfig(
     z
       .object({
+        // The production compose sets production, which refuses the .env.example keys.
+        NODE_ENV: z.string().optional(),
         GATEWAY_HOST: z.string().default('127.0.0.1'),
         GATEWAY_PORT: z.coerce.number().int().default(4200),
         GATEWAY_DATABASE_URL: z.url(),
@@ -56,6 +71,10 @@ export const loadGatewayConfig = (env?: Env) =>
         AGENT_EVENTS_DLQ: z.string().min(1).default('agent-events-dlq.fifo'),
         // Requests per minute for each credential, or each client address without one.
         RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
+        // Failed credential checks (401) one client address may make a minute; past it, 429.
+        AUTH_FAILURES_PER_MINUTE: z.coerce.number().int().positive().default(20),
+        // Behind Tailscale Funnel the client address is the sidecar's unless its proxy is trusted.
+        GATEWAY_TRUST_PROXY: trustProxySetting,
         // Investigations one tenant may start within any 5 minutes; later groups go uninvestigated.
         MAX_NEW_INVESTIGATIONS: z.coerce.number().int().nonnegative().default(5),
         // And within one UTC day: 30 triages a day per app (each app is one tenant).
@@ -77,6 +96,10 @@ export const loadGatewayConfig = (env?: Env) =>
         CREDENTIALS.forEach((name, i) => {
           if (CREDENTIALS.slice(0, i).some((other) => config[other] === config[name])) {
             ctx.addIssue({ code: 'custom', path: [name], message: 'must differ from the others' });
+          }
+          if (config.NODE_ENV === 'production' && isPlaceholder(config[name])) {
+            const message = 'is the .env.example placeholder; make a fresh one';
+            ctx.addIssue({ code: 'custom', path: [name], message });
           }
         });
       }),

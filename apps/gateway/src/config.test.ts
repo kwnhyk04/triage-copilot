@@ -1,4 +1,4 @@
-import { loadConfig, z } from '@triage/ts-config';
+import { loadConfig, PLACEHOLDERS, z } from '@triage/ts-config';
 
 import { liveTenantsRequired, loadGatewayConfig } from './config.ts';
 
@@ -43,6 +43,64 @@ describe('LIVE_TENANTS', () => {
   ])('refuses %s, naming the variable', (_case, value) => {
     expect(() => loadGatewayConfig({ ...env, LIVE_TENANTS: value })).toThrow(
       'LIVE_TENANTS: must map tenant uuids to freight-audit or filing-lens, as JSON',
+    );
+  });
+});
+
+describe('in production', () => {
+  it('refuses any key or token still at its .env.example value', () => {
+    for (const name of [
+      'APPROVER_API_KEY',
+      'GATEWAY_API_KEY',
+      'AGENT_SERVICE_TOKEN',
+      'EXECUTOR_SERVICE_TOKEN',
+    ] as const) {
+      const load = () =>
+        loadGatewayConfig({ ...env, NODE_ENV: 'production', [name]: PLACEHOLDERS[name] });
+      expect(load).toThrow(`${name}: is the .env.example placeholder`);
+      expect(load).not.toThrow(PLACEHOLDERS[name]);
+    }
+  });
+
+  it('runs on fresh keys, and dev runs on the .env.example ones', () => {
+    expect(() => loadGatewayConfig({ ...env, NODE_ENV: 'production' })).not.toThrow();
+    expect(() => loadGatewayConfig({ ...env, ...PLACEHOLDERS })).not.toThrow();
+  });
+});
+
+describe('GATEWAY_TRUST_PROXY', () => {
+  it('is off by default and takes the proxies as addresses and CIDRs', () => {
+    expect(loadGatewayConfig(env).GATEWAY_TRUST_PROXY).toBeUndefined();
+    const empty = { ...env, GATEWAY_TRUST_PROXY: '' };
+    expect(loadGatewayConfig(empty).GATEWAY_TRUST_PROXY).toBeUndefined();
+    const proxies = { ...env, GATEWAY_TRUST_PROXY: '172.18.0.0/16, 10.0.0.1, ::1' };
+    expect(loadGatewayConfig(proxies).GATEWAY_TRUST_PROXY).toEqual([
+      '172.18.0.0/16',
+      '10.0.0.1',
+      '::1',
+    ]);
+  });
+
+  // true would take any client's X-Forwarded-For as its address, and Fastify trusts nothing on a
+  // hop count, since it cannot check the peer.
+  it.each(['true', 'false', '1', '0', 'gateway', '300.1.1.1', '10.0.0.0/33', '10.0.0.1,'])(
+    'refuses %s, naming the variable',
+    (value) => {
+      expect(() => loadGatewayConfig({ ...env, GATEWAY_TRUST_PROXY: value })).toThrow(
+        'GATEWAY_TRUST_PROXY: takes the proxies as addresses or CIDRs, never true or a hop count',
+      );
+    },
+  );
+});
+
+describe('AUTH_FAILURES_PER_MINUTE', () => {
+  it('holds back an address after 20 failed credential checks a minute by default', () => {
+    expect(loadGatewayConfig(env).AUTH_FAILURES_PER_MINUTE).toBe(20);
+    expect(
+      loadGatewayConfig({ ...env, AUTH_FAILURES_PER_MINUTE: '5' }).AUTH_FAILURES_PER_MINUTE,
+    ).toBe(5);
+    expect(() => loadGatewayConfig({ ...env, AUTH_FAILURES_PER_MINUTE: '0' })).toThrow(
+      'AUTH_FAILURES_PER_MINUTE:',
     );
   });
 });
