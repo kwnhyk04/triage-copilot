@@ -533,14 +533,160 @@ def test_floors_are_set_only_on_the_default_models_and_token_cap(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AI_ENABLED", "true")
     monkeypatch.setenv("LLM_FALLBACK_ON_RATE_LIMIT", "false")
+    monkeypatch.setenv("LLM_CLAUDE_FIRST", "false")
     monkeypatch.setenv("INVESTIGATION_TOKEN_CAP", "350000")
     assert harness.main(["--split", "test", "--set-floors"]) == harness.SETUP
     monkeypatch.delenv("INVESTIGATION_TOKEN_CAP")
     monkeypatch.setenv("LLM_PRIMARY_MODEL", "claude-haiku-5-5")
     assert harness.main(["--split", "test", "--set-floors"]) == harness.SETUP
+    # Claude first is never a free-only run, whatever its cap.
+    monkeypatch.delenv("LLM_PRIMARY_MODEL")
+    monkeypatch.setenv("LLM_CLAUDE_FIRST", "true")
+    monkeypatch.setenv("LLM_CLAUDE_UNTIL", "2999-01-01")
+    assert harness.main(["--split", "test", "--set-floors"]) == harness.SETUP
     out = capsys.readouterr().out
-    assert out.count("SET_FLOORS=1") == 2
+    assert out.count("SET_FLOORS=1") == 3
     assert "an eval ran" not in out
+
+
+def free_eval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An eval's settings on the default models, whatever the developer's .env says."""
+    for name in ("LLM_PRIMARY_MODEL", "LLM_FALLBACK_MODEL", "LLM_SMALL_MODEL", "LLM_TRIAGE_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AI_ENABLED", "true")
+    monkeypatch.setenv("LLM_FALLBACK_ON_RATE_LIMIT", "false")
+    monkeypatch.setenv("LLM_CLAUDE_FIRST", "false")
+
+
+def test_claude_is_pinned_first_only_with_llm_claude_first_before_its_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    free_eval(monkeypatch)
+    assert harness.pinned() == harness.DEFAULTS
+    monkeypatch.setenv("LLM_CLAUDE_FIRST", "true")
+    monkeypatch.setenv("LLM_CLAUDE_UNTIL", "2999-01-01")
+    first = harness.pinned()
+    assert first == harness.DEFAULTS | {"claude": "claude-haiku-5-5"}
+    # Free-only runs keep the key every cached run has; Claude-first runs get their own.
+    assert harness.key("x", first, "1", 1) != harness.key("x", harness.DEFAULTS, "1", 1)
+    # From the day its credits end, the eval runs on the free models again.
+    monkeypatch.setenv("LLM_CLAUDE_UNTIL", "2026-01-01")
+    assert harness.pinned() == harness.DEFAULTS
+
+
+def test_a_claude_first_report_is_named_for_it_and_never_official() -> None:
+    first = harness.DEFAULTS | {"claude": "claude-haiku-5-5"}
+    day, sha = "2026-11-01", "2b91d4523fb028a6"
+    name = f"{day}-dev-full-1-2b91d452-claude-haiku-5-5-first-cap350k"
+    assert harness.report_name(day, "dev-full-1", sha, first, 350_000) == (name, False)
+    assert harness.report_name(day, "test-full-3", sha, first) == (
+        f"{day}-test-full-3-2b91d452-claude-haiku-5-5-first",
+        False,
+    )
+
+
+def test_a_claude_first_eval_needs_the_cap_that_never_cuts_claude_off(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    free_eval(monkeypatch)
+    monkeypatch.setenv("LLM_CLAUDE_FIRST", "true")
+    monkeypatch.setenv("LLM_CLAUDE_UNTIL", "2999-01-01")
+    monkeypatch.delenv("INVESTIGATION_TOKEN_CAP", raising=False)
+
+    assert harness.main(["--split", "dev"]) == harness.SETUP
+
+    assert "INVESTIGATION_TOKEN_CAP=350000" in capsys.readouterr().out
+
+
+def calls(*rows: tuple[str, str, str]) -> dict[str, Any]:
+    """A run whose model calls had these roles, models and outcomes."""
+    made = [{"role": r, "model": m, "outcome": o, "prompt_sha": "p"} for r, m, o in rows]
+    report: dict[str, Any] = {"summary": "s", "missing_evidence": []}
+    return {"model_calls": made, "steps": [], "report": report, "tokens": 0}
+
+
+def test_a_claude_first_run_counts_claude_and_the_pinned_models_and_nothing_else() -> None:
+    first = {"primary": "m", "fallback": "f", "small": "s", "claude": "c"}
+    free = {"primary": "m", "fallback": "f", "small": "s"}
+    # Claude first; the pinned model answers the call Claude could not.
+    fell = calls(("primary", "c", "rate_limited"), ("primary", "m", "ok"), ("small", "c", "ok"))
+    assert harness.problems(fell, first, "p") == []
+    # The free fallback never answers an eval.
+    nim = calls(("primary", "c", "ok"), ("fallback", "f", "ok"))
+    assert harness.problems(nim, first, "p") == ["a fallback call went to f"]
+    # An agent that asked no Claude ran another chain than the eval's.
+    assert harness.problems(calls(("primary", "m", "ok")), first, "p") == [harness.NO_CLAUDE]
+    # A free-only eval refuses Claude's answers, but not a Claude call the agent skipped.
+    skipped = calls(("primary", "c", "skipped"), ("primary", "m", "ok"))
+    assert harness.problems(skipped, free, "p") == []
+    assert harness.problems(calls(("primary", "c", "ok")), free, "p") == [
+        "a primary call went to c"
+    ]
+
+
+def test_the_zero_billed_gate_counts_every_model_a_call_reached() -> None:
+    skipped = calls(("primary", "claude-haiku-5-5", "skipped"), ("primary", "gemini", "ok"))
+    refused = calls(("primary", "claude-haiku-5-5", "error"), ("primary", "gemini", "ok"))
+    assert harness.used([skipped]) == ["gemini"]
+    # A refusal is billed though it served nothing.
+    assert harness.used([refused]) == ["claude-haiku-5-5", "gemini"]
+
+
+def test_every_report_names_the_models_that_served() -> None:
+    busy = "RateLimited: anthropic 429: rate limited"
+    made = [
+        {"role": "primary", "model": "claude-haiku-5-5", "outcome": "rate_limited", "error": busy},
+        {"role": "primary", "model": "gemini-3.5-flash-lite", "outcome": "ok", "error": None},
+        {"role": "small", "model": "claude-haiku-5-5", "outcome": "ok", "error": None},
+    ]
+    records: list[dict[str, Any]] = [
+        {"approvals": 0, "executions": 0, "resumed": False, "model_calls": made}
+    ]
+    served = harness.served(records)
+    assert served == [
+        {
+            "model": "claude-haiku-5-5",
+            "role": "primary",
+            "answered": 0,
+            "failed": 1,
+            "skipped": 0,
+            "reason": busy,
+        },
+        {
+            "model": "claude-haiku-5-5",
+            "role": "small",
+            "answered": 1,
+            "failed": 0,
+            "skipped": 0,
+            "reason": None,
+        },
+        {
+            "model": "gemini-3.5-flash-lite",
+            "role": "primary",
+            "answered": 1,
+            "failed": 0,
+            "skipped": 0,
+            "reason": None,
+        },
+    ]
+    text = "claude-haiku-5-5 (small 1), gemini-3.5-flash-lite (primary 1)"
+    assert harness.served_text(served) == text
+    scope = {"split": "dev", "subset": "full", "runs": 1, "scenarios": 1, "investigations": 1}
+    meta: dict[str, Any] = META | {
+        "date": "2026-11-01",
+        "scope": scope,
+        "set": {"name": "v1", "manifest_sha256": "0" * 64},
+        "models_text": text,
+        "prompt_sha256": "p" * 64,
+        "embedding": None,
+        "token_cap": 350_000,
+    }
+    page = harness.markdown(harness.build_report([scored()], records, {}, meta))
+    assert f"Models that served: {text}." in page
+    assert f"| claude-haiku-5-5 | primary | 0 | 1 | 0 | {busy} |" in page
+    # Each run says which models answered it.
+    assert "| Served by |" in page
+    assert "| claude-haiku-5-5, gemini-3.5-flash-lite |" in page
 
 
 def test_a_quota_stop_keeps_the_run_parked_and_exits_2(

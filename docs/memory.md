@@ -232,6 +232,16 @@ From the approved design doc:
   - The design: triage tags, whose band colors mean the verdict and appear nowhere else. Approve and Reject are the only filled buttons. The decision comes first on a phone, and the running pulse animates the tag's hole, never its text.
   - Reason: the user's step 9 scope and answers (docs/todo.md, In Progress).
 
+- 2026-11-01: Claude first everywhere, built on branch `claude-first` (go-live plan approved 2026-10-31: `%USERPROFILE%\.claude\plans\pasted-content-id-9a4f-read-docs-todo-m-abstract-donut.md`). Decisions, the user's or approved in that plan:
+  - The sim's router asks the same Claude as live triage (`Settings.triage()`, `LLM_TRIAGE_MODEL`) first with `LLM_CLAUDE_FIRST=true`; it defaults to false so AGENTS.md's "free tiers by default" holds, and the user's `.env` sets it true until 2026-11-10. `LLM_CLAUDE_FALLBACK`, `LLM_CLAUDE_MODEL` and `Settings.claude()` are gone, and `Router` has no `claude_first`: Claude, when present, is always first.
+  - Every non-planner Claude call, sim and evals included, is held to the triage cap ($0.40 a UTC day) as well as TC's $15 a month. Each cap counts its own database's calls.
+  - Any Claude failure moves that call alone down the chain (the user accepted the broader rule on 2026-10-31): 429s with or without retry-after, 529, 5xx, timeouts, connection errors, other 4xx, refusals. This supersedes P1.1's month-long stop on a bare 429 (`model_exhausted`, now never written or read; the enum value stays) and P1.8's 60 s wait for Claude's 429.
+  - A 400 naming the credit balance now counts as credits gone, like a 402 or a spend-limit 400. Why: the 400 "Your credit balance is too low" did not match `SPEND_LIMIT`, so it was a non-retryable `ModelError` that `Router.turn` did not catch, and the investigation failed after 5 receives instead of moving to Gemini (found while planning, 2026-10-31).
+  - A 401 or 403 from Anthropic stops every Claude model, the planner too, until the agent restarts: an in-process map on the shared `Limiter`, read by `acquire()` and `available()`. A new key needs a restart anyway, so the stop needs no migration.
+  - Evals with Claude first run Claude, then the pinned Gemini, never the free fallback; their cache key adds `claude`, so free-only keys and the cached runs stay valid. Every report names the models that served (table, per-run column, JSON `served`). The $0-billed gate counts every model a call reached, skipped calls aside. A Claude-first eval below `INVESTIGATION_TOKEN_CAP=350000` exits 3 (the 2026-10-21 rule), and floors and the official report come only from free-only runs. CI stays free-only: `eval.yml` and `ci_env.sh` set `LLM_CLAUDE_FIRST=false`.
+  - No LLM judge or grader exists; any added later stays off Claude (the user's rule).
+  - P2.5 waits (the user, 2026-10-31): after 2026-11-10 the planner starts on the free chain, as decided on 2026-10-24.
+
 ## Preferences and Instructions
 
 - 2026-10-14: The three portfolio projects run in parallel Claude Code sessions on one PC, sharing Docker. Each project has its own port range and compose project name; never prune or remove another project's Docker resources (user setup).

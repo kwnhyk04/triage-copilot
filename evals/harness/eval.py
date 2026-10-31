@@ -29,7 +29,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
@@ -61,6 +61,12 @@ DEFAULTS = {role: str(Settings.model_fields[f"llm_{role}_model"].default) for ro
 # The agent's default token cap per investigation: the exam's. Runs under another are a second
 # configuration, with their own cache keys and report name.
 DEFAULT_CAP = int(Settings.model_fields["investigation_token_cap"].default)
+# The cap no Claude run may go below, so no cap cuts Claude off mid-work (docs/memory.md,
+# 2026-10-21): the one live triage runs under, sized from Haiku's data.
+CLAUDE_CAP = int(Settings.model_fields["live_investigation_token_cap"].default)
+NO_CLAUDE = (
+    "the agent asked no Claude model: run the agent and the eval with the same LLM_CLAUDE_FIRST"
+)
 # How a stop note names the agent's token cap: "of its 150,000 tokens", "its 150,000 token cap".
 CAP_NAMED = re.compile(r"\bits ([\d,]+) token")
 # Calls an investigation makes per role before any run measured it (docs/memory.md, 6a).
@@ -143,13 +149,31 @@ def sha(data: str | bytes) -> str:
     return hashlib.sha256(data.encode() if isinstance(data, str) else data).hexdigest()
 
 
+def claude() -> str | None:
+    """The Claude the agent asks first, with LLM_CLAUDE_FIRST and before LLM_CLAUDE_UNTIL (UTC);
+    None when the eval runs on the free models alone."""
+    if os.environ.get("LLM_CLAUDE_FIRST", "false").lower() != "true":
+        return None
+    until = os.environ.get("LLM_CLAUDE_UNTIL") or str(
+        Settings.model_fields["llm_claude_until"].default
+    )
+    if datetime.now(UTC).date() >= date.fromisoformat(until):
+        return None
+    return os.environ.get("LLM_TRIAGE_MODEL") or str(
+        Settings.model_fields["llm_triage_model"].default
+    )
+
+
 def pinned() -> dict[str, str]:
-    """The model of each role, from the .env the agent runs with too."""
+    """The model of each role, and Claude when the agent asks it first, from the .env the agent
+    runs with too."""
     if os.environ.get("LLM_FALLBACK_ON_RATE_LIMIT", "true").lower() != "false":
         raise Setup("evals need LLM_FALLBACK_ON_RATE_LIMIT=false, for the agent and here")
     if os.environ.get("AI_ENABLED", "false").lower() != "true":
         raise Setup("evals need AI_ENABLED=true")
-    return {role: os.environ.get(f"LLM_{role.upper()}_MODEL") or DEFAULTS[role] for role in ROLES}
+    models = {role: os.environ.get(f"LLM_{role.upper()}_MODEL") or DEFAULTS[role] for role in ROLES}
+    first = claude()
+    return models if first is None else models | {"claude": first}
 
 
 def token_cap() -> int:
@@ -161,13 +185,15 @@ def report_name(
     today: str, scope: str, prompt: str, models: dict[str, str], cap: int = DEFAULT_CAP
 ) -> tuple[str, bool]:
     """The report's name, and whether it is the official one: the full test split on the default
-    models and token cap, which also writes the README table. Tuning runs of one day keep a report
-    per prompt, and runs on other models or another cap their own."""
+    free models and token cap, which also writes the README table. Tuning runs of one day keep a
+    report per prompt, and runs on other models, Claude first or another cap their own."""
     if scope.startswith("test-full-") and models == DEFAULTS and cap == DEFAULT_CAP:
         return today, True
     name = f"{today}-{scope}-{prompt[:8]}"
-    if models != DEFAULTS:
+    if {role: models[role] for role in ROLES} != DEFAULTS:
         name += f"-{models['primary']}"
+    if "claude" in models:
+        name += f"-{models['claude']}-first"
     if cap != DEFAULT_CAP:
         name += f"-cap{cap // 1000}k"
     return name, False
@@ -245,13 +271,19 @@ def say(line: str) -> None:
 def problems(
     record: Json, models: dict[str, str], prompt: str, cap: int = DEFAULT_CAP
 ) -> list[str]:
-    """Why a finished run does not count: an unpinned model answered, the agent ran another
-    prompt than the source's or another token cap than the eval's, or the sim lost its world."""
+    """Why a finished run does not count: a model the eval did not pin answered (Claude counts
+    only when the eval puts it first, and the free fallback never), the agent asked no Claude
+    though the eval put it first, the agent ran another prompt than the source's or another
+    token cap than the eval's, or the sim lost its world."""
+    first = models.get("claude")
     found = [
         f"a {c['role']} call went to {c['model']}"
         for c in record["model_calls"]
-        if c["role"] == "fallback" or c["model"] != models[c["role"]]
+        if c.get("outcome") != "skipped"
+        and (c["role"] == "fallback" or c["model"] not in (models[c["role"]], first))
     ]
+    if first is not None and all(c["model"] != first for c in record["model_calls"]):
+        found.append(NO_CLAUDE)
     # Calls from before agent migration 0008 recorded no sha; one at least must name this prompt.
     shas: set[str | None] = {c["prompt_sha"] for c in record["model_calls"]}
     if shas - {prompt, None} or prompt not in shas:
@@ -313,15 +345,16 @@ def estimate(jobs: Sequence[Job], models: dict[str, str]) -> None:
     """Calls each model still has to make against its daily quota, and the days that takes."""
     pending = [j for j in jobs if not j.result.exists()]
     cached = [load(p) for p in CACHE.glob("*-run*-*.json") if not p.name.endswith(".state.json")]
-    # Only runs whose agent ran on this primary model say how this one behaves.
+    # Only runs whose agent asked this first model first say how this one behaves.
+    first = models.get("claude", models["primary"])
     done = [
         r
         for r in cached
-        if any(c["role"] == "primary" and c["model"] == models["primary"] for c in r["model_calls"])
+        if any(c["role"] == "primary" and c["model"] == first for c in r["model_calls"])
     ]
     say(
         f"{len(jobs)} investigations planned, {len(pending)} to run "
-        f"({len(done)} cached runs on {models['primary']})"
+        f"({len(done)} cached runs on {first})"
     )
     agent_db, gateway_db = run.engines()
     gateway_db.dispose()
@@ -330,8 +363,12 @@ def estimate(jobs: Sequence[Job], models: dict[str, str]) -> None:
     agent_db.dispose()
     for role in ("primary", "small"):
         model = models[role]
+        # Counted by model as well: Claude's calls carry the same roles.
         counted = [
-            sum(c["role"] == role and c["outcome"] in ("ok", "error") for c in r["model_calls"])
+            sum(
+                c["role"] == role and c["model"] == model and c["outcome"] in ("ok", "error")
+                for c in r["model_calls"]
+            )
             for r in done
         ]
         each = statistics.fmean(counted) if counted else GUESS[role]
@@ -365,6 +402,43 @@ def scored(jobs: Sequence[Job], manifest: Json) -> tuple[list[score.Scored], lis
         runs.append(score.score(record, labels, entry["family"], entry["down"], prices))
         records.append(record)
     return runs, records
+
+
+def used(records: Sequence[Json]) -> list[str]:
+    """Every model a call reached, sorted: a skipped call reached none, a refused one was billed."""
+    return sorted(
+        {c["model"] for r in records for c in r["model_calls"] if c.get("outcome") != "skipped"}
+    )
+
+
+def served(records: Sequence[Json]) -> list[Json]:
+    """Per model and role, sorted: the calls it answered, failed and skipped, and the latest
+    reason one did not answer."""
+    rows: dict[tuple[str, str], Json] = {}
+    for record in records:
+        for c in record.get("model_calls", []):
+            row = rows.setdefault(
+                (c["model"], c["role"]),
+                {"model": c["model"], "role": c["role"], "answered": 0, "failed": 0, "skipped": 0},
+            )
+            row.setdefault("reason", None)
+            outcome = c["outcome"]
+            column = (
+                "answered" if outcome == "ok" else "skipped" if outcome == "skipped" else "failed"
+            )
+            row[column] += 1
+            if outcome != "ok":
+                row["reason"] = c.get("error")
+    return [rows[k] for k in sorted(rows)]
+
+
+def served_text(rows: Sequence[Json]) -> str:
+    """The models that answered, with how many calls of each role."""
+    answered: dict[str, list[str]] = {}
+    for row in rows:
+        if row["answered"]:
+            answered.setdefault(row["model"], []).append(f"{row['role']} {row['answered']}")
+    return ", ".join(f"{model} ({', '.join(parts)})" for model, parts in answered.items()) or "none"
 
 
 def ungated(metric: score.Metric, free: bool) -> bool:
@@ -546,8 +620,16 @@ def build_report(
         "executions_during_eval": sum(r["executions"] for r in records),
         "resumed_runs": sum(bool(r["resumed"]) for r in records),
         "families": families,
-        "runs": [r.json() for r in runs],
+        "served": served(records),
+        "runs": [
+            r.json() | {"served_by": sorted(served_by(record))}
+            for r, record in zip(runs, records, strict=True)
+        ],
     }
+
+
+def served_by(record: Json) -> set[str]:
+    return {c["model"] for c in record.get("model_calls", []) if c["outcome"] == "ok"}
 
 
 ACCURACY = (
@@ -601,7 +683,8 @@ def markdown(report: Json) -> str:
         f"{scope['split']} split, {scope['subset']} subset: {scope['scenarios']} scenarios x "
         f"{scope['runs']} runs = {scope['investigations']} investigations, scenario set "
         f"{report['set']['name']} (manifest sha256 {report['set']['manifest_sha256'][:16]}).",
-        f"Models, pinned: {report['models_text']}. Prompt sha256 {report['prompt_sha256'][:16]}. "
+        f"Models that served: {report['models_text']}. "
+        f"Prompt sha256 {report['prompt_sha256'][:16]}. "
         f"Embedding: {report['embedding']}. Token cap per investigation: {report['token_cap']:,}"
         + ("." if report["token_cap"] == DEFAULT_CAP else f" (default {DEFAULT_CAP:,})."),
         "",
@@ -626,6 +709,16 @@ def markdown(report: Json) -> str:
         f"{report['executions_during_eval']}. Runs resumed after a quota stop: "
         f"{report['resumed_runs']}.",
         "",
+        "## Models that served",
+        "",
+        "| Model | Role | Answered | Failed | Skipped | Latest reason |",
+        "| --- | --- | --- | --- | --- | --- |",
+        *(
+            f"| {m['model']} | {m['role']} | {m['answered']} | {m['failed']} | {m['skipped']} | "
+            f"{m['reason'] or ''} |"
+            for m in report.get("served", [])
+        ),
+        "",
         "## By failure family",
         "",
         "Runbooks: bad-deploy, db-pool-exhaustion and expired-cert have their own; slow-dependency "
@@ -636,15 +729,15 @@ def markdown(report: Json) -> str:
         "## Runs",
         "",
         "| Scenario | Run | Top-1 | Top-3 | Grounded | Action | Forbidden | Refused | Calls "
-        "| Tokens | Time |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Tokens | Time | Served by |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report["runs"]:
         seconds = "resumed" if r["seconds"] is None else f"{r['seconds']:.0f} s"
         lines.append(
             f"| {r['scenario']} | {r['run']} | {r['top1']} | {r['top3']} | {r['grounded']} | "
             f"{r['action_correct']} | {r['forbidden']} | {r['refused']} | {r['tool_calls']} | "
-            f"{r['tokens']:,} | {seconds} |"
+            f"{r['tokens']:,} | {seconds} | {', '.join(r.get('served_by', []))} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -710,8 +803,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cap = token_cap()
         if args.set_floors and (models != DEFAULTS or cap != DEFAULT_CAP):
             raise Setup(
-                "SET_FLOORS=1 only on the default models and token cap: floors come from the "
-                "exam's configuration, and a scope's floors serve every model"
+                "SET_FLOORS=1 only on the default free models and token cap, never Claude first: "
+                "floors come from free-only runs of the exam's configuration, and a scope's floors "
+                "serve every model"
+            )
+        if "claude" in models and cap < CLAUDE_CAP:
+            raise Setup(
+                f"Claude first runs at INVESTIGATION_TOKEN_CAP={CLAUDE_CAP} or more, so no cap "
+                "cuts it off (docs/memory.md, 2026-10-21): pass it to the agent and the eval, or "
+                "LLM_CLAUDE_FIRST=false"
             )
         prompt = prompt_sha()
         jobs = plan(manifest, args.split, args.subset, args.runs, prompt, models, cap)
@@ -725,7 +825,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         say(f"eval: {type(error).__name__}: {error}")
         return SETUP
     runs, records = scored(jobs, manifest)
-    free = score.free([models["primary"], models["small"]], load(PRICING)["models"])
+    free = score.free(used(records), load(PRICING)["models"])
     scope = f"{args.split}-{args.subset}-{args.runs}"
     summary = score.summarize(runs)
     if args.set_floors:
@@ -746,8 +846,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "set": {"name": "v1", "manifest_sha256": sha(raw)},
         "models": models,
-        "models_text": f"{models['primary']} (agent), {models['small']} (log summaries), "
-        "no fallback",
+        "models_text": served_text(served(records)),
         "billing": "free" if free else "credits",
         "prompt_sha256": prompt,
         "embedding": records[0]["embedding"] if records else None,

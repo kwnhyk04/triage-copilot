@@ -784,11 +784,11 @@ def test_a_credits_stop_holds_every_anthropic_model_until_the_month_ends(engine:
         assert spent(conn, GEMINI) is None
 
 
-def test_a_429_without_retry_after_stops_only_its_own_model(engine: Engine) -> None:
+def test_a_stored_429_without_retry_after_no_longer_stops_its_model(engine: Engine) -> None:
+    # Every 429 now falls through for its call alone; a row an older agent wrote stops nothing.
     error = "ModelExhausted: anthropic 429 without retry-after"
     stopped(engine, "claude-opus-5-5", "model_exhausted", error)
 
     with engine.connect() as conn:
-        assert "429" in (spent(conn, OPUS) or "")
-        # One Opus 429 never stops Haiku's triage.
+        assert spent(conn, OPUS) is None
         assert spent(conn, HAIKU) is None

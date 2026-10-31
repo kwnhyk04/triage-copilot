@@ -43,8 +43,8 @@ class Role:
     rpd: int
     api_key: str | None = field(default=None, repr=False)
     until: date | None = None
-    # Live triage's and the planner's Claude: what its calls may spend in a UTC day, in US dollars
-    # (agent.pricing).
+    # Every Claude role: what its calls may spend in a UTC day, in US dollars (agent.pricing); the
+    # planner's under its own cap, every other one under the triage cap.
     daily_usd: float | None = None
     # Every Claude role: what all of TC's Claude calls may spend in a UTC month, evals included.
     monthly_usd: float | None = None
@@ -108,15 +108,15 @@ class Settings(EnvSettings):
     llm_small_rpd: Annotated[int, Field(ge=0)] = 500
     # A 429 or a spent daily quota on the primary moves the turn to the fallback; evals set false.
     llm_fallback_on_rate_limit: bool = True
-    # Claude as the first fallback of every role, after Gemini and before the free fallbacks,
-    # while its API credits last and before LLM_CLAUDE_UNTIL (UTC). Off by default: free only.
-    llm_claude_fallback: bool = False
-    llm_claude_model: str = "claude-haiku-5-5"
+    # The sim's chain asks Claude (LLM_TRIAGE_MODEL) first, as live triage's does, then the free
+    # chain. Off by default: the free tiers stay the default (AGENTS.md).
+    llm_claude_first: bool = False
     llm_claude_rpm: Annotated[int, Field(ge=0)] = 50
     llm_claude_until: date = date(2026, 11, 10)
     # Live triage asks Claude first, while ANTHROPIC_API_KEY is set and before LLM_CLAUDE_UNTIL,
-    # then the free chain. A Claude call runs only if today's Claude spend (UTC) plus the call's
-    # worst case stays within LLM_TRIAGE_DAILY_USD.
+    # then the free chain; so does the sim with LLM_CLAUDE_FIRST. Any Claude call but a plan runs
+    # only if today's Claude spend (UTC) plus the call's worst case stays within
+    # LLM_TRIAGE_DAILY_USD.
     llm_triage_model: str = "claude-haiku-5-5"
     llm_triage_daily_usd: Annotated[float, Field(ge=0)] = 0.40
     # TC's share of the Anthropic account a calendar month (UTC), evals included: any Claude call
@@ -153,8 +153,6 @@ class Settings(EnvSettings):
             for name in ROLES
             if getattr(self, f"llm_{name}_provider") == "anthropic"
         ]
-        if self.llm_claude_fallback:
-            models.append(self.llm_claude_model)
         for model in models:
             if model not in RATES:
                 raise ValueError(f"{model} has no prices in agent/pricing.py: {', '.join(RATES)}")
@@ -171,8 +169,8 @@ class Settings(EnvSettings):
             key = KEY_SETTINGS[getattr(self, f"llm_{name}_provider")]
             if key is not None and getattr(self, key) is None:
                 raise ValueError(f"{key.upper()} is required by LLM_{name.upper()}_PROVIDER")
-        if self.llm_claude_fallback and self.anthropic_api_key is None:
-            raise ValueError("ANTHROPIC_API_KEY is required by LLM_CLAUDE_FALLBACK")
+        if self.llm_claude_first and self.anthropic_api_key is None:
+            raise ValueError("ANTHROPIC_API_KEY is required by LLM_CLAUDE_FIRST")
         return self
 
     def role(self, name: ChainRole) -> Role:
@@ -188,11 +186,13 @@ class Settings(EnvSettings):
             rpd=getattr(self, f"llm_{name}_rpd"),
             api_key=secret.get_secret_value() if secret else None,
             until=self.llm_claude_until if provider == "anthropic" else None,
+            daily_usd=self.llm_triage_daily_usd if provider == "anthropic" else None,
             monthly_usd=self.llm_claude_monthly_usd if provider == "anthropic" else None,
         )
 
     def triage(self) -> Role | None:
-        """Live triage's Claude, first in its chain, when ANTHROPIC_API_KEY is set."""
+        """The Claude every turn and summary asks first (live triage's, and the sim's with
+        LLM_CLAUDE_FIRST), when ANTHROPIC_API_KEY is set."""
         secret = self.anthropic_api_key
         if secret is None:
             return None
@@ -226,21 +226,4 @@ class Settings(EnvSettings):
             daily_usd=self.llm_planner_daily_usd,
             monthly_usd=self.llm_claude_monthly_usd,
             effort=self.llm_planner_effort,
-        )
-
-    def claude(self) -> Role | None:
-        """The Claude fallback, when LLM_CLAUDE_FALLBACK is on: TC's monthly cap, no daily one."""
-        if not self.llm_claude_fallback:
-            return None
-        secret = self.anthropic_api_key
-        return Role(
-            name="fallback",
-            provider="anthropic",
-            model=self.llm_claude_model,
-            base_url=None,
-            rpm=self.llm_claude_rpm,
-            rpd=0,
-            api_key=secret.get_secret_value() if secret else None,
-            until=self.llm_claude_until,
-            monthly_usd=self.llm_claude_monthly_usd,
         )
