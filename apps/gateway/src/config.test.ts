@@ -91,6 +91,24 @@ describe('GATEWAY_TRUST_PROXY', () => {
       );
     },
   );
+
+  // A range holding every client lets anyone claim any address: all of IPv4 or IPv6 in any
+  // spelling, or all of IPv4 as the mapped IPv6 range Fastify matches IPv4 clients against.
+  it.each(['0.0.0.0/0', '::/0', '0::/0', '::ffff:0:0/96', '::ffff:0.0.0.0/96', '10.0.0.1, ::/0'])(
+    'refuses %s, which trusts every client',
+    (value) => {
+      expect(() => loadGatewayConfig({ ...env, GATEWAY_TRUST_PROXY: value })).toThrow(
+        'GATEWAY_TRUST_PROXY: trusts every client; name the proxies instead',
+      );
+    },
+  );
+
+  it('takes narrower ranges, mapped ones included', () => {
+    const value = '0.0.0.0/1, 10.231.233.16/28, ::ffff:10.0.0.0/104, 2001:db8::/32';
+    expect(loadGatewayConfig({ ...env, GATEWAY_TRUST_PROXY: value }).GATEWAY_TRUST_PROXY).toEqual(
+      value.split(', '),
+    );
+  });
 });
 
 describe('AUTH_FAILURES_PER_MINUTE', () => {

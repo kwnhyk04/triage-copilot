@@ -1,8 +1,10 @@
-"""Production is its own compose project, and only the gateway's public port leaves it: on
-127.0.0.1, for watch and Tailscale Funnel's sidecar. The gateway's internal listener, the data
-services and the sim's admin port are never published, and each service gets only its secrets.
+"""Production is its own compose project, and only its egress proxy has a route out or a published
+port: 127.0.0.1:4202 for watch, which it forwards to the gateway. The data services, the gateway's
+internal listener and the sim's admin port are never published, each service gets only its
+secrets, and each proxy client reaches the proxy on its own port from its fixed address.
 """
 
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -12,6 +14,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra"
+SQUID_CONF = INFRA / "squid" / "squid.conf"
 
 
 class _Reset(list[Any]):
@@ -81,6 +84,20 @@ def _environment(name: str) -> dict[str, Any]:
     return PROD["services"].get(name, {}).get("environment", {})
 
 
+def networks(name: str) -> dict[str, dict[str, Any]]:
+    """The networks a service joins in production, with their settings. The base file names none,
+    so a service production leaves alone joins compose's routed `default`."""
+    joined = PROD["services"].get(name, {}).get("networks", ["default"])
+    if isinstance(joined, list):
+        return {network: {} for network in cast("list[str]", joined)}
+    return {key: value or {} for key, value in cast("dict[str, Any]", joined).items()}
+
+
+def address(name: str, network: str) -> str:
+    """A service's fixed address on one network."""
+    return networks(name)[network]["ipv4_address"]
+
+
 def test_production_is_its_own_compose_project() -> None:
     assert PROD["name"] == "triagecopilot-prod"
     makefile = (ROOT / "Makefile").read_text("utf-8")
@@ -92,15 +109,123 @@ def test_production_is_its_own_compose_project() -> None:
     assert re.search(r"\$\(PROD\) up -d --wait --wait-timeout \d+", makefile)
 
 
-def test_only_the_gateway_publishes_and_only_on_127_0_0_1() -> None:
+def test_only_the_egress_proxy_publishes_and_only_on_127_0_0_1() -> None:
+    # Docker publishes no port from an internal network, so the proxy carries watch's port.
     published = {name: _ports(name) for name in SERVICES if _ports(name)}
-    assert published == {"gateway": ["127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4200"]}
+    assert published == {"egress-proxy": ["127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4202"]}
     # So the internal listener (4201) and the sim's admin port (4231) never are, and no service
     # joins the host's network instead.
     for name in SERVICES:
         merged = BASE["services"].get(name, {}) | PROD["services"].get(name, {})
         assert (name, "network_mode" in merged) == (name, False)
     assert {"sim", "executor"}.isdisjoint(SERVICES)
+
+
+def test_only_the_egress_proxy_has_a_route_out() -> None:
+    # Docker Desktop lets any container on a routed network reach the internet and this PC's own
+    # listeners (host.docker.internal), so every network but the proxy's `egress` is internal.
+    routed = {name for name, network in PROD["networks"].items() if not network.get("internal")}
+    assert routed == {"egress"}
+    # The internet-facing sidecar shares `edge` with the gateway alone and no network with
+    # Postgres or ElasticMQ; `ingress` carries watch's port from the proxy to the gateway.
+    assert {name: set(networks(name)) for name in SERVICES} == {
+        "postgres": {"data"},
+        "elasticmq": {"data"},
+        "toxiproxy": {"data"},
+        "otel-collector": {"data", "monitoring"},
+        "jaeger": {"monitoring"},
+        "prometheus": {"monitoring"},
+        "grafana": {"monitoring"},
+        "gateway-migrate": {"data"},
+        "gateway": {"data", "edge", "ingress"},
+        "agent-migrate": {"data"},
+        "agent-runbooks": {"data"},
+        "agent": {"data", "outbound"},
+        "tailscale": {"edge", "outbound"},
+        "egress-proxy": {"outbound", "ingress", "egress"},
+    }
+
+
+def test_each_proxy_client_has_its_own_port_and_fixed_address() -> None:
+    conf = SQUID_CONF.read_text("utf-8")
+    for name, port in (("agent", 3128), ("tailscale", 3129)):
+        environment = _environment(name)
+        assert environment["HTTPS_PROXY"] == f"http://egress-proxy:{port}"
+        # Every internal address is http://, which HTTPS_PROXY leaves alone.
+        assert "HTTP_PROXY" not in environment
+        assert re.search(rf"^http_port {port} name={name}$", conf, re.MULTILINE)
+        ip = re.escape(address(name, "outbound"))
+        assert re.search(rf"^acl {name}_ip src {ip}$", conf, re.MULTILINE)
+    # Tailscale's log upload would need its log server, which the proxy does not allow.
+    assert _environment("tailscale")["TS_TAILSCALED_EXTRA_ARGS"] == "--no-logs-no-support"
+    # The gateway trusts the sidecar's X-Forwarded-For at this fixed address (README, Deploy).
+    assert address("tailscale", "edge") == "10.231.233.18"
+
+
+def test_fixed_addresses_sit_outside_the_range_docker_hands_out() -> None:
+    pinned = {name: net for name, net in PROD["networks"].items() if "ipam" in net}
+    assert set(pinned) == {"outbound", "edge", "ingress"}
+    for network, settings in pinned.items():
+        [config] = settings["ipam"]["config"]
+        subnet = ipaddress.IPv4Network(config["subnet"])
+        # TC's own block, beside FreightAudit's 10.231.231.0/24 and FilingLens's 10.231.232.0/24.
+        assert subnet.subnet_of(ipaddress.IPv4Network("10.231.233.0/24"))
+        pool = ipaddress.IPv4Network(config["ip_range"])
+        fixed = [
+            ipaddress.IPv4Address(joined["ipv4_address"])
+            for name in SERVICES
+            if "ipv4_address" in (joined := networks(name).get(network, {}))
+        ]
+        assert fixed
+        assert all(ip in subnet and ip not in pool for ip in fixed)
+
+
+def test_watch_s_port_reaches_the_gateway_alone() -> None:
+    conf = SQUID_CONF.read_text("utf-8")
+    assert re.search(r"^http_port 4202 accel defaultsite=gateway no-vhost name=watch$", conf, re.M)
+    # By address, which squid resolves only at start and then hourly, so a re-created gateway
+    # keeps it.
+    gateway = re.escape(address("gateway", "ingress"))
+    assert re.search(rf"^cache_peer {gateway} parent 4200 0 .*\bname=gateway\b", conf, re.M)
+
+
+def test_the_gateway_frees_4202_before_the_proxy_takes_it() -> None:
+    # Before the lockdown the gateway published 4202 itself; compose must recreate it first, or the
+    # proxy's start fails with "port is already allocated".
+    depends_on = PROD["services"]["egress-proxy"]["depends_on"]
+    assert depends_on == {"gateway": {"condition": "service_started"}}
+
+
+def test_the_sidecar_runs_without_capabilities() -> None:
+    # It shares `outbound` with the agent, and the proxy tells them apart by address alone: with no
+    # NET_RAW it cannot forge the agent's, and the agent runs as a non-root user.
+    tailscale = PROD["services"]["tailscale"]
+    assert tailscale["cap_drop"] == ["ALL"]
+    assert tailscale["security_opt"] == ["no-new-privileges:true"]
+    assert "USER app" in (INFRA / "docker" / "python.Dockerfile").read_text("utf-8")
+
+
+def test_the_egress_proxy_runs_ci_s_squid_image_hardened() -> None:
+    proxy = PROD["services"]["egress-proxy"]
+    assert proxy["read_only"] is True
+    assert proxy["cap_drop"] == ["ALL"]
+    assert proxy["security_opt"] == ["no-new-privileges:true"]
+    assert proxy["volumes"] == ["./squid/squid.conf:/etc/squid/squid.conf:ro"]
+    dockerfile = (INFRA / "docker" / "squid.Dockerfile").read_text("utf-8")
+    assert re.search(r"^FROM ubuntu:24\.04@sha256:[0-9a-f]{64}$", dockerfile, re.MULTILINE)
+    # Every image production runs is one that CI builds and publish.yml pushes.
+    images = {
+        found[1]
+        for service in PROD["services"].values()
+        if (found := re.search(r"/triage-copilot-(\w+):\$\{TC_TAG", service.get("image", "")))
+    }
+    assert images == {"gateway", "agent", "squid"}
+    for workflow in ("ci.yml", "publish.yml"):
+        text = (ROOT / ".github" / "workflows" / workflow).read_text("utf-8")
+        include = yaml.safe_load(text)["jobs"]["images"]["strategy"]["matrix"]["include"]
+        built = {entry["service"]: entry["file"] for entry in include}
+        assert images <= set(built)
+        assert built["squid"] == "infra/docker/squid.Dockerfile"
 
 
 def test_each_service_gets_only_its_own_secrets() -> None:
@@ -125,7 +250,7 @@ def test_no_container_is_pointed_at_the_host_or_a_windows_path() -> None:
     gateway, agent = _environment("gateway"), _environment("agent")
     assert gateway["NODE_ENV"] == "production"
     hosts = {gateway["GATEWAY_HOST"], gateway["GATEWAY_INTERNAL_HOST"], agent["AGENT_HOST"]}
-    assert hosts == {"0.0.0.0"}  # noqa: S104 - inside the container, published on 127.0.0.1 only
+    assert hosts == {"0.0.0.0"}  # noqa: S104 - inside the container, on internal networks only
     assert "@postgres:5432/" in gateway["GATEWAY_DATABASE_URL"]
     assert "@postgres:5432/" in agent["AGENT_DATABASE_URL"]
     assert (gateway["AGENT_URL"], agent["GATEWAY_INTERNAL_URL"]) == (

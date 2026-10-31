@@ -218,18 +218,18 @@ Plans: with the `planner` switch on (off until the P2.5 measuring run), a real i
 
 ## Deploy
 
-The web runs on Vercel. The backend runs on this PC as its own compose project, `triagecopilot-prod`, with its own containers, network and volumes, so dev, test and eval work run beside it (`docker compose ls` lists both). Production runs the images `publish.yml` pushes from main.
+The web runs on Vercel. The backend runs on this PC as its own compose project, `triagecopilot-prod`, with its own containers, networks and volumes, so dev, test and eval work run beside it (`docker compose ls` lists both). Production runs the images `publish.yml` pushes from main.
 
-Only the gateway's public port leaves production: on `127.0.0.1:4202` (`PROD_GATEWAY_PORT`) for `watch`, and through a Tailscale Funnel sidecar at `https://triage-copilot.<tailnet>.ts.net`. Postgres, ElasticMQ, the gateway's internal listener (4201) and the agent publish nothing. The sim and the executor are not deployed.
+Only the gateway's public port is reachable from outside production: on `127.0.0.1:4202` (`PROD_GATEWAY_PORT`) for `watch`, which the egress proxy publishes and forwards to the gateway, and through a Tailscale Funnel sidecar at `https://triage-copilot.<tailnet>.ts.net`. Postgres, ElasticMQ, the gateway's internal listener (4201) and the agent publish nothing. The sim and the executor are not deployed.
 
-The containers can still reach the internet and this PC. Egress lockdown is the next PR (`docs/threat-notes.md`).
+Every production network is internal except the egress proxy's, so no other container reaches the internet or this PC's own ports (Egress, below).
 
 The three env files are never committed (`.gitignore` covers `.env.*`). Make every secret fresh on this PC with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. In production, the gateway and the web refuse the `.env.example` keys.
 
 | File | Read by | Holds |
 | --- | --- | --- |
 | `.env.prod` | compose, for interpolation | `PROD_POSTGRES_PASSWORD`, `PROD_GATEWAY_DB_PASSWORD`, `PROD_AGENT_DB_PASSWORD`; `TC_IMAGES` (`ghcr.io/<owner>`, lower case); `TC_TAG` (`sha-` and the merged commit's first 12 characters, once `publish.yml` has pushed it); `TS_AUTHKEY` (a one-off, tagged, pre-approved auth key: the container keeps it in its environment) |
-| `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY` once checked (check 5) |
+| `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY=10.231.233.18`, the sidecar's fixed address, once checked (check 5) |
 | `.env.prod.agent` | the agent, its migration and the runbook load | the same `AGENT_SERVICE_TOKEN`, `AI_ENABLED=true`, `ANTHROPIC_API_KEY` (the TC workspace's), `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `LIVE_TENANTS` |
 
 The compose file fixes everything container-side: hosts, ports, database URLs, the queue and service addresses, `FASTEMBED_CACHE_PATH` and `NODE_ENV=production`. So a line copied from `.env` cannot point a container at 127.0.0.1 or an H: path.
@@ -238,7 +238,7 @@ The agent never holds the approver key, and no container holds the web's sign-in
 
 | Target | Does |
 | --- | --- |
-| `make prod-up` | Pulls the images; migrates both schemas and loads the runbooks in one-shot containers; starts Postgres, ElasticMQ, the gateway, the agent and the Funnel sidecar; waits at most 300 s for the gateway and the agent to answer `/readyz`. If the wait ends there, `docker compose -p triagecopilot-prod ps -a` shows which service is not up, and `docker compose -p triagecopilot-prod logs <service> --tail 30` names the setting it refused |
+| `make prod-up` | Pulls the images; migrates both schemas and loads the runbooks in one-shot containers; starts Postgres, ElasticMQ, the gateway, the egress proxy, the agent and the Funnel sidecar; waits at most 300 s for the proxy's ports and for the gateway and the agent to answer `/readyz`. If the wait ends there, `docker compose -p triagecopilot-prod ps -a` shows which service is not up, and `docker compose -p triagecopilot-prod logs <service> --tail 30` names the setting it refused |
 | `make prod-down` | Removes production's containers and network; the volumes stay (never `-v`) |
 | `make prod-token NAME=<tenant>` | Issues a tenant's webhook token in the production database (it has no host port) |
 | `make prod-switch [NAME= STATE=]` | The production agent's kill switches |
@@ -246,7 +246,7 @@ The agent never holds the approver key, and no container holds the web's sign-in
 
 Tailscale: turn on MagicDNS and HTTPS certificates, and allow Funnel for the auth key's tag in the policy file (the `funnel` node attribute).
 
-GHCR: if the `triage-copilot-*` packages are private, run `docker login ghcr.io` once with a read-only token (`read:packages`) before `make prod-up`.
+GHCR: production pulls `triage-copilot-gateway`, `triage-copilot-agent` and `triage-copilot-squid`, the egress proxy. If they are private, run `docker login ghcr.io` once with a read-only token (`read:packages`) before `make prod-up`.
 
 Vercel: import the GitHub repo as a project, with root directory `apps/web` and Node 24.
 - Production environment variables:
@@ -259,23 +259,67 @@ Vercel: import the GitHub repo as a project, with root directory `apps/web` and 
 
 Checks after `make prod-up`, in PowerShell:
 
-1. Run `docker compose -p triagecopilot-prod ps`. Only the gateway shows a port: `127.0.0.1:4202->4200/tcp`.
-2. Run `docker compose -p triagecopilot-prod exec tailscale tailscale funnel status`. Funnel is on, and `https://triage-copilot.<tailnet>.ts.net` proxies `/` to `http://gateway:4200` and nothing else.
+1. Run `docker compose -p triagecopilot-prod ps`. Only the egress proxy shows a port: `127.0.0.1:4202->4202/tcp`. The egress proxy, the gateway and the agent are `(healthy)`.
+2. Run `docker compose -p triagecopilot-prod exec tailscale tailscale funnel status`. Funnel is on, and `https://triage-copilot.<tailnet>.ts.net` proxies `/` to `http://gateway:4200` and nothing else. Allow a minute while the sidecar picks a home relay. Then run the egress checks (Egress, below).
 
 Run checks 3 to 5 from a device that is not on the tailnet. On a tailnet device the name resolves over the tailnet, not through Funnel. A 429 there means strangers used up this minute's failed checks: wait a minute.
 
 3. Run `curl.exe -si https://triage-copilot.<tailnet>.ts.net/internal/actions/00000000-0000-4000-8000-000000000000/execution`. Expect 401 with `www-authenticate: ApiKey header="X-API-Key"`, the public listener's challenge, never the internal listener's `Bearer`.
 4. Run `curl.exe -s -o NUL -w "%{http_code}" https://triage-copilot.<tailnet>.ts.net/v1/investigations`. Expect 401.
 5. The client address. This check is optional: without the setting, every Funnel client shares the sidecar's address, and the web, which always sends its key, is never held back.
-   1. Read the network's subnet: `docker network inspect triagecopilot-prod_default --format "{{range .IPAM.Config}}{{.Subnet}}{{end}}"`.
-   2. Put the subnet in `.env.prod.gateway` as `GATEWAY_TRUST_PROXY`, then run `make prod-up`.
-   3. Run `curl.exe -s -H "X-Forwarded-For: 192.0.2.1" https://triage-copilot.<tailnet>.ts.net/healthz`.
-   4. Run `docker compose -p triagecopilot-prod logs gateway --since 2m | Select-String healthz`. The healthcheck asks for `/readyz`, so this shows only your request. Its `remoteAddress` must be your own public address, never 192.0.2.1 or the sidecar's.
-   5. If it is not, remove the line and run `make prod-up` again.
-
-   A re-created network can get another subnet. The gateway then falls back to the sidecar's address.
+   1. Put `GATEWAY_TRUST_PROXY=10.231.233.18` in `.env.prod.gateway`: the sidecar's fixed address on `edge`, never a subnet, which would also trust the gateway's other neighbors. Then run `make prod-up`.
+   2. Run `curl.exe -s -H "X-Forwarded-For: 192.0.2.1" https://triage-copilot.<tailnet>.ts.net/healthz`.
+   3. Run `docker compose -p triagecopilot-prod logs gateway --since 2m | Select-String healthz`. The healthcheck asks for `/readyz`, so this shows only your request. Its `remoteAddress` must be your own public address, never 192.0.2.1 or the sidecar's.
+   4. If it is not, remove the line and run `make prod-up` again.
 6. On Vercel, sign in on desktop and phone, in both themes, and open a report. Then run `make prod-down` and reload: the site shows the demo with the offline note. Run `make prod-up` again.
 7. With production up, run `make infra-up` and `make test-int`. They run beside production, and `docker compose ls` lists `triagecopilot` and `triagecopilot-prod`. Then run `make infra-down`.
+
+### Egress
+
+```
+tailscale --edge, 10.231.233.18--> gateway:4200                              (Funnel's target)
+watch     --127.0.0.1:4202--> egress-proxy:4202 --ingress--> gateway:4200 (10.231.233.34)
+agent     --outbound, 10.231.233.2--> egress-proxy:3128 --egress--> the model providers
+tailscale --outbound, 10.231.233.3--> egress-proxy:3129 --egress--> Tailscale, Let's Encrypt
+```
+
+Docker Desktop lets any container on a routed network reach the internet and this PC's own listeners at `host.docker.internal` (192.168.65.254), and publishes no port from an internal network. So every production network is internal (`data`, `edge`, `ingress`, `outbound`, and `monitoring` for the observability profile) except `egress`, which only `egress-proxy` joins. The proxy is squid (`infra/squid/squid.conf`), as in FreightAudit and FilingLens:
+
+- CONNECT to port 443 only; nothing cached.
+- Every loopback, private, link-local, CGNAT and other non-public destination is refused before any allowlist, by each address a name resolves to.
+- Names only: a bare IP address never matches.
+- One port per client, and each port serves only its client's fixed address on `outbound`. So a compromised agent cannot use the sidecar's way out, or the reverse: neither can forge the other's address, since the agent runs as a non-root user and the sidecar without capabilities.
+- The proxy starts after the gateway, so a gateway from before the lockdown, which published 4202 itself, is recreated first. Squid's descriptor limit is 4,096: at Docker's default of 1,048,576 it idled at 153 MiB of its 256 MB.
+- Port 4202 is a reverse proxy to the gateway's fixed address, whatever URL a request names. A CONNECT there gets 405, and squid's cache manager 403.
+- The sidecar shares `edge` with the gateway alone, and no network with Postgres or ElasticMQ.
+- CI builds the image from `infra/docker/squid.Dockerfile`, and `publish.yml` pushes `triage-copilot-squid` with the same `sha-<12>` tags, so one `TC_TAG` pins the gateway, the agent and the proxy.
+
+| Port | Client | Allowed |
+| --- | --- | --- |
+| 3128 | agent (10.231.233.2) | `api.anthropic.com`, `generativelanguage.googleapis.com`, `integrate.api.nvidia.com` |
+| 3129 | tailscale (10.231.233.3) | `controlplane.tailscale.com`; the relays, by `^derp[0-9]+[a-z]*[.]tailscale[.]com$` (with no UDP out, all traffic rides a relay, Funnel's included); `acme-v02.api.letsencrypt.org` (Funnel's certificate) |
+| 4202 | watch, on this PC | the gateway's public listener only |
+
+- Not allowed: Tailscale's log server (`--no-logs-no-support` turns its upload off), OpenRouter and Ollama (not used in production), and every other host.
+- The agent's model clients read `HTTPS_PROXY` themselves (`test_providers.py` checks each); every internal address is `http://`, which it leaves alone.
+- Change the allowlist in `infra/squid/squid.conf` and its live test, `services/agent/tests/test_egress_int.py` (run by `make test-int`), by pull request. After the merge and a `git pull` here, run `docker restart triagecopilot-prod-egress-proxy-1`, which reads the mounted file again.
+- Read its log: `docker logs triagecopilot-prod-egress-proxy-1 | Select-String TCP_DENIED` lists refusals, and `Select-String CONNECT` the tunnels. A tunnel's line appears only when it closes. The healthcheck adds three `NONE_NONE/000` lines every 10 s.
+
+Egress checks, after check 2, in PowerShell:
+
+1. Run `docker inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' triagecopilot-prod-gateway-1 triagecopilot-prod-agent-1 triagecopilot-prod-tailscale-1 triagecopilot-prod-egress-proxy-1`. Expect the gateway on `data`, `edge` and `ingress`; the agent on `data` and `outbound`; the sidecar on `edge` and `outbound`; the proxy on `egress`, `ingress` and `outbound`, each with the `triagecopilot-prod_` prefix.
+2. Run `docker logs triagecopilot-prod-egress-proxy-1 | Select-String CONNECT`. Expect `TCP_TUNNEL/200` for Tailscale's hosts from 10.231.233.3. Then `Select-String TCP_DENIED`: nothing. If the sidecar asks for another host, report it; never allow a bare IP address.
+3. The model routes, with no key and no model call: `docker exec triagecopilot-prod-agent-1 python -c "import httpx2; [print(h, httpx2.head('https://' + h, timeout=10).status_code) for h in ('api.anthropic.com', 'generativelanguage.googleapis.com', 'integrate.api.nvidia.com')]"`. Each host prints an HTTP status, and the proxy's log shows a tunnel from 10.231.233.2 for each.
+4. This PC's ports are closed to the agent, so every result is non-zero (`10.231.233.1` is `outbound`'s gateway address): `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.setdefaulttimeout(2); [print(h, p, socket.socket().connect_ex((h, p))) for h in ('192.168.65.254', '10.231.233.1') for p in (4200, 4201, 4231, 5434, 4566, 445)]"`. And `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.create_connection(('host.docker.internal', 4231), 3)"` fails. This is P1.12 (4) for TC's own containers.
+5. Through the proxy, a 403: `docker exec triagecopilot-prod-agent-1 python -c "import socket; s = socket.create_connection(('egress-proxy', 3128), 5); s.sendall(b'CONNECT host.docker.internal:443 HTTP/1.1\r\nHost: x\r\n\r\n'); print(s.recv(40))"` prints `b'HTTP/1.1 403 Forbidden...'`.
+6. watch's port: `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4202/readyz` prints 200.
+7. A day later, `docker stats --no-stream triagecopilot-prod-egress-proxy-1` stays well under its 256 MB, and `Select-String TCP_DENIED` shows only egress check 5's probe.
+
+Rollback, if Funnel's `/healthz` is not 200 within 10 minutes, or the model calls or `watch`'s posts fail through the proxy:
+
+1. Run `make prod-down`.
+2. Run `git checkout <the commit before the egress lockdown> -- infra/docker-compose.prod.yml`, then `make prod-up`. Every container is back on one routed network, with open egress, and the gateway publishes 4202 itself.
+3. Report what failed. Later, `git checkout HEAD -- infra/docker-compose.prod.yml` restores the lockdown.
 
 ## Known gaps
 

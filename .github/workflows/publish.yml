@@ -1,6 +1,6 @@
 name: publish
 
-# Pushes the four images to GHCR after ci.yml passed on a push to this repo's main. workflow_run
+# Pushes the five images to GHCR after ci.yml passed on a push to this repo's main. workflow_run
 # also fires for pull request runs, forks included, with this repo's permissions, so the job checks
 # every field, builds exactly the commit that ci.yml tested, and downloads nothing from that run.
 on:
@@ -24,7 +24,12 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [gateway, agent, executor, sim]
+        include:
+          - { service: gateway, file: infra/docker/gateway.Dockerfile, target: '' }
+          - { service: agent, file: infra/docker/python.Dockerfile, target: agent }
+          - { service: executor, file: infra/docker/python.Dockerfile, target: executor }
+          - { service: sim, file: infra/docker/python.Dockerfile, target: sim }
+          - { service: squid, file: infra/docker/squid.Dockerfile, target: '' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,8 +53,8 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: infra/docker/${{ matrix.service == 'gateway' && 'gateway' || 'python' }}.Dockerfile
-          target: ${{ matrix.service != 'gateway' && matrix.service || '' }}
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
           build-args: PACKAGE=${{ matrix.service }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}

@@ -188,8 +188,9 @@ demo-save:
 	pnpm --filter @triage/gateway demo:save $(IDS)
 
 # Production (README, Deploy): pulls the images, migrates, loads the runbooks, starts the gateway,
-# the agent and the Funnel sidecar, and waits until they are ready. The timeout ends the wait when a
-# container crash-loops, as the gateway does on a setting it refuses; its logs name the setting.
+# the egress proxy, the agent and the Funnel sidecar, and waits until they are ready. The timeout
+# ends the wait when a container crash-loops, as the gateway does on a setting it refuses; its logs
+# name the setting.
 prod-up:
 	$(PROD) up -d --wait --wait-timeout 300
 
