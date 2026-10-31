@@ -37,8 +37,6 @@ from agent.model import (
     HypothesisDraft,
     Model,
     ModelTurn,
-    QuotaExhausted,
-    RateLimited,
     Report,
     ReportDraft,
     ToolRequest,
@@ -425,23 +423,18 @@ def test_paging_through_logs_keeps_the_context_within_budget(
 def test_a_resume_after_a_claude_log_summary_builds_the_bound_on_the_last_turn(
     engine: Engine,
 ) -> None:
-    """Claude answers a turn (Gemini's day is spent) and then a log summary (the small model is
-    busy). A summary is the small role's work whichever model writes it, so after a restart the
-    next turn's input bound builds on the last turn's exact count, never on the summary's."""
+    """Claude, asked first, answers a turn and then a log summary. A summary is the small role's
+    work whichever model writes it, so after a restart the next turn's input bound builds on the
+    last turn's exact count, never on the summary's."""
     request = new_request()
     stopping = asyncio.Event()
     router = Router(
-        Binding(
-            Role("primary", "gemini", "primary-model", None, 0, 0),
-            Fake("primary", QuotaExhausted("day spent")),
-        ),
+        Binding(Role("primary", "gemini", "primary-model", None, 0, 0), Fake("primary")),
         Binding(Role("fallback", "nvidia", "fallback-model", None, 0, 0), Fake("fallback")),
-        Binding(
-            Role("small", "gemini", "small-model", None, 0, 0), Fake("small", RateLimited("busy"))
-        ),
+        Binding(Role("small", "gemini", "small-model", None, 0, 0), Fake("small")),
         fallback_on_rate_limit=True,
         limiter=Limiter(None),
-        claude=Binding(Role("fallback", "anthropic", "claude-model", None, 0, 0), Fake("claude")),
+        claude=Binding(Role("primary", "anthropic", "claude-model", None, 0, 0), Fake("claude")),
     )
 
     async def logs(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -473,10 +466,8 @@ def test_a_resume_after_a_claude_log_summary_builds_the_bound_on_the_last_turn(
             .where(ModelCall.investigation_id == request.investigation_id)
             .order_by(ModelCall.id)
         ).all()
-    assert [tuple(row) for row in rows[:4]] == [
-        ("primary", "primary-model", "quota_exhausted", PROMPT_SHA),
-        ("fallback", "claude-model", "ok", PROMPT_SHA),
-        ("small", "small-model", "rate_limited", PROMPT_SHA),
+    assert [tuple(row) for row in rows[:2]] == [
+        ("primary", "claude-model", "ok", PROMPT_SHA),
         ("small", "claude-model", "ok", PROMPT_SHA),
     ]
 

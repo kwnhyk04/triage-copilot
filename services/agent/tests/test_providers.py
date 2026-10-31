@@ -7,13 +7,27 @@ from typing import Any
 
 import httpx2
 import pytest
+from anthropic_errors import (
+    BAD_REQUEST,
+    BILLING,
+    CREDIT_BALANCE,
+    INVALID_KEY,
+    NO_MODEL,
+    NO_PERMISSION,
+    OVERLOADED,
+    RATE_LIMITED,
+    RATE_LIMITED_BARE,
+    SERVER_ERROR,
+    TOO_LARGE,
+    USAGE_LIMITS,
+    Answer,
+)
 
 from agent.model import (
     CreditsExhausted,
     KeyRejected,
     Message,
     ModelError,
-    ModelExhausted,
     QuotaExhausted,
     RateLimited,
     Refused,
@@ -278,35 +292,39 @@ def test_claude_forces_the_report_and_summarizes_without_thinking() -> None:
     assert (summary, usage.input) == ("- 40 timeouts", 2_800)
 
 
-LIMITS = "You have reached your specified API usage limits. You will regain access on 2026-11-01."
-BUSY = "This request would exceed your organization's rate limit."
-
-
 @pytest.mark.parametrize(
-    ("status", "kind", "message", "headers", "error"),
+    ("answer", "error", "retry_after"),
     [
-        # Credits or the spend limit stop every Anthropic model; a bare 429 stops only this one.
-        (402, "billing_error", "Your credit balance is too low.", None, CreditsExhausted),
-        (400, "invalid_request_error", LIMITS, None, CreditsExhausted),
-        (429, "rate_limit_error", BUSY, None, ModelExhausted),
-        (429, "rate_limit_error", BUSY, {"retry-after": "7"}, RateLimited),
-        (400, "invalid_request_error", "messages: roles must alternate", None, ModelError),
-        (529, "overloaded_error", "Overloaded", None, ModelError),
+        # Credits or the spend limit, however Anthropic words it, stop every Anthropic model.
+        (CREDIT_BALANCE, CreditsExhausted, None),
+        (USAGE_LIMITS, CreditsExhausted, None),
+        (BILLING, CreditsExhausted, None),
+        (INVALID_KEY, KeyRejected, None),
+        (NO_PERMISSION, KeyRejected, None),
+        # Every 429 is a busy minute, with or without retry-after: nothing stops on it.
+        (RATE_LIMITED, RateLimited, 7.0),
+        (RATE_LIMITED_BARE, RateLimited, None),
+        (OVERLOADED, ModelError, None),
+        (SERVER_ERROR, ModelError, None),
+        (BAD_REQUEST, ModelError, None),
+        (NO_MODEL, ModelError, None),
+        (TOO_LARGE, ModelError, None),
     ],
+    ids=lambda value: value.name if isinstance(value, Answer) else None,
 )
-def test_claude_tells_credits_gone_from_a_model_stop_and_a_busy_minute(
-    status: int, kind: str, message: str, headers: dict[str, str] | None, error: type[ModelError]
+def test_claude_maps_each_recorded_answer_to_its_error(
+    answer: Answer, error: type[ModelError], retry_after: float | None
 ) -> None:
-    body = {"type": "error", "error": {"type": kind, "message": message}}
-    _, provider = claude(status, body, headers)
+    _, provider = claude(answer.status, answer.body(), answer.headers)
 
     with pytest.raises(ModelError) as raised:
         asyncio.run(provider.generate("system", HISTORY, TOOLS, None, 512))
 
     assert type(raised.value) is error
-    assert raised.value.retry_after == (7.0 if headers else None)
-    # Only an overloaded or failing server is worth asking again.
-    assert raised.value.retryable is (error is not ModelError or status >= 500)
+    assert raised.value.retry_after == retry_after
+    if error is ModelError:
+        # Only an overloaded or failing server is worth asking again.
+        assert raised.value.retryable is (answer.status >= 500)
 
 
 def test_a_claude_refusal_is_never_retried_in_a_turn_or_a_summary() -> None:

@@ -164,7 +164,7 @@ make install
 make dev
 ```
 
-Model calls (`AI_ENABLED=true`) run on Gemini's free tier, falling back to NVIDIA NIM. With `LLM_CLAUDE_FALLBACK=true` and `ANTHROPIC_API_KEY` in `.env`, Claude Haiku 5.5 comes between them, paid from Anthropic API credits until `LLM_CLAUDE_UNTIL`.
+Model calls (`AI_ENABLED=true`) run on Gemini's free tier, falling back to NVIDIA NIM. With `ANTHROPIC_API_KEY` in `.env`, live triage asks Claude Haiku 5.5 first, paid from Anthropic API credits until `LLM_CLAUDE_UNTIL`; with `LLM_CLAUDE_FIRST=true` the sim and evals do too. Any Claude failure moves that call alone to the free chain.
 
 `make install` also installs the gitleaks pre-commit hook, which blocks commits that stage secrets.
 

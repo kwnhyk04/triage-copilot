@@ -10,6 +10,15 @@ from typing import Any, cast
 
 import httpx2
 import pytest
+from anthropic_errors import (
+    ANSWERS,
+    INVALID_KEY,
+    OVERLOADED,
+    RATE_LIMITED,
+    REFUSAL,
+    Answer,
+    Stop,
+)
 from sqlalchemy import Connection
 
 from agent.job import REPORT_OUTPUT_CAP
@@ -35,7 +44,7 @@ from agent.model import (
 )
 from agent.pricing import RATES, worst
 from agent.prompt import METRICS, SYSTEM
-from agent.providers import ProviderTurn
+from agent.providers import AnthropicProvider, ProviderTurn
 from agent.settings import Role, RoleName
 from agent.tools import TOOL_SPECS, DependenciesArgs, ToolContext, ToolInputError, Tools, parse
 from py_clients.clients import AlertContextClient
@@ -240,171 +249,214 @@ def test_summaries_skip_a_page_past_the_prompt_limit() -> None:
     assert asyncio.run(small.summarize("x" * PROMPT_LIMIT, 10**6, SHA)) == (None, [])
 
 
+# Claude, which every chain asks first: Haiku under the triage cap of $0.40 a UTC day.
+TRIAGE = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, daily_usd=0.40)
+
+
 def chain(
+    claude: Fake | AnthropicProvider,
     primary: Fake,
-    claude: Fake,
     fallback: Fake,
     *,
     small: Fake | None = None,
     limiter: Limiter | None = None,
     fallback_on: bool = True,
 ) -> Router:
-    """Gemini, then Claude, then the free fallback; the small role with Claude after it."""
+    """Claude first, then the free chain: Gemini, then the free fallback; for summaries, Claude
+    and then the small model."""
     return Router(
         Binding(role("primary", primary.model), primary),
         Binding(role("fallback", fallback.model), fallback),
         Binding(role("small", "small-model"), small or Fake("small")),
         fallback_on_rate_limit=fallback_on,
         limiter=limiter or Limiter(None),
-        claude=Binding(Role("fallback", "anthropic", claude.model, None, 0, 0), claude),
+        claude=Binding(TRIAGE, claude),
     )
 
 
-def test_claude_answers_after_gemini_and_before_the_free_fallback() -> None:
-    for error in (QuotaExhausted("day spent"), RateLimited("busy minute")):
-        claude, fallback = Fake("claude"), Fake("fallback")
-
-        turn = asyncio.run(chain(Fake("primary", error), claude, fallback).turn(REQUEST))
-
-        models = [(c.model, c.outcome) for c in turn.calls]
-        assert models == [("primary-model", _outcome(error)), ("claude-model", "ok")]
-        assert turn.model == "claude-model"
-        assert fallback.max_outputs == []
+Reply = Answer | dict[str, Any] | type[httpx2.TransportError]
 
 
-def _outcome(error: Exception) -> str:
-    return "rate_limited" if isinstance(error, RateLimited) else "quota_exhausted"
+def anthropic(answer: Reply) -> tuple[list[httpx2.Request], AnthropicProvider]:
+    """Claude on a transport that gives every request the same answer (one of Anthropic's error
+    answers, a 200 body, or a failure before any answer), and the requests it saw."""
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        if isinstance(answer, Answer):
+            return answer.response()
+        if isinstance(answer, dict):
+            return httpx2.Response(200, json=answer)
+        raise answer("no answer", request=request)
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handle))
+    return seen, AnthropicProvider("claude-haiku-5-5", "sk-ant-test", "https://claude.test", http)
 
 
-def test_credits_gone_moves_the_turn_down_the_chain_and_says_so(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    gone = CreditsExhausted("anthropic 402: credits or spend limit used up")
-    claude, fallback = Fake("claude", gone), Fake("fallback")
-    primary = Fake("primary", QuotaExhausted("day spent"))
-
-    with caplog.at_level(logging.WARNING, logger="agent.llm"):
-        turn = asyncio.run(chain(primary, claude, fallback).turn(REQUEST))
-
-    outcomes = [(c.model, c.outcome) for c in turn.calls]
-    assert outcomes == [
-        ("primary-model", "quota_exhausted"),
-        ("claude-model", "credits_exhausted"),
-        ("fallback-model", "ok"),
-    ]
-    assert any("credits" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
-    # Once spent() reads that call, the limiter keeps Claude off without asking it.
-    claude_spent = Limiter(lambda r, w: "credits used up" if r.provider == "anthropic" else None)
-    primary = Fake("primary", QuotaExhausted("day spent"))
-    again = chain(primary, claude, Fake("fallback"), limiter=claude_spent)
-    turn = asyncio.run(again.turn(REQUEST))
-    # The provider's own "spent" stops its model; a call the agent skipped stops nothing.
-    assert [c.outcome for c in turn.calls] == ["quota_exhausted", "skipped", "ok"]
-    assert len(claude.max_outputs) == 1
-
-
-def test_a_claude_429_with_a_retry_after_is_retried_not_skipped() -> None:
-    claude = Fake("claude", RateLimited("anthropic 429: rate limited", retry_after=7))
-    fallback = Fake("fallback")
-    router = chain(
-        Fake("primary", QuotaExhausted("spent"), QuotaExhausted("spent")), claude, fallback
-    )
-
-    with pytest.raises(RateLimited) as raised:
-        asyncio.run(router.turn(REQUEST))
-    # The job waits the Retry-After and asks again, and Claude answers.
-    turn = asyncio.run(router.turn(REQUEST))
-
-    assert raised.value.retry_after == 7
-    assert turn.model == "claude-model"
-    assert fallback.max_outputs == []
-
-
-def test_evals_pin_one_model_and_never_reach_claude() -> None:
-    claude, fallback = Fake("claude"), Fake("fallback")
-    router = chain(Fake("primary", QuotaExhausted("spent")), claude, fallback, fallback_on=False)
-
-    with pytest.raises(QuotaExhausted):
-        asyncio.run(router.turn(REQUEST))
-
-    assert claude.max_outputs == fallback.max_outputs == []
+# Every answer Claude can give a turn instead of a tool call: the outcome recorded for its call,
+# and how long Claude stays off after it.
+FAILURES: list[tuple[str, Reply, str, Stop]] = [
+    *((answer.name, answer, outcome, stop) for answer, outcome, stop in ANSWERS),
+    ("refusal", REFUSAL, "error", "call"),
+    ("connection refused", httpx2.ConnectError, "error", "call"),
+    ("read timeout", httpx2.ReadTimeout, "error", "call"),
+]
 
 
 @pytest.mark.parametrize(
-    "error",
-    [
-        RateLimited("busy minute"),
-        KeyRejected("gemini 401: the API key was rejected"),
-        Refused("the model declined the request"),
-    ],
+    ("name", "answer", "outcome", "stop"), FAILURES, ids=[failure[0] for failure in FAILURES]
 )
-def test_summaries_go_to_claude_while_the_small_model_cannot_answer(error: ModelError) -> None:
-    router = chain(Fake("primary"), Fake("claude"), Fake("fallback"), small=Fake("small", error))
+def test_each_anthropic_answer_falls_through_for_its_call_or_stops_claude(
+    name: str, answer: Reply, outcome: str, stop: Stop
+) -> None:
+    seen, claude = anthropic(answer)
+    router = chain(claude, Fake("primary"), Fake("fallback"))
+
+    turn = asyncio.run(router.turn(REQUEST))
+
+    # Gemini answers the call Claude could not, whatever Claude answered.
+    assert [(c.model, c.outcome) for c in turn.calls] == [
+        ("claude-haiku-5-5", outcome),
+        ("primary-model", "ok"),
+    ]
+    assert turn.model == "primary-model"
+    again = asyncio.run(router.turn(REQUEST))
+    if stop == "call":
+        # Nothing stops on it: the next call asks Claude again.
+        assert len(seen) == 2
+        assert again.calls[0].outcome == outcome
+    if stop == "restart":
+        # A rejected key keeps Claude off in this process, with no request and the reason.
+        assert len(seen) == 1
+        assert again.calls[0].outcome == "skipped"
+        assert "until the agent restarts" in (again.calls[0].error or "")
+        # A restart, with its new limiter, asks Claude again.
+        asyncio.run(chain(claude, Fake("primary"), Fake("fallback")).turn(REQUEST))
+        assert len(seen) == 2
+    # "month": spent() reads the recorded credits_exhausted until the month ends
+    # (test_workers_int.py, test_a_credits_stop_holds_every_anthropic_model_until_the_month_ends).
+
+
+def test_a_rejected_key_stops_every_claude_model_until_the_agent_restarts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, claude = anthropic(INVALID_KEY)
+    shared = Limiter(None)
+    opus = Fake("opus")
+
+    with caplog.at_level(logging.WARNING, logger="agent.llm"):
+        asyncio.run(chain(claude, Fake("primary"), Fake("fallback"), limiter=shared).turn(REQUEST))
+    plans = planners(opus, Fake("primary"), Fake("fallback"), limiter=shared)
+    answer, calls = asyncio.run(plans.plan(PLAN_REQUEST))
+
+    # The planner's Opus has the same key: skipped with the reason, and the free chain plans.
+    assert [(c.model, c.outcome) for c in calls] == [
+        ("claude-opus-5-5", "skipped"),
+        ("primary-model", "ok"),
+    ]
+    assert "until the agent restarts" in (calls[0].error or "")
+    assert (answer, opus.max_outputs) == (PLAN_ANSWER, [])
+    assert any("API key" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_evals_run_claude_then_gemini_and_never_the_free_fallback() -> None:
+    _, claude = anthropic(RATE_LIMITED)
+    fallback = Fake("fallback")
+
+    turn = asyncio.run(chain(claude, Fake("primary"), fallback, fallback_on=False).turn(REQUEST))
+
+    assert [c.model for c in turn.calls] == ["claude-haiku-5-5", "primary-model"]
+    # With Gemini busy too, the eval's turn waits: the free fallback never answers an eval.
+    busy = Fake("primary", RateLimited("gemini 429", retry_after=5))
+    with pytest.raises(RateLimited):
+        asyncio.run(chain(claude, busy, fallback, fallback_on=False).turn(REQUEST))
+    assert fallback.max_outputs == []
+
+
+SUMMARY_FAILURES: list[Reply] = [
+    RATE_LIMITED,
+    OVERLOADED,
+    INVALID_KEY,
+    REFUSAL,
+    httpx2.ConnectError,
+]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    SUMMARY_FAILURES,
+    ids=["rate limited", "overloaded", "invalid key", "refusal", "connection refused"],
+)
+def test_summaries_go_to_the_small_model_while_claude_cannot_answer(answer: Reply) -> None:
+    _, claude = anthropic(answer)
+    router = chain(claude, Fake("primary"), Fake("fallback"))
 
     summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, SHA))
 
     assert summary == "- 40 timeouts"
     # A summary is the small role's work whichever model writes it, so the job's LAST_TURN, which
     # skips role small, never takes one for the last turn after a resume.
-    assert [(c.role, c.model, c.outcome) for c in calls] == [
-        ("small", "small-model", "rate_limited" if isinstance(error, RateLimited) else "error"),
-        ("small", "claude-model", "ok"),
+    assert [(c.role, c.model) for c in calls] == [
+        ("small", "claude-haiku-5-5"),
+        ("small", "small-model"),
     ]
+    assert calls[0].outcome != "ok"
 
 
-def test_a_rejected_key_or_a_refusal_moves_the_turn_down_the_chain_with_its_reason() -> None:
-    for error in (
-        KeyRejected("anthropic 401: the API key was rejected"),
-        Refused("anthropic declined the request (category cyber)"),
-    ):
-        claude, fallback = Fake("claude", error), Fake("fallback")
-        primary = Fake("primary", QuotaExhausted("day spent"))
+def test_credits_gone_moves_the_turn_down_the_chain_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gone = CreditsExhausted("anthropic 402: credits or spend limit used up")
+    claude = Fake("claude", gone)
 
-        turn = asyncio.run(chain(primary, claude, fallback).turn(REQUEST))
+    with caplog.at_level(logging.WARNING, logger="agent.llm"):
+        turn = asyncio.run(chain(claude, Fake("primary"), Fake("fallback")).turn(REQUEST))
 
-        assert [(c.model, c.outcome) for c in turn.calls] == [
-            ("primary-model", "quota_exhausted"),
-            ("claude-model", "error"),
-            ("fallback-model", "ok"),
-        ]
-        assert turn.calls[1].error == f"{type(error).__name__}: {error}"
-        assert turn.model == "fallback-model"
+    assert [(c.model, c.outcome) for c in turn.calls] == [
+        ("claude-haiku-5-5", "credits_exhausted"),
+        ("primary-model", "ok"),
+    ]
+    assert any("credits" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+    # Once spent() reads that call, the limiter keeps Claude off without asking it.
+    claude_spent = Limiter(lambda r, w: "credits used up" if r.provider == "anthropic" else None)
+    again = chain(claude, Fake("primary"), Fake("fallback"), limiter=claude_spent)
+    turn = asyncio.run(again.turn(REQUEST))
+    assert [c.outcome for c in turn.calls] == ["skipped", "ok"]
+    assert len(claude.max_outputs) == 1
 
 
 def test_a_skipped_model_records_why_it_was_skipped() -> None:
     expired = "its credits ended on 2026-10-01 (UTC)"
     limiter = Limiter(lambda r, w: expired if r.provider == "anthropic" else None)
     claude = Fake("claude")
-    router = chain(
-        Fake("primary", QuotaExhausted("day spent")), claude, Fake("fallback"), limiter=limiter
+
+    turn = asyncio.run(
+        chain(claude, Fake("primary"), Fake("fallback"), limiter=limiter).turn(REQUEST)
     )
 
-    turn = asyncio.run(router.turn(REQUEST))
-
-    assert [(c.model, c.outcome, c.error) for c in turn.calls[1:]] == [
-        ("claude-model", "skipped", f"claude-model skipped: {expired}"),
-        ("fallback-model", "ok", None),
+    assert [(c.model, c.outcome, c.error) for c in turn.calls] == [
+        ("claude-haiku-5-5", "skipped", f"claude-haiku-5-5 skipped: {expired}"),
+        ("primary-model", "ok", None),
     ]
     assert claude.max_outputs == []
 
 
 def test_every_call_records_the_prompt_sha_it_was_made_with() -> None:
-    skip_primary = Limiter(lambda r, w: "its day is spent" if r.name == "primary" else None)
-    claude = Fake("claude", RateLimited("busy minute", retry_after=3))
-    router = chain(Fake("primary"), claude, Fake("fallback"), limiter=skip_primary)
+    skip_claude = Limiter(lambda r, w: "its day is spent" if r.provider == "anthropic" else None)
+    busy = Fake("primary", RateLimited("busy minute", retry_after=3))
+    router = chain(Fake("claude"), busy, Fake("fallback"), limiter=skip_claude)
 
-    with pytest.raises(RateLimited) as raised:
-        asyncio.run(router.turn(REQUEST))
     turn = asyncio.run(router.turn(REQUEST))
     summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, "sha-of-the-log-prompt"))
 
-    assert [(c.outcome, c.prompt_sha) for c in raised.value.calls] == [
+    assert [(c.outcome, c.prompt_sha) for c in turn.calls] == [
         ("skipped", SHA),
         ("rate_limited", SHA),
+        ("ok", SHA),
     ]
-    assert {c.prompt_sha for c in turn.calls} == {SHA}
     assert summary is not None
-    assert [c.prompt_sha for c in calls] == ["sha-of-the-log-prompt"]
+    assert [c.prompt_sha for c in calls] == ["sha-of-the-log-prompt"] * 2
 
 
 def test_claude_is_spent_from_the_day_its_credits_expire() -> None:
@@ -467,26 +519,9 @@ def test_alert_context_shows_annotations_only_where_asked() -> None:
     assert "summary" not in hidden
 
 
-# Live triage's Claude role, with the triage cap of $0.40 a UTC day.
-TRIAGE = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, daily_usd=0.40)
-
-
-def live(claude: Fake, primary: Fake, fallback: Fake, *, limiter: Limiter | None = None) -> Router:
-    """Live triage's chain: Claude first, then the free chain (Gemini, then the free fallback)."""
-    return Router(
-        Binding(role("primary", primary.model), primary),
-        Binding(role("fallback", fallback.model), fallback),
-        Binding(role("small", "small-model"), Fake("small")),
-        fallback_on_rate_limit=True,
-        limiter=limiter or Limiter(None),
-        claude=Binding(TRIAGE, claude),
-        claude_first=True,
-    )
-
-
-def test_live_triage_asks_claude_first_and_the_free_chain_after_it() -> None:
+def test_claude_answers_first_and_the_free_chain_after_it() -> None:
     primary = Fake("primary")
-    turn = asyncio.run(live(Fake("claude"), primary, Fake("fallback")).turn(REQUEST))
+    turn = asyncio.run(chain(Fake("claude"), primary, Fake("fallback")).turn(REQUEST))
     assert (turn.model, primary.max_outputs) == ("claude-haiku-5-5", [])
 
     for error in (
@@ -495,33 +530,20 @@ def test_live_triage_asks_claude_first_and_the_free_chain_after_it() -> None:
         CreditsExhausted("anthropic 402: credits or spend limit used up"),
     ):
         turn = asyncio.run(
-            live(Fake("claude", error), Fake("primary"), Fake("fallback")).turn(REQUEST)
+            chain(Fake("claude", error), Fake("primary"), Fake("fallback")).turn(REQUEST)
         )
         assert [c.model for c in turn.calls] == ["claude-haiku-5-5", "primary-model"]
         assert turn.model == "primary-model"
     # With Gemini's day spent as well, the free fallback answers.
     gemini_spent = Fake("primary", QuotaExhausted("gemini 429: daily quota spent"))
     turn = asyncio.run(
-        live(Fake("claude", Refused("no")), gemini_spent, Fake("fallback")).turn(REQUEST)
+        chain(Fake("claude", Refused("no")), gemini_spent, Fake("fallback")).turn(REQUEST)
     )
     assert turn.model == "fallback-model"
 
 
-def test_claude_s_429_is_waited_out_only_up_to_a_minute() -> None:
-    minute = Fake("claude", RateLimited("anthropic 429: rate limited", retry_after=60))
-    with pytest.raises(RateLimited):
-        asyncio.run(live(minute, Fake("primary"), Fake("fallback")).turn(REQUEST))
-    for retry_after in (61, None):
-        busy = Fake("claude", RateLimited("anthropic 429: rate limited", retry_after=retry_after))
-        turn = asyncio.run(live(busy, Fake("primary"), Fake("fallback")).turn(REQUEST))
-        assert [(c.model, c.outcome) for c in turn.calls] == [
-            ("claude-haiku-5-5", "rate_limited"),
-            ("primary-model", "ok"),
-        ]
-
-
-def test_live_summaries_ask_claude_first() -> None:
-    router = live(Fake("claude"), Fake("primary"), Fake("fallback"))
+def test_summaries_ask_claude_first() -> None:
+    router = chain(Fake("claude"), Fake("primary"), Fake("fallback"))
     summary, calls = asyncio.run(router.summarize("x" * 500, 10_000, SHA))
     assert summary == "- 40 timeouts"
     assert [(c.role, c.model) for c in calls] == [("small", "claude-haiku-5-5")]
@@ -536,7 +558,7 @@ def test_the_triage_cap_is_checked_against_each_call_s_worst_case() -> None:
         return "its worst case passes the triage cap" if over else None
 
     claude = Fake("claude")
-    router = live(claude, Fake("primary"), Fake("fallback"), limiter=Limiter(is_spent))
+    router = chain(claude, Fake("primary"), Fake("fallback"), limiter=Limiter(is_spent))
     turn = asyncio.run(router.turn(REQUEST))
 
     limits = REQUEST.budget.limits("claude-haiku-5-5")
@@ -558,7 +580,7 @@ def test_every_claude_role_is_held_to_tc_s_monthly_cap_by_each_call_s_worst_case
         asked.append((role.model, worst_usd))
         return None
 
-    # An eval's Claude: no daily cap, only TC's monthly one.
+    # A Claude pinned as an eval's primary role, here with TC's monthly cap alone.
     claude = Role("primary", "anthropic", "claude-haiku-5-5", None, 0, 0, monthly_usd=15.0)
     pinned = Router(
         Binding(claude, Fake("claude")),
@@ -697,7 +719,7 @@ def test_provider_text_is_masked_before_it_is_recorded_or_logged(
     leaky = ModelError(f"nvidia 400: bad request for https://nim.example/v1?key={planted}")
     with caplog.at_level(logging.WARNING, logger="agent.llm"):
         turn = asyncio.run(
-            live(Fake("claude", gone), Fake("primary"), Fake("fallback")).turn(REQUEST)
+            chain(Fake("claude", gone), Fake("primary"), Fake("fallback")).turn(REQUEST)
         )
         with pytest.raises(ModelError) as raised:
             asyncio.run(router(Fake("primary", leaky), Fake("fallback")).turn(REQUEST))

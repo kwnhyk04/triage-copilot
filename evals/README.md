@@ -82,11 +82,20 @@ make eval SPLIT=test SET_FLOORS=1 AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=fal
 
 Never run `make eval SUBSET=ci SET_FLOORS=1`: the ci subset's floors for validity (0.92), median tool calls (12) and median tokens (80,425) are set by hand, and its two p95 times have none, so CI only reports them (docs/memory.md, 2026-10-20). Rerun, it would derive them from the 8 cached runs again and put the targets back.
 
-The Claude comparison pins `claude-haiku-5-5` for the agent and the log summaries, paid from Anthropic API credits until they expire on 2026-11-10. Pass the same model settings to the agent and to the eval:
+Claude first (from 2026-11-01): with `LLM_CLAUDE_FIRST=true` the agent and the eval ask `claude-haiku-5-5` (`LLM_TRIAGE_MODEL`) first for turns and log summaries, then the pinned Gemini models, never the free fallback, until the credits expire on 2026-11-10 (UTC); from then on the eval keys and names its runs as free-only again. Any Claude failure moves that call alone to Gemini, and every report's "Models that served" table and "Served by" column say which models answered. A Claude-first eval needs `INVESTIGATION_TOKEN_CAP=350000` or more (exit 3 otherwise), its reports end `-claude-haiku-5-5-first` before any cap, and it never writes the README table or sets floors: floors only ever come from free-only runs. Pass the same settings to the agent and to the eval; an agent that asked no Claude while the eval expected it fails the run with exit 3:
 
 ```sh
-make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_PRIMARY_RPM=50 LLM_PRIMARY_RPD=0 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5 LLM_SMALL_RPM=50 LLM_SMALL_RPD=0
-make eval SPLIT=test AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5
+make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_CLAUDE_FIRST=true LLM_FALLBACK_ON_RATE_LIMIT=false INVESTIGATION_TOKEN_CAP=350000
+make eval SPLIT=dev AI_ENABLED=true LLM_CLAUDE_FIRST=true LLM_FALLBACK_ON_RATE_LIMIT=false INVESTIGATION_TOKEN_CAP=350000
+```
+
+No LLM judge or grader exists: every score is deterministic (`harness/score.py`), and any judge added later stays off Claude.
+
+The earlier Claude comparison pinned `claude-haiku-5-5` for the agent and the log summaries; its commands now need `LLM_CLAUDE_FIRST=false` on both, or their cache keys change:
+
+```sh
+make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_CLAUDE_FIRST=false LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_PRIMARY_RPM=50 LLM_PRIMARY_RPD=0 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5 LLM_SMALL_RPM=50 LLM_SMALL_RPD=0
+make eval SPLIT=test AI_ENABLED=true LLM_CLAUDE_FIRST=false LLM_FALLBACK_ON_RATE_LIMIT=false LLM_PRIMARY_PROVIDER=anthropic LLM_PRIMARY_MODEL=claude-haiku-5-5 LLM_SMALL_PROVIDER=anthropic LLM_SMALL_MODEL=claude-haiku-5-5
 ```
 
 Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in their name, and it never writes the README table. It ran on 2026-10-20 with `DAILY_AI_TOKEN_BUDGET=12000000`, since that budget counts every model's tokens per UTC day and Gemini had run earlier that day. The report is `reports/2026-10-21-test-full-3-2b91d452-claude-haiku-5-5.md`, and the main README compares it with Gemini. The eval refuses `SET_FLOORS=1` off the default models with exit 3: the floors' scope (`test-full-3`) does not name the model, so Haiku's figures would replace Gemini's. Credits gone (a 402, a 400 naming a spend limit, or a 429 without retry-after) park the run and stop the eval with exit 2.

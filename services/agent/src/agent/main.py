@@ -36,9 +36,10 @@ SIM_TIMEOUT = 10.0
 
 
 def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
-    """The sim's router (the primary, fallback and small roles, and Claude when it is on) and live
-    triage's (Claude first while ANTHROPIC_API_KEY is set, then the same free roles). They share
-    one limiter, so a model's minute counts every request to it."""
+    """The sim's router (Claude first with LLM_CLAUDE_FIRST, then the primary, fallback and small
+    roles) and live triage's (Claude first while ANTHROPIC_API_KEY is set, then the same free
+    roles). They share one limiter, so a model's minute counts every request to it and a rejected
+    key stops Claude in both."""
 
     def is_spent(role: Role, worst_usd: float) -> str | None:
         with engine.connect() as conn:
@@ -49,7 +50,8 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         for role in (settings.role(n) for n in ("primary", "fallback", "small"))
     )
     limiter = Limiter(is_spent)
-    claude, triage, planner = settings.claude(), settings.triage(), settings.planner()
+    triage, planner = settings.triage(), settings.planner()
+    claude = Binding(triage, make_provider(triage)) if triage else None
     on_rate_limit = settings.llm_fallback_on_rate_limit
     sim = Router(
         primary,
@@ -57,7 +59,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         small,
         fallback_on_rate_limit=on_rate_limit,
         limiter=limiter,
-        claude=Binding(claude, make_provider(claude)) if claude else None,
+        claude=claude if settings.llm_claude_first else None,
     )
     if triage is None and settings.live_tenants:
         log.warning("live triage runs on the free models only: ANTHROPIC_API_KEY is not set")
@@ -67,8 +69,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         small,
         fallback_on_rate_limit=on_rate_limit,
         limiter=limiter,
-        claude=Binding(triage, make_provider(triage)) if triage else None,
-        claude_first=True,
+        claude=claude,
         planner=Binding(planner, make_provider(planner)) if planner else None,
     )
     return sim, live

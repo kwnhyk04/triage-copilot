@@ -7,8 +7,9 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
+from sqlalchemy import create_engine
 
-from agent.main import create_app
+from agent.main import create_app, make_routers
 from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
@@ -37,45 +38,62 @@ def test_settings_hold_no_approver_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "approver-key-the-agent-must-not-load" not in settings.model_dump_json()
 
 
-def test_the_free_chain_is_the_default_and_claude_needs_its_key() -> None:
-    assert OFFLINE.claude() is None
-    keys = {"gemini_api_key": SecretStr("g"), "nvidia_api_key": SecretStr("n")}
+KEYS: dict[str, Any] = {"gemini_api_key": SecretStr("g"), "nvidia_api_key": SecretStr("n")}
+
+
+def test_the_free_chain_is_the_default_and_claude_first_needs_its_key() -> None:
+    assert OFFLINE.llm_claude_first is False
     on: dict[str, Any] = {
         **OFFLINE.model_dump(),
-        **keys,
+        **KEYS,
         "ai_enabled": True,
         "fastembed_cache_path": Path("cache"),
-        "llm_claude_fallback": True,
+        "llm_claude_first": True,
     }
-    with pytest.raises(
-        ValidationError, match="ANTHROPIC_API_KEY is required by LLM_CLAUDE_FALLBACK"
-    ):
+    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY is required by LLM_CLAUDE_FIRST"):
         Settings(**on)
     keyed: dict[str, Any] = {**on, "anthropic_api_key": SecretStr("sk-ant-test")}
-    claude = Settings(**keyed).claude()
+    claude = Settings(**keyed).triage()
     assert claude is not None
     assert (claude.name, claude.provider, claude.model) == (
-        "fallback",
+        "primary",
         "anthropic",
         "claude-haiku-5-5",
     )
     assert (claude.until, claude.api_key) == (date(2026, 11, 10), "sk-ant-test")
 
 
-def test_every_claude_role_has_tc_s_monthly_cap_and_needs_a_priced_model() -> None:
+def test_the_sim_asks_claude_first_only_while_llm_claude_first_is_on() -> None:
+    keyed: dict[str, Any] = {**OFFLINE.model_dump(), **KEYS, "anthropic_api_key": SecretStr("k")}
+    # Nothing connects: the routers only hold the engine for their limiter's checks.
+    engine = create_engine(OFFLINE.agent_database_url)
+    for first in (True, False):
+        settings: dict[str, Any] = {**keyed, "llm_claude_first": first}
+        sim, live = make_routers(Settings(**settings), engine)
+        # Live triage asks Claude first whenever its key is set, the sim only when told to.
+        assert live.claude is not None
+        assert (sim.claude is not None) is first
+        # The sim's Claude is live triage's: Haiku under the same daily and monthly caps.
+        if sim.claude is not None:
+            assert sim.claude.role == live.claude.role
+            assert (sim.claude.role.daily_usd, sim.claude.role.monthly_usd) == (0.40, 15.0)
+
+
+def test_every_claude_role_has_the_daily_and_monthly_caps_and_needs_a_priced_model() -> None:
     keyed: dict[str, Any] = {
         **OFFLINE.model_dump(),
         "anthropic_api_key": SecretStr("sk-ant-test"),
-        "llm_claude_fallback": True,
         "llm_small_provider": "anthropic",
         "llm_small_model": "claude-haiku-5-5",
     }
     settings = Settings(**keyed)
-    claude, triage = settings.claude(), settings.triage()
-    assert claude is not None and triage is not None
-    # Evals included: any role on Anthropic counts against the same $15 a month.
-    assert [r.monthly_usd for r in (claude, triage, settings.role("small"))] == [15.0] * 3
-    assert settings.role("primary").monthly_usd is None
+    triage = settings.triage()
+    assert triage is not None
+    # Every Claude call but a plan, evals included, is held to the triage cap and TC's month.
+    caps = [(r.daily_usd, r.monthly_usd) for r in (triage, settings.role("small"))]
+    assert caps == [(0.40, 15.0)] * 2
+    gemini = settings.role("primary")
+    assert (gemini.daily_usd, gemini.monthly_usd) == (None, None)
     lower: dict[str, Any] = {**keyed, "llm_claude_monthly_usd": 5}
     assert Settings(**lower).role("small").monthly_usd == 5
     unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-sonnet-5-5"}

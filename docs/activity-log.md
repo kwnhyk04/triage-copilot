@@ -19,6 +19,28 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-10-31 to 2026-11-01: Go-live plan approved; PR 1, Claude first everywhere, built on branch claude-first
+
+- What happened: the user asked for the shortest path to go-live before the Claude credits end on 2026-11-10. Claude Code read the docs and code, had the draft checked by an independent read-only review (its defects were fixed in the plan), and the user approved the plan on 2026-10-31 with four changes: a separate production compose project and volumes on its own gateway port, `next` 16.4.3 in PR 2, the broader Claude fall-through, and P2.5 left out. Then PR 1 was built, tests first, on branch `claude-first` from `main` (`d425141`). Nothing is committed.
+- Why: Claude's credits end on 2026-11-10, and the user asked that the sim, the evals and every model role run Claude first with the free chain behind, with tests on recorded error shapes.
+- What we did:
+  1. Found and recorded a docs discrepancy: docs/todo.md and this log said step 9 was uncommitted on `step-9-web`, but git shows it merged as #18 (`d425141`).
+  2. Found while planning: Anthropic's 400 "Your credit balance is too low" did not count as credits gone, so it would have failed live investigations instead of moving them to Gemini.
+  3. RED, agent: `services/agent/tests/anthropic_errors.py` (Anthropic's error shapes, from its error docs; none captured live) and new or rewritten tests in `test_providers.py`, `test_llm.py`, `test_agent_api.py`, `test_live_int.py`, `test_workers_int.py` and `test_ai_loop_int.py`. 34 unit tests failed for the expected reasons (Gemini asked first, no Claude in the sim, summaries on the small model first, the old 429 mapping).
+  4. GREEN, agent: `settings.py`, `providers.py`, `model.py`, `llm.py` and `main.py` (docs/memory.md, 2026-11-01, has the rules). The 182 agent unit tests passed.
+  5. RED then GREEN, evals: 7 new or changed tests in `evals/harness/test_eval_score.py` failed, then passed after the `eval.py` changes (Claude in the pinned models and key, `problems()`, served models, `used()`, report names, the 350,000-token guard, `estimate()` by model).
+  6. CI and config: `eval.yml` and `scripts/ci_env.sh` use `LLM_CLAUDE_FIRST=false`; `.env.example` replaces the Claude fallback block.
+  7. Docs: README, docs/context.md, docs/memory.md, evals/README.md, docs/todo.md, this entry.
+  - Why this was the best option: one Claude binding for both routers is less code than the fallback path it replaces, and every stop rule has a test on the real SDK.
+- Small events:
+  - GateGuard asked for facts before the first edit of each file, 23 times; stating them cleared each.
+  - `ruff format` rewrapped 4 files and `ruff check --fix` dropped 2 unused imports in `test_ai_loop_int.py`; one long string was split by hand.
+  - Pyright refused a dict literal in a new settings test (`Any | bool`); a typed `dict[str, Any]` fixed it.
+  - The first `make test` failed once on `test_scenario_set.py::test_every_required_signal_shows_in_the_tools_results[bad-deploy-1]`: a cold query took 1.65 s against its 1.5 s limit, the flake docs/memory.md records on 2026-10-25 (cause not confirmed; likely load in the one pytest process). The file passed alone (45), and the second full `make test` passed.
+- Files: services/agent/src/agent/{settings,providers,model,llm,main}.py; services/agent/tests/{anthropic_errors,test_providers,test_llm,test_agent_api,test_live_int,test_workers_int,test_ai_loop_int}.py; evals/harness/{eval,test_eval_score}.py; .github/workflows/eval.yml; scripts/ci_env.sh; .env.example; README.md; evals/README.md; docs/{context,memory,todo,activity-log}.md.
+- Validation (2026-11-01), each exit code: `make lint` 0; `make typecheck` 0; `make test` 2 on the flake above, then 0 (pytest 638; Jest ts-config 2, ts-clients 52, gateway 55, web 83); `make test-int` 0 (Jest 46, pytest 71); `make contracts-check` 0; `make build` 0; then `make infra-down`. No model call was made.
+- Outstanding: the user ships PR 1; then P0's two passes (docs/todo.md, P0 step 3), and PR 2.
+
 ### 2026-10-28: Python tools through `python -m`; step 9 items 7 to 11 built, every check green
 
 - What happened: Windows Smart App Control blocks the venv's unsigned launchers (os error 4551 on `alembic.exe`), but the venv's `python.exe` runs. The user gave one fix at the source: run every Python tool as `uv run python -m <tool>` with the same arguments, the same on Linux CI, and stop if `python.exe` is blocked or a tool has no `-m` form. Then: `make migrate`, and items 7 to 11 with the same approvals (`make migrate`, the demo export, `make test-int`, `make test-e2e`), one report, `make infra-down`, no commit.

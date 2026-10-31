@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.scope == 'full dev split' && 100 || 60 }}
     env:
-      LLM_CLAUDE_FALLBACK: 'false'
+      LLM_CLAUDE_FIRST: 'false'
     steps:
       - name: The eval is on
         env:
@@ -42,8 +42,8 @@ jobs:
           fi
       - name: CI never calls Claude
         run: |
-          if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ "$LLM_CLAUDE_FALLBACK" != false ]; then
-            echo "::error::CI must never call Claude: ANTHROPIC_API_KEY is set or LLM_CLAUDE_FALLBACK is on."
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ "$LLM_CLAUDE_FIRST" != false ]; then
+            echo "::error::CI must never call Claude: ANTHROPIC_API_KEY is set or LLM_CLAUDE_FIRST is on."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

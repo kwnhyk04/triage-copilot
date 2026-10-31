@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from anthropic_errors import INVALID_KEY
 from sqlalchemy import Connection, Engine, create_engine, insert, select, update
+from test_llm import REQUEST, anthropic
 from test_workers_int import SCRIPT, TENANT, TOOLS, Counting, Tools, make_job, new_request, recorded
 
 from agent.db import AiUsage, Investigation, ModelCall, Outbox
@@ -19,6 +21,7 @@ from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft
 from agent.llm import Binding, Limiter, Router, spent
 from agent.model import (
     HypothesisDraft,
+    KeyRejected,
     Message,
     ModelTurn,
     ReportDraft,
@@ -299,7 +302,6 @@ def live_router(engine: Engine) -> Router:
         fallback_on_rate_limit=True,
         limiter=Limiter(is_spent),
         claude=Binding(TRIAGE, unused),
-        claude_first=True,
     )
 
 
@@ -460,3 +462,35 @@ def test_a_claude_only_chain_waits_once_no_call_can_fit_this_month_s_cap(engine:
         conn.execute(update(ModelCall).values(output_tokens=29_900_000))  # $14.95
     with engine.connect() as conn:
         assert pinned.available(conn)
+
+
+def test_a_rejected_key_keeps_a_claude_only_chain_waiting_until_the_agent_restarts(
+    engine: Engine,
+) -> None:
+    """With its key rejected no Claude call can get through, so investigations parked on a
+    Claude-only chain stay parked instead of trying again every sweep; a restart asks again."""
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        with engine.connect() as conn:
+            return spent(conn, role, worst_usd)
+
+    seen, claude = anthropic(INVALID_KEY)
+    unused = cast("Provider", object())
+
+    def pinned() -> Router:
+        return Router(
+            Binding(MONTHLY, claude),
+            None,
+            Binding(SMALL, unused),
+            fallback_on_rate_limit=False,
+            limiter=Limiter(is_spent),
+        )
+
+    router = pinned()
+    with pytest.raises(KeyRejected):
+        asyncio.run(router.turn(REQUEST))
+    with engine.connect() as conn:
+        assert not router.available(conn)
+        # A restart builds a new limiter, which asks Claude again.
+        assert pinned().available(conn)
+    assert len(seen) == 1

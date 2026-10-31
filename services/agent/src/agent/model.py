@@ -29,13 +29,13 @@ RootCause = Literal[
     "certificate_expiry",
     "unknown",
 ]
-# skipped: the agent itself sent no request (its limits, a switch, the dollar cap); the others are
-# what the provider answered.
+# skipped: the agent itself sent no request (its limits, a switch, the dollar cap, a rejected key);
+# the others are what the provider answered. The database's enum also holds model_exhausted,
+# which agents before 2026-11 wrote and nothing writes or reads now.
 Outcome = Literal[
     "ok",
     "rate_limited",
     "quota_exhausted",
-    "model_exhausted",
     "credits_exhausted",
     "error",
     "skipped",
@@ -170,11 +170,6 @@ class Truncated(ModelError):
 
 class QuotaExhausted(ModelError):
     """The model's requests for the day are spent, by the limiter's count or the provider's."""
-
-
-class ModelExhausted(QuotaExhausted):
-    """Anthropic answered this model with a 429 and no retry-after: no call to it until the month
-    ends, while its other models go on."""
 
 
 class CreditsExhausted(QuotaExhausted):

@@ -35,7 +35,6 @@ from agent.model import (
     KeyRejected,
     Message,
     ModelError,
-    ModelExhausted,
     QuotaExhausted,
     RateLimited,
     Refused,
@@ -55,8 +54,9 @@ DEFAULT_BASE_URLS = {
     "ollama": "http://127.0.0.1:11434/v1",
 }
 # Anthropic's 400 once a spend limit is reached ("You have reached your specified API usage
-# limits"): like a 402 billing_error, nothing gets through until the month ends.
-SPEND_LIMIT = re.compile(r"(spend|usage) limit", re.IGNORECASE)
+# limits") or the credits run out ("Your credit balance is too low"): like a 402 billing_error,
+# nothing gets through until the month ends.
+SPEND_LIMIT = re.compile(r"(spend|usage) limit|credit balance", re.IGNORECASE)
 # Gemini's documented value for a function call it did not sign, such as one replayed from
 # another model's turn.
 UNSIGNED = b"skip_thought_signature_validator"
@@ -432,17 +432,15 @@ def _anthropic_usage(usage: anthropic.types.Usage) -> Usage:
 
 
 def _anthropic_error(error: anthropic.APIStatusError) -> ModelError:
-    """Credits gone (a 402 billing_error or a 400 naming a spend limit) is CreditsExhausted: no
-    Anthropic model is called again until the month ends. A 429 without retry-after is
-    ModelExhausted, which stops only the model that got it."""
+    """Credits gone (a 402 billing_error, or a 400 naming a spend limit or the credit balance) is
+    CreditsExhausted: no Anthropic model is called again until the month ends. Every 429 is
+    RateLimited, with or without retry-after: the call alone moves down the chain."""
     code = error.status_code
     detail = _api_message(error)
     if code == 402 or error.type == "billing_error" or (code == 400 and SPEND_LIMIT.search(detail)):
         return CreditsExhausted(f"anthropic {code}: credits or spend limit used up: {detail}"[:300])
     if code == 429:
-        header = error.response.headers.get("retry-after")
-        if header is None:
-            return ModelExhausted("anthropic 429 without retry-after: this model is used up")
+        header = error.response.headers.get("retry-after") or ""
         delay = float(header) if header.replace(".", "", 1).isdigit() else None
         return RateLimited("anthropic 429: rate limited", retry_after=delay)
     if code in (401, 403):
