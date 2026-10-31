@@ -118,22 +118,34 @@ def test_the_generator_writes_the_same_bytes(tmp_path: Path) -> None:
         assert (tmp_path / name).read_bytes() == (V1 / name).read_bytes(), name
 
 
+# The cold full-log query stays well inside the sim's 2 s request limit, in its best of 3 cold
+# tries: a GC pause or a busy CPU in a long pytest run slows one try (bad-deploy-1 took 1.66 s on
+# 2026-11-01, locally and in CI, where it takes about 0.6 s alone), and a real slowdown every try.
+COLD_LIMIT, COLD_TRIES = 1.5, 3
+
+
 @pytest.mark.parametrize("scenario_id", sorted(LOADED))
 def test_every_required_signal_shows_in_the_tools_results(scenario_id: str) -> None:
     # As in a live run: the alert fired three minutes ago, so tool windows end now.
     fired = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=3)
     admin = TestClient(APPS.admin)
-    activation = admin.post(
-        f"/admin/scenarios/{scenario_id}/activate", json={"anchor": fired.isoformat()}
-    )
-    assert activation.is_success
-    began = time.perf_counter()
-    # The slowest query there is, on a cold world: every line of every stream.
-    every = TestClient(APPS.data).get(
-        "/loki/api/v1/query_range", params={"query": '{service=~".+"}'}
-    )
-    assert every.status_code == (503 if LOADED[scenario_id].scenario.down == "logs" else 200)
-    assert time.perf_counter() - began < 1.5
+    tries: list[float] = []
+    for _ in range(COLD_TRIES):
+        # Each activation builds a new world, so each try is a cold one.
+        activation = admin.post(
+            f"/admin/scenarios/{scenario_id}/activate", json={"anchor": fired.isoformat()}
+        )
+        assert activation.is_success
+        began = time.perf_counter()
+        # The slowest query there is, on a cold world: every line of every stream.
+        every = TestClient(APPS.data).get(
+            "/loki/api/v1/query_range", params={"query": '{service=~".+"}'}
+        )
+        tries.append(time.perf_counter() - began)
+        assert every.status_code == (503 if LOADED[scenario_id].scenario.down == "logs" else 200)
+        if tries[-1] < COLD_LIMIT:
+            break
+    assert min(tries) < COLD_LIMIT, f"every cold try took {COLD_LIMIT} s or more: {tries}"
 
     async def results() -> list[tuple[str, str]]:
         transport = httpx2.ASGITransport(app=APPS.data)

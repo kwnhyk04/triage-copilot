@@ -3,8 +3,13 @@
 import asyncio
 import base64
 import json
+import socket
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
+import anthropic
 import httpx2
 import pytest
 from anthropic_errors import (
@@ -43,7 +48,10 @@ from agent.providers import (
     AnthropicProvider,
     GeminiProvider,
     OpenAICompatibleProvider,
+    make_provider,
 )
+from agent.settings import Provider as ProviderName
+from agent.settings import Role
 
 TOOLS = [ToolSpec("query_metrics", "Metrics.", {"type": "object", "properties": {}})]
 HISTORY = [
@@ -89,6 +97,59 @@ def recorder(
 def gemini(body: Any, status: int = 200) -> tuple[list[httpx2.Request], GeminiProvider]:
     seen, http = recorder(status, body)
     return seen, GeminiProvider("gemini-3.5-flash-lite", "AQ.right-key", http=http)
+
+
+@contextmanager
+def refusing_proxy() -> Generator[tuple[int, list[str]]]:
+    """A proxy on 127.0.0.1 that keeps each request line and answers 403, as production's egress
+    proxy answers a host it does not allow."""
+    seen: list[str] = []
+    stop = threading.Event()
+    server = socket.create_server(("127.0.0.1", 0))
+    server.settimeout(0.1)
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            with conn, conn.makefile("rb") as reader:
+                conn.settimeout(5)
+                seen.append(reader.readline().decode().strip())
+                conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1], seen
+    finally:
+        stop.set()
+        thread.join(5)
+        server.close()
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "host"),
+    [
+        ("anthropic", "claude-haiku-5-5", "api.anthropic.com"),
+        ("gemini", "gemini-3.5-flash-lite", "generativelanguage.googleapis.com"),
+        ("nvidia", "deepseek-ai/deepseek-v4.1-flash", "integrate.api.nvidia.com"),
+    ],
+)
+def test_each_model_call_goes_through_https_proxy(
+    monkeypatch: pytest.MonkeyPatch, provider: ProviderName, model: str, host: str
+) -> None:
+    # Production's agent has no route out but its egress proxy, named in HTTPS_PROXY, so each
+    # provider's client, as main.py builds it, must tunnel through it.
+    for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    with refusing_proxy() as (port, seen):
+        monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{port}")
+        model_role = Role("primary", provider, model, None, 0, 0, api_key="not-a-key")
+        with pytest.raises((httpx2.ProxyError, anthropic.APIConnectionError)):
+            asyncio.run(make_provider(model_role).complete("Summarize.", "one line", 16))
+    assert seen == [f"CONNECT {host}:443 HTTP/1.1"]
 
 
 def test_gemini_sends_its_key_in_the_header_whatever_the_environment(

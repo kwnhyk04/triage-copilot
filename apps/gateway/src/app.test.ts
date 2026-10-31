@@ -7,9 +7,11 @@ import {
   type AppDeps,
   buildApp,
   createUpdates,
+  credentialLimit,
   type Decide,
   type DecidePlan,
   REQUEST_TIMEOUT_MS,
+  VERIFIED_FOR_MS,
 } from './app.ts';
 import { loadGatewayConfig } from './config.ts';
 import { type FindTenant, type Intake, sha256, type Webhook } from './intake.ts';
@@ -22,6 +24,7 @@ const config = {
   APPROVER_API_KEY: APPROVER_KEY,
   GATEWAY_API_KEY: API_KEY,
   RATE_LIMIT_PER_MINUTE: 600,
+  AUTH_FAILURES_PER_MINUTE: 20,
 } as const;
 const PAGE = { items: [], next_cursor: null };
 const up = () => Promise.resolve();
@@ -138,6 +141,26 @@ const decidePlan: DecidePlan = (planId, verdict, decision) =>
           decision_reason: decision.reason ?? null,
         },
   );
+
+describe('credentialLimit', () => {
+  it('counts failures per address in one-minute windows and passes a verified token for 10 minutes', () => {
+    let now = Date.parse('2026-11-01T10:00:30Z');
+    const limit = credentialLimit(2, () => now);
+    limit.fail('203.0.113.7');
+    expect(limit.spent('203.0.113.7')).toBe(false);
+    limit.fail('203.0.113.7');
+    expect([limit.spent('203.0.113.7'), limit.spent('198.51.100.9')]).toEqual([true, false]);
+    // Retry-After runs to the window's end.
+    expect(limit.retryAfter()).toBe('30');
+    now += 30_000;
+    expect(limit.spent('203.0.113.7')).toBe(false);
+    limit.pass('token hash');
+    now += VERIFIED_FOR_MS - 1;
+    expect([limit.passed('token hash'), limit.passed('another hash')]).toEqual([true, false]);
+    now += 1;
+    expect(limit.passed('token hash')).toBe(false);
+  });
+});
 
 describe('gateway', () => {
   let app: FastifyInstance;
@@ -380,6 +403,102 @@ describe('gateway', () => {
         expect((await app.inject({ url: '/healthz' })).statusCode).toBe(200);
         expect((await app.inject({ url: '/readyz' })).statusCode).toBe(200);
       }
+    });
+  });
+
+  describe('failed credential checks', () => {
+    const strict = { ...config, AUTH_FAILURES_PER_MINUTE: 2 };
+    const CLIENT = '203.0.113.7';
+    const read = (key: string, remoteAddress = CLIENT, forwardedFor?: string) =>
+      app.inject({
+        url: '/v1/investigations',
+        remoteAddress,
+        headers: {
+          'x-api-key': key,
+          ...(forwardedFor === undefined ? {} : { 'x-forwarded-for': forwardedFor }),
+        },
+      });
+    const approve = (key: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/v1/actions/${ACTION_ID}/approve`,
+        remoteAddress: CLIENT,
+        headers: { 'x-approver-key': key },
+        payload: { approver: 'oncall@example.com' },
+      });
+    const alert = (token: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/v1/alerts',
+        remoteAddress: CLIENT,
+        headers: { authorization: `Bearer ${token}` },
+        payload: WEBHOOK,
+      });
+
+    it('answer 429 past the limit per address, while a key that verifies is still served', async () => {
+      await start({ config: strict });
+      expect((await read('wrong-key-1')).statusCode).toBe(401);
+      expect((await read('wrong-key-2')).statusCode).toBe(401);
+      const held = await read('wrong-key-3');
+      expect(held.statusCode).toBe(429);
+      expect(held.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect(held.json()).toMatchObject({ status: 429, title: 'Too Many Requests' });
+      // The contract's 429: Retry-After and the RateLimit headers.
+      expect(Number(held.headers['retry-after'])).toBeGreaterThan(0);
+      expect(held.headers['ratelimit-limit']).toBeDefined();
+      expect((await read(API_KEY)).statusCode).toBe(200);
+      // Another address has its own count.
+      expect((await read('wrong-key-4', '198.51.100.9')).statusCode).toBe(401);
+    });
+
+    it('share one count across the API key, the approver key and the webhook token', async () => {
+      await start({ config: strict });
+      expect((await approve('wrong-approver-key-000000000000000')).statusCode).toBe(401);
+      expect((await alert('not-a-tenant-token')).statusCode).toBe(401);
+      expect((await read('wrong-key-1')).statusCode).toBe(429);
+      expect((await approve('wrong-approver-key-000000000000000')).statusCode).toBe(429);
+      expect((await approve(APPROVER_KEY)).statusCode).toBe(200);
+    });
+
+    it('hold back an unverified webhook token before the lookup, never one verified lately', async () => {
+      const asked: string[] = [];
+      await start({
+        config: strict,
+        findTenant: (hash) => {
+          asked.push(hash);
+          return findTenant(hash);
+        },
+      });
+      expect((await alert(TOKEN)).statusCode).toBe(202);
+      expect((await read('wrong-key-1')).statusCode).toBe(401);
+      expect((await read('wrong-key-2')).statusCode).toBe(401);
+      asked.length = 0;
+      expect((await alert('not-a-tenant-token')).statusCode).toBe(429);
+      expect(asked).toEqual([]);
+      // TOKEN verified a moment ago, so someone else's failures from this address never stop it.
+      expect((await alert(TOKEN)).statusCode).toBe(202);
+      expect(asked).toEqual([sha256(TOKEN)]);
+    });
+
+    it('read the client address from X-Forwarded-For only behind a trusted proxy', async () => {
+      const proxy = '172.18.0.5';
+      const one = { ...config, AUTH_FAILURES_PER_MINUTE: 1 };
+      // Off: every client behind the proxy shares its address.
+      await start({ config: one });
+      expect((await read('wrong', proxy, '203.0.113.1')).statusCode).toBe(401);
+      expect((await read('wrong', proxy, '203.0.113.2')).statusCode).toBe(429);
+      // The proxy's address or network: each client counts alone, by the address the proxy saw.
+      for (const trust of [[proxy], ['172.18.0.0/16']]) {
+        await app.close();
+        await start({ config: { ...one, GATEWAY_TRUST_PROXY: trust } });
+        expect((await read('wrong', proxy, '203.0.113.1')).statusCode).toBe(401);
+        expect((await read('wrong', proxy, '203.0.113.2')).statusCode).toBe(401);
+        // A client cannot pass for another by sending its own X-Forwarded-For.
+        expect((await read('wrong', proxy, '192.0.2.9, 203.0.113.1')).statusCode).toBe(429);
+      }
+      // A peer outside the trusted CIDR is the client, whatever it forwards.
+      expect((await read('wrong', '10.9.9.9', '203.0.113.3')).statusCode).toBe(401);
+      expect((await read('wrong', '10.9.9.9', '203.0.113.4')).statusCode).toBe(429);
     });
   });
 

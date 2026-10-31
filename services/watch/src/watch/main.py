@@ -44,8 +44,9 @@ class Settings(EnvSettings):
     watch_port: int = 4240
     # Seconds between polls; a health check fires after three failed polls in a row.
     watch_interval_seconds: Annotated[float, Field(ge=5)] = 30
-    # The gateway's public listener, whose webhook takes the alerts.
-    gateway_url: str = "http://127.0.0.1:4200"
+    # The production gateway's public listener (make prod-up), whose webhook takes the alerts; the
+    # dev web's GATEWAY_URL names the dev gateway.
+    watch_gateway_url: str = "http://127.0.0.1:4202"
     # An app is watched only when its tenant's webhook token is set (gateway `tenant:token`).
     # Its stack is prod or, once that dev stack opts in, dev. Health URLs are JSON by service,
     # such as {"api": "https://<funnel host>/readyz"}; the repo gives origin/main's commits as
@@ -73,7 +74,7 @@ class Settings(EnvSettings):
             raise ValueError(f"takes only {app} services: {', '.join(services)}")
         return {service: _url(url) for service, url in urls.items()}
 
-    @field_validator("gateway_url", "watch_fa_prometheus_url", "watch_fl_prometheus_url")
+    @field_validator("watch_gateway_url", "watch_fa_prometheus_url", "watch_fl_prometheus_url")
     @classmethod
     def _plain_url(cls, url: str | None) -> str | None:
         return None if url is None else _url(url)
@@ -123,7 +124,7 @@ class Status:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings(Settings)
     configure_logging("watch", settings.log_level)
-    watchers = [Watcher(target, settings.gateway_url) for target in settings.targets()]
+    watchers = [Watcher(target, settings.watch_gateway_url) for target in settings.targets()]
     if not watchers:
         log.warning("no app is watched: set WATCH_FA_TOKEN or WATCH_FL_TOKEN")
     interval = settings.watch_interval_seconds

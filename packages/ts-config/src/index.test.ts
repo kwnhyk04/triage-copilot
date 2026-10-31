@@ -1,4 +1,7 @@
-import { loadConfig, z } from './index.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { isPlaceholder, loadConfig, PLACEHOLDERS, z } from './index.ts';
 
 const schema = z.object({
   HOST: z.string().default('127.0.0.1'),
@@ -18,5 +21,23 @@ describe('loadConfig', () => {
     const load = () => loadConfig(schema, { PORT: 'secret-value', LEVEL: 'loud' });
     expect(load).toThrow(/^Invalid environment: PORT: .+; DB_URL is required; LEVEL: .+$/);
     expect(load).not.toThrow(/secret-value/);
+  });
+});
+
+describe('PLACEHOLDERS', () => {
+  it('are the keys and tokens .env.example ships, which production refuses', () => {
+    const example = readFileSync(join(__dirname, '..', '..', '..', '.env.example'), 'utf8');
+    const lines = example.split(/\r?\n/).filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line));
+    const values = new Map(
+      lines.map((line): [string, string] => {
+        const at = line.indexOf('=');
+        return [line.slice(0, at), line.slice(at + 1)];
+      }),
+    );
+    for (const [name, value] of Object.entries(PLACEHOLDERS)) {
+      expect([name, values.get(name)]).toEqual([name, value]);
+    }
+    expect(isPlaceholder(PLACEHOLDERS.APPROVER_API_KEY)).toBe(true);
+    expect(isPlaceholder('a-fresh-key-made-for-production-000')).toBe(false);
   });
 });

@@ -14,12 +14,19 @@ from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
 TOKEN = secrets.token_urlsafe(32)
-# Nothing listens on port 1, so dependency checks fail fast without infra.
-OFFLINE = Settings(
-    agent_database_url="postgresql+psycopg://agent:unused@127.0.0.1:1/triage",
-    sqs_endpoint_url="http://127.0.0.1:1",
-    agent_service_token=SecretStr(TOKEN),
-)
+
+
+def offline() -> Settings:
+    """Settings from the environment that reach nothing: nothing listens on port 1, so
+    dependency checks fail fast without infra."""
+    return Settings(
+        agent_database_url="postgresql+psycopg://agent:unused@127.0.0.1:1/triage",
+        sqs_endpoint_url="http://127.0.0.1:1",
+        agent_service_token=SecretStr(TOKEN),
+    )
+
+
+OFFLINE = offline()
 STATE = "/internal/investigations/1b4e28ba-2fa1-41d2-883f-0016d3cca427/state"
 
 
@@ -41,10 +48,15 @@ def test_settings_hold_no_approver_key(monkeypatch: pytest.MonkeyPatch) -> None:
 KEYS: dict[str, Any] = {"gemini_api_key": SecretStr("g"), "nvidia_api_key": SecretStr("n")}
 
 
-def test_the_free_chain_is_the_default_and_claude_first_needs_its_key() -> None:
-    assert OFFLINE.llm_claude_first is False
+def test_the_free_chain_is_the_default_and_claude_first_needs_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unset, whatever the developer's .env says (the Makefile exports it): the default is off.
+    monkeypatch.delenv("LLM_CLAUDE_FIRST", raising=False)
+    settings = offline()
+    assert settings.llm_claude_first is False
     on: dict[str, Any] = {
-        **OFFLINE.model_dump(),
+        **settings.model_dump(),
         **KEYS,
         "ai_enabled": True,
         "fastembed_cache_path": Path("cache"),

@@ -52,6 +52,7 @@ export const APP_CONFIG = {
   APPROVER_API_KEY: 'approver-key-for-these-tests-00000000',
   GATEWAY_API_KEY: 'gateway-key-for-these-tests-000000000',
   RATE_LIMIT_PER_MINUTE: 600,
+  AUTH_FAILURES_PER_MINUTE: 20,
 } as const;
 
 /** Drops prefixed databases over STALE_AFTER_SECONDS old, which crashed runs left behind. */

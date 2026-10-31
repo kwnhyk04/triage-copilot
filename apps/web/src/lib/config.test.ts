@@ -1,3 +1,5 @@
+import { PLACEHOLDERS } from '@triage/ts-config';
+
 import { loadWebConfig } from './config.ts';
 
 const KEYS = {
@@ -44,6 +46,25 @@ describe('loadWebConfig', () => {
     ] as const) {
       expect([env, problem(env)]).toEqual([env, expect.stringContaining(expected)]);
     }
+  });
+
+  it('refuses the .env.example keys in production, and one key for both roles anywhere', () => {
+    const signIn = { LOGIN_PASSWORD_HASH: HASH, SESSION_SECRET: SECRET };
+    const production = { ...signIn, NODE_ENV: 'production' };
+    for (const [name, value, expected] of [
+      ['GATEWAY_API_KEY', PLACEHOLDERS.GATEWAY_API_KEY, 'is the .env.example placeholder'],
+      ['APPROVER_API_KEY', PLACEHOLDERS.APPROVER_API_KEY, 'is the .env.example placeholder'],
+    ] as const) {
+      const said = problem({ ...production, [name]: value });
+      expect([name, said]).toEqual([name, expect.stringContaining(`${name}: ${expected}`)]);
+      expect(said).not.toContain(value);
+    }
+    const shared = problem({ APPROVER_API_KEY: KEYS.GATEWAY_API_KEY });
+    expect(shared).toContain('APPROVER_API_KEY: must differ from GATEWAY_API_KEY');
+    expect(shared).not.toContain(KEYS.GATEWAY_API_KEY);
+    // next dev runs on them.
+    const dev = { NODE_ENV: 'development', ...PLACEHOLDERS };
+    expect(problem(dev)).toBe('none');
   });
 
   it('never echoes a value it refuses', () => {

@@ -4,6 +4,18 @@ export { z };
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
+/** The keys and tokens .env.example ships, which production refuses; a test keeps them equal. */
+export const PLACEHOLDERS = {
+  GATEWAY_API_KEY: 'gateway-dev-api-key-00000000000000',
+  APPROVER_API_KEY: 'approver-dev-key-0000000000000000',
+  AGENT_SERVICE_TOKEN: 'agent-service-dev-token-000000000000',
+  EXECUTOR_SERVICE_TOKEN: 'executor-service-dev-token-0000000',
+} as const;
+
+/** Whether `value` is one of the .env.example keys or tokens. */
+export const isPlaceholder = (value: string) =>
+  (Object.values(PLACEHOLDERS) as readonly string[]).includes(value);
+
 /**
  * Validates the environment against `schema` at startup. Empty values count as unset, and errors
  * name every bad variable without echoing its value.

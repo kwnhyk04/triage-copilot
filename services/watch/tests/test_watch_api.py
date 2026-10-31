@@ -21,7 +21,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for app in ("FA", "FL"):
         for name in ("TOKEN", "STACK", "HEALTH_URLS", "REPO", "PROMETHEUS_URL"):
             monkeypatch.delenv(f"WATCH_{app}_{name}", raising=False)
-    monkeypatch.delenv("WATCH_INTERVAL_SECONDS", raising=False)
+    for name in ("WATCH_INTERVAL_SECONDS", "WATCH_GATEWAY_URL", "GATEWAY_URL"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _ready(client: TestClient, status: int) -> None:
@@ -74,6 +75,16 @@ def test_only_apps_with_a_token_are_watched(monkeypatch: pytest.MonkeyPatch) -> 
     assert (target.catalog.app, target.stack, target.token) == ("filing-lens", "dev", PLANTED)
     assert target.health == {"api": "http://127.0.0.1:4100/readyz"}
     assert target.prometheus == "http://127.0.0.1:9091"
+
+
+def test_posts_to_the_production_gateway_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GATEWAY_URL is the dev web's, never watch's.
+    monkeypatch.setenv("GATEWAY_URL", "http://127.0.0.1:4200")
+    assert load_settings(Settings).watch_gateway_url == "http://127.0.0.1:4202"
+    monkeypatch.setenv("WATCH_GATEWAY_URL", "http://127.0.0.1:4200/")
+    assert load_settings(Settings).watch_gateway_url == "http://127.0.0.1:4200"
 
 
 def test_tokens_stay_out_of_every_printout(monkeypatch: pytest.MonkeyPatch) -> None:

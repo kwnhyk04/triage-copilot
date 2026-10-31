@@ -1,41 +1,281 @@
-# Production override, applied on top of docker-compose.yml:
-#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
-# Postgres and the queue publish no ports; only containers on the compose network reach them.
+# Production, on top of docker-compose.yml, as its own compose project: its containers, networks
+# and volumes (triagecopilot-prod_pgdata, _elasticmq-data, _tailscale-state) never mix with dev's,
+# so dev, test and eval work run beside it. Run it through make (prod-up, prod-down, prod-token,
+# prod-switch, prod-digest), which loads .env and reads .env.prod for the names below.
+# Only the egress proxy has a route out or a published port: watch's 127.0.0.1:4202, which it
+# forwards to the gateway, and HTTPS from the agent and the Funnel sidecar to their own hosts.
+name: triagecopilot-prod
+
+# Docker Desktop lets any container on a routed network reach the internet and this PC's own
+# listeners (host.docker.internal), and publishes no port from an internal network. So every
+# network but `egress` is internal, and only the egress proxy joins `egress` (infra/squid).
+networks:
+  # The data stores, and every container that talks to them.
+  data: { internal: true }
+  # Funnel's path: the internet-facing sidecar shares it with the gateway alone, from a fixed
+  # address the gateway trusts for X-Forwarded-For (GATEWAY_TRUST_PROXY; README, Deploy).
+  edge:
+    internal: true
+    ipam: { config: [{ subnet: 10.231.233.16/28, ip_range: 10.231.233.24/29 }] }
+  # watch's port: the proxy forwards 127.0.0.1:4202 to the gateway's fixed address here.
+  ingress:
+    internal: true
+    ipam: { config: [{ subnet: 10.231.233.32/28, ip_range: 10.231.233.40/29 }] }
+  # The proxy's clients at fixed addresses, each tied to its own proxy port (squid.conf); other
+  # containers get the upper half. FreightAudit's and FilingLens's are 10.231.231 and 10.231.232.
+  outbound:
+    internal: true
+    ipam: { config: [{ subnet: 10.231.233.0/28, ip_range: 10.231.233.8/29 }] }
+  # The observability profile's services; the collector also joins `data` for the apps' OTLP.
+  monitoring: { internal: true }
+  egress: {}
+
+# Fixed here, not in the env files, so a line copied from .env never points a container at
+# 127.0.0.1 or an H: path. environment beats env_file.
+x-agent-env: &agent-env
+  AGENT_HOST: 0.0.0.0
+  AGENT_PORT: 4210
+  AGENT_DATABASE_URL: postgresql+psycopg://agent:${PROD_AGENT_DB_PASSWORD:?set PROD_AGENT_DB_PASSWORD in .env.prod}@postgres:5432/triage
+  SQS_ENDPOINT_URL: http://elasticmq:9324
+  # ElasticMQ takes any credentials; the SDKs still want some.
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: local
+  AWS_SECRET_ACCESS_KEY: local
+  GATEWAY_INTERNAL_URL: http://gateway:4201
+  FASTEMBED_CACHE_PATH: /models/fastembed
+
 services:
   postgres:
     ports: !reset []
+    networks: [data]
     restart: unless-stopped
     mem_limit: 512m
+    # Production's own passwords; the init script gives the two roles theirs on the first start.
+    environment:
+      POSTGRES_PASSWORD: ${PROD_POSTGRES_PASSWORD:?set PROD_POSTGRES_PASSWORD in .env.prod}
+      GATEWAY_DB_PASSWORD: ${PROD_GATEWAY_DB_PASSWORD:?set PROD_GATEWAY_DB_PASSWORD in .env.prod}
+      AGENT_DB_PASSWORD: ${PROD_AGENT_DB_PASSWORD:?set PROD_AGENT_DB_PASSWORD in .env.prod}
 
   elasticmq:
     ports: !reset []
+    networks: [data]
     restart: unless-stopped
     mem_limit: 256m
-    # Repeated from the base file so production keeps queued messages even if dev drops the volume.
-    volumes:
-      - elasticmq-data:/data
 
-  # Fault injection is for tests; in production it starts only with --profile chaos.
+  # Fault injection is for tests; in production it starts only with --profile chaos. Neither it nor
+  # the observability services publish a port, so no profile ever clashes with dev's ports.
   toxiproxy:
     profiles: [chaos]
+    ports: !reset []
+    networks: [data]
     restart: unless-stopped
     mem_limit: 64m
 
   otel-collector:
+    ports: !reset []
+    networks: [data, monitoring]
     restart: unless-stopped
     mem_limit: 256m
 
   jaeger:
+    ports: !reset []
+    networks: [monitoring]
     restart: unless-stopped
     mem_limit: 512m
 
   prometheus:
+    ports: !reset []
+    networks: [monitoring]
     restart: unless-stopped
     mem_limit: 256m
 
   grafana:
+    ports: !reset []
+    networks: [monitoring]
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # The images publish.yml pushes from main, pinned to the merged commit (TC_TAG=sha-<12>).
+  gateway-migrate:
+    image: &gateway-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-gateway:${TC_TAG:?set TC_TAG in .env.prod}
+    command: [pnpm, db:migrate]
+    environment:
+      GATEWAY_DATABASE_URL: &gateway-db postgres://gateway:${PROD_GATEWAY_DB_PASSWORD:?set PROD_GATEWAY_DB_PASSWORD in .env.prod}@postgres:5432/triage
+    networks: [data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    image: *gateway-image
+    env_file: ../.env.prod.gateway
+    environment:
+      NODE_ENV: production
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 4200
+      # The agent's alert context (and one day the executor's claims): on internal networks only.
+      GATEWAY_INTERNAL_HOST: 0.0.0.0
+      GATEWAY_INTERNAL_PORT: 4201
+      GATEWAY_DATABASE_URL: *gateway-db
+      SQS_ENDPOINT_URL: http://elasticmq:9324
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AGENT_URL: http://agent:4210
+    # No route out and no port of its own: the Funnel sidecar reaches gateway:4200 on `edge`, and
+    # the egress proxy forwards watch's 127.0.0.1:4202 to this fixed address.
+    networks:
+      data: {}
+      edge: {}
+      ingress: { ipv4_address: 10.231.233.34 }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:4200/readyz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticmq:
+        condition: service_started
+      gateway-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 512m
+
+  agent-migrate:
+    image: &agent-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-agent:${TC_TAG:?set TC_TAG in .env.prod}
+    command: [alembic, -c, services/agent/alembic.ini, upgrade, head]
+    env_file: ../.env.prod.agent
+    environment: *agent-env
+    networks: [data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Embeds runbooks/ into the fresh database; it replaces earlier chunks, so every start may rerun it.
+  agent-runbooks:
+    image: *agent-image
+    command: [python, -m, agent.runbooks, ingest]
+    env_file: ../.env.prod.agent
+    environment: *agent-env
+    volumes:
+      - ${FASTEMBED_CACHE_PATH:?set FASTEMBED_CACHE_PATH in .env}:/models/fastembed:ro
+    networks: [data]
+    depends_on:
+      agent-migrate:
+        condition: service_completed_successfully
+
+  agent:
+    image: *agent-image
+    env_file: ../.env.prod.agent
+    environment:
+      <<: *agent-env
+      # The model providers, through the egress proxy's port for the agent. Every internal address
+      # is http://, which HTTPS_PROXY leaves alone.
+      HTTPS_PROXY: http://egress-proxy:3128
+    volumes:
+      - ${FASTEMBED_CACHE_PATH:?set FASTEMBED_CACHE_PATH in .env}:/models/fastembed:ro
+    networks:
+      data: {}
+      outbound: { ipv4_address: 10.231.233.2 }
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4210/readyz', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticmq:
+        condition: service_started
+      agent-migrate:
+        condition: service_completed_successfully
+      agent-runbooks:
+        condition: service_completed_successfully
+      egress-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 2g
+
+  # Tailscale Funnel: https://triage-copilot.<tailnet>.ts.net to the gateway's public port only
+  # (tailscale/serve.json). Pinned by digest.
+  tailscale:
+    image: tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c
+    hostname: triage-copilot
+    environment:
+      # A tagged, pre-approved auth key, used once: the state volume keeps the node after that.
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env.prod}
+      TS_AUTH_ONCE: 'true'
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      # Control, relays and Funnel's certificate go through the egress proxy's port for the
+      # sidecar. With no UDP route out, all traffic, Funnel's included, rides Tailscale's relays.
+      # No log upload, so the proxy need not allow Tailscale's log server.
+      HTTPS_PROXY: http://egress-proxy:3129
+      TS_TAILSCALED_EXTRA_ARGS: --no-logs-no-support
+    # Userspace networking needs no capability. Without NET_RAW the sidecar cannot forge the
+    # agent's address on `outbound`, by which the proxy tells the two apart.
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    networks:
+      edge: { ipv4_address: 10.231.233.18 }
+      outbound: { ipv4_address: 10.231.233.3 }
+    depends_on:
+      gateway:
+        condition: service_started
+      egress-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # The only container with a route out (squid, infra/squid/squid.conf): CONNECT on 443, a port and
+  # an allowlist per client, nothing in a private range, and watch's port to the gateway alone.
+  egress-proxy:
+    image: ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-squid:${TC_TAG:?set TC_TAG in .env.prod}
+    read_only: true
+    tmpfs: [/tmp, /var/spool/squid, /var/log/squid, /run]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+    networks: [outbound, ingress, egress]
+    ports:
+      - 127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4202
+    # A gateway from before the lockdown publishes 4202 itself: compose recreates it first.
+    depends_on:
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          CMD,
+          bash,
+          -c,
+          'for port in 3128 3129 4202; do echo > /dev/tcp/127.0.0.1/$$port || exit 1; done',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     restart: unless-stopped
     mem_limit: 256m
 
 volumes:
-  elasticmq-data:
+  tailscale-state:

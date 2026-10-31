@@ -44,7 +44,12 @@ export type DecidePlan = (
 export interface AppDeps {
   config: Pick<
     GatewayConfig,
-    'LOG_LEVEL' | 'APPROVER_API_KEY' | 'GATEWAY_API_KEY' | 'RATE_LIMIT_PER_MINUTE'
+    | 'LOG_LEVEL'
+    | 'APPROVER_API_KEY'
+    | 'GATEWAY_API_KEY'
+    | 'RATE_LIMIT_PER_MINUTE'
+    | 'AUTH_FAILURES_PER_MINUTE'
+    | 'GATEWAY_TRUST_PROXY'
   >;
   /** Rejects when a dependency the gateway needs is unreachable. */
   ping: () => Promise<void>;
@@ -72,6 +77,41 @@ const OWN_CREDENTIAL = new Set([
 export const BODY_LIMIT = 1024 * 1024;
 /** A client must send its whole request within 10 s. */
 export const REQUEST_TIMEOUT_MS = 10_000;
+/** A webhook token that verified this recently skips the failed-check limit. */
+export const VERIFIED_FOR_MS = 10 * 60_000;
+
+/**
+ * Failed credential checks per client address, in fixed one-minute windows, and the webhook
+ * tokens that verified lately (by hash), which other addresses' failures never hold back.
+ */
+// ponytail: in memory, so per gateway like the rate limit, and a fixed window lets up to twice the
+// limit through across a minute's edge; a shared sliding store if several gateways ever run.
+export function credentialLimit(perMinute: number, now: () => number = Date.now) {
+  let minute = -1;
+  const failures = new Map<string, number>();
+  const verified = new Map<string, number>();
+  const counts = () => {
+    const current = Math.floor(now() / 60_000);
+    if (current !== minute) {
+      minute = current;
+      failures.clear();
+    }
+    return failures;
+  };
+  return {
+    spent: (address: string) => (counts().get(address) ?? 0) >= perMinute,
+    fail: (address: string) => {
+      const window = counts();
+      window.set(address, (window.get(address) ?? 0) + 1);
+    },
+    /** Seconds until the window ends, for Retry-After. */
+    retryAfter: () => String(60 - Math.floor((now() % 60_000) / 1000)),
+    pass: (tokenHash: string) => {
+      verified.set(tokenHash, now() + VERIFIED_FOR_MS);
+    },
+    passed: (tokenHash: string) => (verified.get(tokenHash) ?? 0) > now(),
+  };
+}
 
 const header = (request: FastifyRequest, name: string) => {
   const value = request.headers[name];
@@ -132,8 +172,23 @@ export async function buildApp({
   const app = Fastify({
     logger: { level: config.LOG_LEVEL, base: { service: 'gateway' } },
     requestTimeout: REQUEST_TIMEOUT_MS,
+    // Off unless set: then request.ip is the address the trusted proxy saw.
+    trustProxy: config.GATEWAY_TRUST_PROXY ?? false,
   });
   answerWithProblems(app);
+
+  const limit = credentialLimit(config.AUTH_FAILURES_PER_MINUTE);
+  // 429 for an address that used up its failed credential checks this minute.
+  const holdBack = (request: FastifyRequest, reply: FastifyReply) => {
+    if (!limit.spent(request.ip)) return;
+    reply.header('Retry-After', limit.retryAfter());
+    throw httpError(429, 'Too many failed credential checks from this address; retry later.');
+  };
+  // A failed check counts toward its address's limit; past it, the answer is 429, not 401.
+  const fail = (request: FastifyRequest, reply: FastifyReply) => {
+    holdBack(request, reply);
+    limit.fail(request.ip);
+  };
 
   // Registered before the routes, which it hooks as they are added.
   await app.register(rateLimit, {
@@ -156,11 +211,10 @@ export async function buildApp({
   app.addHook('preParsing', async (request, reply, payload) => {
     if (OWN_CREDENTIAL.has(request.routeOptions.url ?? '')) return payload;
     const key = header(request, 'x-api-key');
-    if (key === undefined || !sameSecret(key, config.GATEWAY_API_KEY)) {
-      reply.header('WWW-Authenticate', 'ApiKey header="X-API-Key"');
-      throw httpError(401, 'Send a valid X-API-Key.');
-    }
-    return payload;
+    if (key !== undefined && sameSecret(key, config.GATEWAY_API_KEY)) return payload;
+    fail(request, reply);
+    reply.header('WWW-Authenticate', 'ApiKey header="X-API-Key"');
+    throw httpError(401, 'Send a valid X-API-Key.');
   });
 
   const probe = { config: { rateLimit: false } } as const;
@@ -189,18 +243,23 @@ export async function buildApp({
         ) {
           throw httpError(403, 'POST /v1/alerts takes the tenant webhook token only.');
         }
+        const hash = token === undefined ? undefined : sha256(token);
+        // Before the lookup, unless the token verified lately: watch's never waits on others.
+        if (hash === undefined || !limit.passed(hash)) holdBack(request, reply);
         let tenantId: string | undefined;
         try {
-          tenantId = token === undefined ? undefined : await findTenant(sha256(token));
+          tenantId = hash === undefined ? undefined : await findTenant(hash);
         } catch (error) {
           request.log.error({ err: error }, 'tenant lookup failed');
           reply.header('Retry-After', '5');
           throw httpError(503, 'Alerts cannot be stored right now.');
         }
-        if (tenantId === undefined) {
+        if (hash === undefined || tenantId === undefined) {
+          limit.fail(request.ip);
           reply.header('WWW-Authenticate', 'Bearer');
           throw httpError(401, 'Send a valid tenant webhook token.');
         }
+        limit.pass(hash);
         tenants.set(request, tenantId);
         return payload;
       },
@@ -261,6 +320,7 @@ export async function buildApp({
         return problem(reply, 403, 'Forbidden', 'Approve and reject take X-Approver-Key only.');
       }
       if (typeof key !== 'string' || !sameSecret(key, config.APPROVER_API_KEY)) {
+        fail(request, reply);
         reply.header('WWW-Authenticate', 'ApiKey header="X-Approver-Key"');
         return problem(reply, 401, 'Unauthorized', 'Send a valid X-Approver-Key.');
       }
