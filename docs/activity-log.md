@@ -19,6 +19,51 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-01: The egress proxy dropped watch's token; login=PASSTHRU (on main, not committed)
+
+- What happened: the user reported a 401 in the P1.12 drill. `POST http://127.0.0.1:4202/v1/alerts` got "Send a valid tenant webhook token." with a token whose SHA-256 matched `gateway.tenants.webhook_token_sha256` for freight-audit. They named the likely cause: the gateway `cache_peer` in `infra/squid/squid.conf` has no `login=` option. They asked for four things:
+  1. Confirm it in squid's docs or source for the version the image installs.
+  2. Fix it with the narrowest option and a comment.
+  3. Cover it in the config tests, and update the docs.
+  4. Give the command that restarts only the egress proxy.
+
+  Production, container restarts, `make prod-token` and commits were out of bounds.
+- Why: squid passes a client's `Authorization` to an `originserver` peer only when the peer has `login=PASS`, `PASSTHRU` or `PROXYPASS`. The gateway's peer had none, so the gateway saw no token and gave the same 401 as for a wrong one.
+  - The mistake was mine, in the egress lockdown (2026-11-01). Its live check asked the gateway's stand-in for toxiproxy's `/version`, and egress check 6 asks for `/readyz`. Neither sends credentials, so both passed.
+  - My read-only go-live prep the same day also sent only `/readyz` through 4202. It checked the drill's alert against the schema but never sent it.
+- What we did:
+  1. The version, from throwaway containers with no network, never the running proxy: `dpkg-query` and `squid -v` in the production image (`ghcr.io/kwnhyk04/triage-copilot-squid:sha-be4c51a54dd8`) and in `triagecopilot-squid:test` both print `squid 6.14-0ubuntu0.24.04.5` and Squid 6.14.
+  2. The source, squid's `SQUID_6_14` tag, downloaded to the scratchpad:
+     - `src/http.cc` lines 2202 to 2221: when `flags.toOriginPeer()`, `Authorization` is copied only if `request->peer_login` is PASS, PASSTHRU or PROXYPASS.
+     - Lines 89 to 91 set `toOrigin` for an `originserver` peer, and `src/http/StateFlags.h` line 56 defines `toOriginPeer()`. `src/HttpRequest.cc` line 449 takes `peer_login` from the peer's `login=`.
+     - `httpFixupAuthentication` returns early for PASSTHRU and adds nothing; PASS can add an external ACL's credentials. `src/cf.data.pre` documents both.
+     - Ubuntu's 17 patches for this build (Launchpad's `squid_6.14-0ubuntu0.24.04.5.debian.tar.xz`) touch neither `src/http.cc` nor `src/http/StateFlags.h`. None mentions `peer_login`, `PASSTHRU`, `prepForPeering` or `HdrType::AUTHORIZATION`.
+  3. Tests first:
+     - `test_prod_compose.py`: a new test pins each peer's `login=` options, `login=PASSTHRU` for the gateway and none for `watch_host`. Red: `{'gateway': [], 'watch_host': []}`.
+     - `test_egress_int.py`: the gateway's stand-in became an echo (bash and socat from the proxy's own image) that answers with the request line and headers it got; toxiproxy stays watch's stand-in. A new test posts `Authorization: Bearer watch-token` through watch's port. Red: 62 passed, 1 failed (`assert (200, False) == (200, True)`). The request reached the stand-in without the header, which reproduced the bug on the image's own squid.
+  4. The fix: `login=PASSTHRU` on the gateway's `cache_peer` alone, with a comment saying why. It is the narrowest option: it passes what the client sent and adds nothing. Squid never passes `Proxy-Authorization` to an origin server. `watch_host` is unchanged.
+  5. Docs:
+     - README (Deploy, Egress): the 4202 bullet, and egress check 6, which now sends a fake token and tells 401 from 403.
+     - `docs/alerts.md` (WatchNotReady: a refused post and its 401).
+     - docs/context.md. This also replaced the live check's stale counts (6 tunnels, 29 refusals; the test now has 8 and 49).
+     - docs/memory.md, docs/todo.md (P1.12) and docs/threat-notes.md (a new entry).
+  6. Small events:
+     - GateGuard's fact-forcing gate blocked the first Bash call and the first edit of each file; I stated the facts and retried each.
+     - The first red run of the static test ran only the old test, since the gate had blocked the edit; it ran again after the edit.
+     - `tar` could not create three symlinks from the Debian tarball on Windows and exited 2; the patches were extracted.
+     - A grep for `[tool.ruff]` failed on the unescaped bracket; the search tool found the settings.
+     - ruff S105 flagged a local named `token` in the new live test; it is now `header`.
+- Files: `infra/squid/squid.conf`, `services/agent/tests/test_prod_compose.py`, `services/agent/tests/test_egress_int.py`, README.md, docs/alerts.md, docs/context.md, docs/memory.md, docs/todo.md, docs/threat-notes.md, docs/activity-log.md.
+- Validation:
+  - `squid -k parse` of the new conf in the test image: exit 0. Its one warning, "HTTP requires the use of Via", comes from `via off` and was there before.
+  - `test_prod_compose.py` 19 passed. `test_egress_int.py` 63 passed, run again after the rename, with no test container or network left.
+  - `make lint` exit 0, pyright 0 errors, and the Python unit suite 670 passed.
+  - Not run locally: the rest of `make test-int` (`test_alerting_int.py` also runs the real conf) and the TypeScript tests, since no TypeScript changed. CI's `make test-int` runs them all.
+- Outstanding:
+  - The user ships it, restarts only the proxy with `docker restart triagecopilot-prod-egress-proxy-1`, runs egress check 6 and the drill again.
+  - Production mounts the working tree's `infra/squid/squid.conf`, so the next restart of the proxy reads the fix, merged or not.
+  - Nothing in production was touched: no container, no `make prod-token`. No FreightAudit or FilingLens container was touched either.
+
 ### 2026-11-01: Production alerting and make prod-env (branch prod-alerting, not committed)
 
 - What happened: the user asked for production alerting like FilingLens's, and a make target for the three env files. The alerting is Prometheus rules and Alertmanager in the prod compose's `observability` profile, delivered to Discord and to Gmail through the egress proxy. The work went in one PR, on branch `prod-alerting` from main `e1656d8`, tests first. It gave the go for `make test-int` and `make test-e2e`, and asked not to start production, not to touch FreightAudit's or FilingLens's containers, and not to commit.
