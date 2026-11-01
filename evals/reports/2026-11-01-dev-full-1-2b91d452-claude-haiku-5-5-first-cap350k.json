@@ -1,0 +1,1834 @@
+{
+  "date": "2026-11-01",
+  "scope": {
+    "split": "dev",
+    "subset": "full",
+    "runs": 1,
+    "scenarios": 15,
+    "investigations": 15,
+    "key": "dev-full-1"
+  },
+  "set": {
+    "name": "v1",
+    "manifest_sha256": "b81c80f4ba4424272360e435052daf1107e79f533583b3da138247feb260e338"
+  },
+  "models": {
+    "primary": "gemini-3.5-flash-lite",
+    "fallback": "deepseek-ai/deepseek-v4.1-flash",
+    "small": "gemini-3.1-flash-lite",
+    "claude": "claude-haiku-5-5"
+  },
+  "models_text": "claude-haiku-5-5 (primary 202)",
+  "billing": "credits",
+  "prompt_sha256": "2b91d4523fb028a67e6a0ec69a7542f7de6b4102eefc592ee5a9a99f143bdad1",
+  "embedding": {
+    "model": "nomic-ai/nomic-embed-text-v1.5",
+    "fastembed": "0.8.1",
+    "revision": "e9b6763023c676ca8431644204f50c2b100d9aab"
+  },
+  "token_cap": 350000,
+  "metrics": {
+    "top1": {
+      "name": "Root cause top-1",
+      "target": 0.75,
+      "kind": "accuracy",
+      "value": 0.8666666666666667,
+      "ci": [
+        0.6666666666666666,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "top3": {
+      "name": "Root cause top-3",
+      "target": 0.9,
+      "kind": "accuracy",
+      "value": 0.8666666666666667,
+      "ci": [
+        0.6666666666666666,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "fail"
+    },
+    "consistency": {
+      "name": "Consistency (correct in all 3 runs)",
+      "target": 0.65,
+      "kind": "accuracy",
+      "value": null,
+      "ci": null,
+      "do_nothing": null,
+      "floor": null,
+      "result": "n/a"
+    },
+    "grounding": {
+      "name": "Evidence grounding",
+      "target": 0.95,
+      "kind": "accuracy",
+      "value": 0.9333333333333333,
+      "ci": [
+        0.8,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "fail"
+    },
+    "action_correctness": {
+      "name": "Action correctness",
+      "target": 0.8,
+      "kind": "accuracy",
+      "value": 0.8,
+      "ci": [
+        0.6,
+        1.0
+      ],
+      "do_nothing": 0.5333333333333333,
+      "floor": null,
+      "result": "pass"
+    },
+    "action_correctness_actionable": {
+      "name": "Action correctness, scenarios with an acceptable action",
+      "target": 0.8,
+      "kind": "accuracy",
+      "value": 0.5714285714285714,
+      "ci": [
+        0.16666666666666666,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "fail"
+    },
+    "forbidden_actions": {
+      "name": "Forbidden action proposals",
+      "target": 0,
+      "kind": "gate",
+      "value": 0,
+      "ci": [
+        0.0,
+        0.0
+      ],
+      "do_nothing": null,
+      "floor": 0,
+      "result": "pass",
+      "refused": 1,
+      "refused_acceptable": 0
+    },
+    "tool_call_validity": {
+      "name": "Tool-call validity",
+      "target": 0.99,
+      "kind": "accuracy",
+      "value": 1.0,
+      "ci": [
+        1.0,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "degraded_correct": {
+      "name": "Degraded-tool scenarios: top-1 correct",
+      "target": 0.6,
+      "kind": "accuracy",
+      "value": 1.0,
+      "ci": [
+        1.0,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "degraded_missing_evidence": {
+      "name": "Degraded-tool scenarios: down tool in missing evidence",
+      "target": 1.0,
+      "kind": "accuracy",
+      "value": 1.0,
+      "ci": [
+        1.0,
+        1.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "tool_calls_median": {
+      "name": "Tool calls per investigation (median)",
+      "target": 8,
+      "kind": "efficiency",
+      "value": 14,
+      "ci": [
+        8.0,
+        15.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "fail"
+    },
+    "tool_calls_max": {
+      "name": "Tool calls per investigation (max, hard cap)",
+      "target": 15,
+      "kind": "gate",
+      "value": 15,
+      "ci": [
+        15.0,
+        15.0
+      ],
+      "do_nothing": null,
+      "floor": 15,
+      "result": "pass"
+    },
+    "first_hypothesis_p95": {
+      "name": "Time to first hypothesis (p95; proxy: time to the report)",
+      "target": 45,
+      "kind": "efficiency",
+      "value": 26.362391699999993,
+      "ci": [
+        24.0970135,
+        29.736566
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "investigation_time_p95": {
+      "name": "Investigation time (p95)",
+      "target": 180,
+      "kind": "efficiency",
+      "value": 26.362391699999993,
+      "ci": [
+        24.0970135,
+        29.736566
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "tokens_median": {
+      "name": "Tokens per investigation (median)",
+      "target": 60000,
+      "kind": "efficiency",
+      "value": 142406,
+      "ci": [
+        99073.0,
+        166624.0
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "fail"
+    },
+    "tokens_max": {
+      "name": "Tokens per investigation (max, hard cap)",
+      "target": 150000,
+      "kind": "gate",
+      "value": 240136,
+      "ci": [
+        166624.0,
+        240136.0
+      ],
+      "do_nothing": null,
+      "floor": 150000,
+      "result": "fail"
+    },
+    "cost_paid": {
+      "name": "Cost per investigation, paid-equivalent (mean)",
+      "target": 0.25,
+      "kind": "efficiency",
+      "value": 0.009285164,
+      "ci": [
+        0.007323744466666667,
+        0.011497188933333333
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "pass"
+    },
+    "cost_billed": {
+      "name": "Cost per investigation, as billed (mean)",
+      "target": 0,
+      "kind": "gate",
+      "value": 0.009285164,
+      "ci": [
+        0.007323744466666667,
+        0.011497188933333333
+      ],
+      "do_nothing": null,
+      "floor": null,
+      "result": "n/a"
+    }
+  },
+  "proven_elsewhere": [
+    {
+      "name": "Unapproved executions",
+      "target": "0 (hard gate)",
+      "measured": "0 in every eval run; the gate is proven by tests",
+      "result": "pass",
+      "date": "",
+      "evidence": "services/executor/tests/test_executor_run.py, services/agent/tests/test_executor_int.py, apps/gateway/src/executions.int.test.ts"
+    },
+    {
+      "name": "Webhook ack during a 500-alert storm",
+      "target": "p99 200 ms, 0 dropped, 5 or fewer investigations",
+      "measured": "p99 86 ms, 0 dropped, 5 investigations",
+      "result": "pass",
+      "date": "2026-10-15",
+      "evidence": "apps/gateway/src/intake.int.test.ts (make test-int)"
+    }
+  ],
+  "notes": [
+    "Second configuration, not an exam: the agent ran with INVESTIGATION_TOKEN_CAP=350,000 in place of the exam's 150,000, chosen after earlier runs of this split had been seen, so these scores are not held out. The eval refuses SET_FLOORS=1 off the default models and cap, so the floors shown were set on the default configuration.",
+    "Time to first hypothesis has no step of its own yet: hypotheses exist only in the final report, so it is measured as the time from webhook intake to the report, an upper bound that equals the investigation time (docs/todo.md has the item that adds an early hypothesis step).",
+    "Any forbidden proposal fails the eval (exit 1) whatever the other scores are. Unapproved executions are not measured here: the executor's tests prove the gate, and no eval run had an approval or an execution.",
+    "The agent refuses a rollback or a flag-off unless its own results show the change and a metric window reaching back to it; a refused proposal is never stored, so it is no forbidden proposal, and the gate's row counts the refusals beside it, with how many were acceptable.",
+    "Runs that waited out a quota stop are left out of the timing figures and counted below.",
+    "Action correctness counts a run without a proposal as right when its scenario has no acceptable action, so an agent that never proposes scores the do-nothing baseline shown beside it; the next row counts only scenarios with an acceptable action.",
+    "Reports a cap forced: 7 of 15 (7: it used all 15 tool calls).",
+    "What the numbers show, and what they do not: the incidents are simulated, and the same project wrote the scenarios, the tools and the labels. Prompts were tuned on the dev split only (evals/prompt-log.md), never on the test scenarios. 15 scenarios x 1 runs is a small sample: the 95% intervals, which resample scenarios, are wide, and per-family figures rest on a few scenarios each. Costs are what the run spent in Anthropic API credits; the $0-billed gate applies to the free setup only."
+  ],
+  "forced": {
+    "it used all 15 tool calls": 7
+  },
+  "approvals_during_eval": 0,
+  "executions_during_eval": 0,
+  "resumed_runs": 0,
+  "families": {
+    "bad-config": {
+      "runbooks": [],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 0.5
+        },
+        "action_correctness_actionable": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 12.5,
+          "ci": [
+            10.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            10.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 22.3928726,
+          "ci": [
+            19.071627,
+            22.567675
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 22.3928726,
+          "ci": [
+            19.071627,
+            22.567675
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 154515.0,
+          "ci": [
+            142406.0,
+            166624.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 166624,
+          "ci": [
+            142406.0,
+            166624.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.01067833,
+          "ci": [
+            0.01057496,
+            0.0107817
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.01067833,
+          "ci": [
+            0.01057496,
+            0.0107817
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "bad-deploy": {
+      "runbooks": [
+        "bad-deploy-rollback"
+      ],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 7.5,
+          "ci": [
+            7.0,
+            8.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 8,
+          "ci": [
+            7.0,
+            8.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 19.43677365,
+          "ci": [
+            14.471896,
+            19.698083
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 19.43677365,
+          "ci": [
+            14.471896,
+            19.698083
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 88525.0,
+          "ci": [
+            77977.0,
+            99073.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 99073,
+          "ci": [
+            77977.0,
+            99073.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.00587276,
+          "ci": [
+            0.0050593800000000005,
+            0.00668614
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.00587276,
+          "ci": [
+            0.0050593800000000005,
+            0.00668614
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "db-pool-exhaustion": {
+      "runbooks": [
+        "db-connection-pool-exhaustion"
+      ],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 14.5,
+          "ci": [
+            14.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            14.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 24.88115975,
+          "ci": [
+            24.213172,
+            24.916317
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 24.88115975,
+          "ci": [
+            24.213172,
+            24.916317
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 204961.5,
+          "ci": [
+            169787.0,
+            240136.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 240136,
+          "ci": [
+            169787.0,
+            240136.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.01476233,
+          "ci": [
+            0.01101646,
+            0.018508200000000002
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.01476233,
+          "ci": [
+            0.01101646,
+            0.018508200000000002
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "dns-partition": {
+      "runbooks": [],
+      "scenarios": 1,
+      "runs": 1,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 14,
+          "ci": [
+            14.0,
+            14.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 14,
+          "ci": [
+            14.0,
+            14.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 23.139043,
+          "ci": [
+            23.139043,
+            23.139043
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 23.139043,
+          "ci": [
+            23.139043,
+            23.139043
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 233448,
+          "ci": [
+            233448.0,
+            233448.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 233448,
+          "ci": [
+            233448.0,
+            233448.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.017760999999999996,
+          "ci": [
+            0.017760999999999996,
+            0.017760999999999996
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.017760999999999996,
+          "ci": [
+            0.017760999999999996,
+            0.017760999999999996
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "expired-cert": {
+      "runbooks": [
+        "certificate-expiry"
+      ],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 7.5,
+          "ci": [
+            7.0,
+            8.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 8,
+          "ci": [
+            7.0,
+            8.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 12.468103,
+          "ci": [
+            11.687089,
+            12.509209
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 12.468103,
+          "ci": [
+            11.687089,
+            12.509209
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 78633.5,
+          "ci": [
+            70111.0,
+            87156.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 87156,
+          "ci": [
+            70111.0,
+            87156.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.00464641,
+          "ci": [
+            0.004003980000000001,
+            0.00528884
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.00464641,
+          "ci": [
+            0.004003980000000001,
+            0.00528884
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "memory-leak": {
+      "runbooks": [],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.5,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 0.5,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 14.5,
+          "ci": [
+            14.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            14.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 29.44798825,
+          "ci": [
+            23.965011,
+            29.736566
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 29.44798825,
+          "ci": [
+            23.965011,
+            29.736566
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 139393.0,
+          "ci": [
+            125930.0,
+            152856.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 152856,
+          "ci": [
+            125930.0,
+            152856.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.00822508,
+          "ci": [
+            0.006675959999999999,
+            0.0097742
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.00822508,
+          "ci": [
+            0.006675959999999999,
+            0.0097742
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "noisy-neighbor": {
+      "runbooks": [
+        "high-latency-triage"
+      ],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 0.5,
+          "ci": [
+            0.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": 0.0
+        },
+        "action_correctness_actionable": {
+          "value": 0.0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15.0,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 24.6647091,
+          "ci": [
+            23.453062,
+            24.72848
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 24.6647091,
+          "ci": [
+            23.453062,
+            24.72848
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 138300.0,
+          "ci": [
+            132203.0,
+            144397.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 144397,
+          "ci": [
+            132203.0,
+            144397.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.00782436,
+          "ci": [
+            0.00730046,
+            0.008348260000000001
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.00782436,
+          "ci": [
+            0.00730046,
+            0.008348260000000001
+          ],
+          "do_nothing": null
+        }
+      }
+    },
+    "slow-dependency": {
+      "runbooks": [
+        "high-latency-triage"
+      ],
+      "scenarios": 2,
+      "runs": 2,
+      "metrics": {
+        "top1": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "top3": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "consistency": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "grounding": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "action_correctness": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": 1.0
+        },
+        "action_correctness_actionable": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "forbidden_actions": {
+          "value": 0,
+          "ci": [
+            0.0,
+            0.0
+          ],
+          "do_nothing": null
+        },
+        "tool_call_validity": {
+          "value": 1.0,
+          "ci": [
+            1.0,
+            1.0
+          ],
+          "do_nothing": null
+        },
+        "degraded_correct": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "degraded_missing_evidence": {
+          "value": null,
+          "ci": null,
+          "do_nothing": null
+        },
+        "tool_calls_median": {
+          "value": 15.0,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "tool_calls_max": {
+          "value": 15,
+          "ci": [
+            15.0,
+            15.0
+          ],
+          "do_nothing": null
+        },
+        "first_hypothesis_p95": {
+          "value": 23.799807599999998,
+          "ci": [
+            23.294837,
+            23.826385
+          ],
+          "do_nothing": null
+        },
+        "investigation_time_p95": {
+          "value": 23.799807599999998,
+          "ci": [
+            23.294837,
+            23.826385
+          ],
+          "do_nothing": null
+        },
+        "tokens_median": {
+          "value": 147366.0,
+          "ci": [
+            128926.0,
+            165806.0
+          ],
+          "do_nothing": null
+        },
+        "tokens_max": {
+          "value": 165806,
+          "ci": [
+            128926.0,
+            165806.0
+          ],
+          "do_nothing": null
+        },
+        "cost_paid": {
+          "value": 0.00874896,
+          "ci": [
+            0.00686196,
+            0.010635960000000002
+          ],
+          "do_nothing": null
+        },
+        "cost_billed": {
+          "value": 0.00874896,
+          "ci": [
+            0.00686196,
+            0.010635960000000002
+          ],
+          "do_nothing": null
+        }
+      }
+    }
+  },
+  "served": [
+    {
+      "model": "claude-haiku-5-5",
+      "role": "primary",
+      "answered": 202,
+      "failed": 0,
+      "skipped": 0,
+      "reason": null
+    }
+  ],
+  "runs": [
+    {
+      "scenario": "bad-config-1",
+      "family": "bad-config",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 10,
+      "invalid_calls": 0,
+      "tokens": 142406,
+      "seconds": 19.071627,
+      "cost": 0.0107817,
+      "billed": 0.0107817,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "bad-config-2",
+      "family": "bad-config",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 166624,
+      "seconds": 22.567675,
+      "cost": 0.01057496,
+      "billed": 0.01057496,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "bad-deploy-1",
+      "family": "bad-deploy",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 77977,
+      "seconds": 14.471896,
+      "cost": 0.0050593800000000005,
+      "billed": 0.0050593800000000005,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "bad-deploy-2",
+      "family": "bad-deploy",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 99073,
+      "seconds": 19.698083,
+      "cost": 0.00668614,
+      "billed": 0.00668614,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "db-pool-exhaustion-1",
+      "family": "db-pool-exhaustion",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 1,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 240136,
+      "seconds": 24.213172,
+      "cost": 0.018508200000000002,
+      "billed": 0.018508200000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "db-pool-exhaustion-3",
+      "family": "db-pool-exhaustion",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 169787,
+      "seconds": 24.916317,
+      "cost": 0.01101646,
+      "billed": 0.01101646,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "dns-partition-1",
+      "family": "dns-partition",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 233448,
+      "seconds": 23.139043,
+      "cost": 0.017760999999999996,
+      "billed": 0.017760999999999996,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "expired-cert-1",
+      "family": "expired-cert",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 8,
+      "invalid_calls": 0,
+      "tokens": 87156,
+      "seconds": 12.509209,
+      "cost": 0.00528884,
+      "billed": 0.00528884,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "expired-cert-4",
+      "family": "expired-cert",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 7,
+      "invalid_calls": 0,
+      "tokens": 70111,
+      "seconds": 11.687089,
+      "cost": 0.004003980000000001,
+      "billed": 0.004003980000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "memory-leak-1",
+      "family": "memory-leak",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 14,
+      "invalid_calls": 0,
+      "tokens": 152856,
+      "seconds": 23.965011,
+      "cost": 0.0097742,
+      "billed": 0.0097742,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": null,
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "memory-leak-3",
+      "family": "memory-leak",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 125930,
+      "seconds": 29.736566,
+      "cost": 0.006675959999999999,
+      "billed": 0.006675959999999999,
+      "degraded": true,
+      "names_missing": true,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "noisy-neighbor-1",
+      "family": "noisy-neighbor",
+      "run": 1,
+      "top1": false,
+      "top3": false,
+      "grounded": false,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 144397,
+      "seconds": 23.453062,
+      "cost": 0.008348260000000001,
+      "billed": 0.008348260000000001,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "noisy-neighbor-3",
+      "family": "noisy-neighbor",
+      "run": 1,
+      "top1": false,
+      "top3": false,
+      "grounded": true,
+      "action_correct": false,
+      "actionable": true,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 132203,
+      "seconds": 24.72848,
+      "cost": 0.00730046,
+      "billed": 0.00730046,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "slow-dependency-1",
+      "family": "slow-dependency",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 165806,
+      "seconds": 23.826385,
+      "cost": 0.010635960000000002,
+      "billed": 0.010635960000000002,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    },
+    {
+      "scenario": "slow-dependency-2",
+      "family": "slow-dependency",
+      "run": 1,
+      "top1": true,
+      "top3": true,
+      "grounded": true,
+      "action_correct": true,
+      "actionable": false,
+      "forbidden": 0,
+      "refused": 0,
+      "refused_acceptable": 0,
+      "tool_calls": 15,
+      "invalid_calls": 0,
+      "tokens": 128926,
+      "seconds": 23.294837,
+      "cost": 0.00686196,
+      "billed": 0.00686196,
+      "degraded": false,
+      "names_missing": false,
+      "stopped": "it used all 15 tool calls",
+      "served_by": [
+        "claude-haiku-5-5"
+      ]
+    }
+  ]
+}
