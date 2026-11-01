@@ -19,6 +19,42 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-01: Production alerting and make prod-env (branch prod-alerting, not committed)
+
+- What happened: the user asked for production alerting like FilingLens's, and a make target for the three env files. The alerting is Prometheus rules and Alertmanager in the prod compose's `observability` profile, delivered to Discord and to Gmail through the egress proxy. The work went in one PR, on branch `prod-alerting` from main `e1656d8`, tests first. It gave the go for `make test-int` and `make test-e2e`, and asked not to start production, not to touch FreightAudit's or FilingLens's containers, and not to commit.
+- Why: production had no alert delivery, and no TC service emitted metrics.
+- What we did:
+  1. Read FilingLens's `infra/alertmanager/*`, `infra/squid/*` and its docs/deploy.md alert sections (Alert delivery, Monitoring and alert delivery, Rollback), read-only. Small event: the read of deploy.md's lines 314 to 345 also showed its other rollback items (kill switch, AI off, images, data, keys), which are not alert steps. I also listed its `infra/` folder's file names (none opened). Nothing in FilingLens changed.
+  2. Checks before building, each recorded in docs/memory.md:
+     - A throwaway container on the default bridge reached a server I ran on 127.0.0.1:4240 through `host.docker.internal` (192.168.65.254): `HTTP/1.0 200 OK`. The server was stopped by its task id afterwards, and port 4240 was free again.
+     - A scratch makefile and compose file (`config --services` only, nothing started) showed two things. An exported empty `COMPOSE_PROFILES` beats `.env.prod`'s value. And compose refuses a missing `${VAR:?}` even for a service whose profile is off.
+     - Docker Hub's tag lists set the image versions: Alertmanager v0.34.1, blackbox exporter v0.29.0.
+  3. Tests first, each run red before its code:
+     - `test_prod_compose.py` (network map, fixed addresses, profiles, hardening, secrets per service, cross-file ports and addresses);
+     - `test_prod_env.py`;
+     - `test_alert_rules.py` (the 8 rules, each linking its own section of `docs/alerts.md`);
+     - `infra/prometheus-alerts.test.yml` with `test_monitoring_int.py` (promtool, and each config's own check);
+     - `test_metrics_int.py`, plus a 503 case in `test_agent_api.py`;
+     - `test_egress_int.py` (the new ports, and the probe port to a fake watch);
+     - `test_alerting_int.py` with `fake_receivers.py` (a fake Discord over HTTPS and a fake Gmail with STARTTLS, certificates from a test CA, on an internal 203.0.113.0/24 network).
+     Red: 18 unit failures and the integration modules' errors, all for the missing pieces.
+  4. Small event: the red run of `test_monitoring_int.py` made Docker Desktop create the two missing mount sources, `infra/prometheus-alerts.yml` and `infra/prometheus.prod.yml`, as empty folders. Why: Docker Desktop creates a missing bind source. What we did: `rmdir` of both (empty, made by that run), and the mount helpers now assert each source exists first.
+  5. The code:
+     - Squid gained ports 3130 (Alertmanager, `discord.com:443`), 3131 (the relay, `smtp.gmail.com:587`) and 4240 (Prometheus's `GET /readyz` to `host.docker.internal:4240`), plus a UDP access log to egress-log. The squid image gained socat.
+     - The prod compose gained the `alerting` network (10.231.233.48/28), the Prometheus override and the services blackbox, alertmanager, smtp-relay and egress-log, plus Grafana's own password and two volumes. New config files: `infra/prometheus.prod.yml`, `infra/prometheus-alerts.yml`, `infra/blackbox.yml`, `infra/otel-egress-log.yaml` and `infra/alertmanager/` (config, template, entrypoint).
+     - The agent gained `GET /metrics` (`agent/metrics.py`; `llm.stop()`, which `spent()` wraps; agent API 0.4.0 and `make codegen`).
+     - Also `scripts/prod_env.py` with `make prod-env`, `COMPOSE_PROFILES` exported only for `infra-up` and `infra-down`, and `cryptography` declared as a dev dependency (`uv lock` added one line, no version change).
+  6. Small events while going green:
+     - The healthcheck guard test went red once squid served the new ports, then passed with the healthcheck's port list.
+     - squid refused `buffer-size=0` ("Unknown bytes unit ''", FATAL Bungled); `squid -k parse` in the image found it, and `0KB` parses.
+     - The first delivery run timed out. Its log hint showed socat refusing `range=.../32` on `TCP-LISTEN` (fixed with `TCP4-LISTEN`) and the collector's deprecation warnings for `udplog` and `body` (fixed as `udp_log` and `log.body`).
+     - The agent job's scrape got a `service` label, and its compose test expectation was corrected to match, so AgentNotReady can join the probe and the metrics' `up` by service.
+     - ruff format rewrapped 5 files; pyright found 3 type nits in the delivery test, which were fixed; Prettier rewrapped the promtool test file.
+  7. Docs: README (Deploy: `make prod-env`, the env-file table, the proxy's new ports, egress check 1's networks, and a new Alerting section with the rules, the rollout steps and the rollback), `docs/alerts.md` (the runbooks), docs/context.md, docs/memory.md, docs/todo.md, docs/threat-notes.md (a new entry) and `.env.example`.
+- Files: `infra/squid/squid.conf`, `infra/docker/squid.Dockerfile`, `infra/docker-compose.prod.yml`, `infra/prometheus.prod.yml`, `infra/prometheus-alerts.yml`, `infra/prometheus-alerts.test.yml`, `infra/blackbox.yml`, `infra/otel-egress-log.yaml`, `infra/alertmanager/{alertmanager.yml,entrypoint.sh,triage-copilot.tmpl}`, `services/agent/src/agent/{llm.py,metrics.py,main.py}`, `contracts/openapi/agent.yaml`, `packages/ts-clients/src/generated/agent.ts`, `scripts/prod_env.py`, `Makefile`, `pyproject.toml`, `uv.lock`, the tests above, and the docs.
+- Validation: `make lint` 0, `make typecheck` 0, `make test` 0 (pytest 669 passed), `make contracts-check` 0, `make contracts-breaking` 0 (agent.yaml additive), `make test-int` 0 (Jest 9 suites and 46 tests, pytest 152 passed in 236 s), `make test-e2e` 0 (17 passed). Then `make infra-down`: `make test-int` had started this project's dev infra, which was down when the task began; the volumes stay.
+- Outstanding: the user ships it and runs README, Deploy, Alerting. Production was not started. No FreightAudit or FilingLens container was touched, and no throwaway container or network was left.
+
 ### 2026-11-01: P0's two dev passes, Claude first then free only: no forbidden proposal
 
 - What happened: the user asked Claude Code to run P0's two dev passes (docs/todo.md, P0 step 3) on main: first the Claude-first pass, then the free-only pass. Their go covered `make infra-up`, `make migrate`, the sim, gateway and agent dev servers in the background, and both evals after each `ESTIMATE=1` result, Pass A only if its estimate stayed under $0.30. Never `SPLIT=test` or `SET_FLOORS=1`; stop only the processes started, by PID, then `make infra-down`; update the docs; no commit.

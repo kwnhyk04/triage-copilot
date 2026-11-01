@@ -139,16 +139,15 @@ def claude_spend(
     return total
 
 
-def spent(conn: Connection, role: Role, worst_usd: float = 0.0) -> str | None:
-    """Why no request to the role's model can get through now, or None: Claude's credits have
-    expired, it is switched off, today's or this month's Claude spend plus the call's worst case
-    (worst_usd) passes the role's dollar cap, today's requests are used up, or the provider said
-    so. Parked investigations then stay parked instead of trying again every sweep, and the
-    skipped call records the reason."""
+def stop(conn: Connection, role: Role, worst_usd: float = 0.0) -> tuple[str, str] | None:
+    """Why no request to the role's model can get through now, as a short code (agent.metrics)
+    and a sentence, or None: Claude's credits have expired, it is switched off, today's or this
+    month's Claude spend plus the call's worst case (worst_usd) passes the role's dollar cap,
+    today's requests are used up, or the provider said so."""
     if role.until is not None and datetime.now(UTC).date() >= role.until:
-        return f"its credits ended on {role.until.isoformat()} (UTC)"
+        return "credits_ended", f"its credits ended on {role.until.isoformat()} (UTC)"
     if role.provider == "anthropic" and not is_on(conn, "claude"):
-        return "Claude is switched off (agent.switches)"
+        return "switched_off", "Claude is switched off (agent.switches)"
     day: Cap = (
         ("day", "today's", role.daily_usd, PLANS, "the planner cap", "spend on plans")
         if role.name == "planner"
@@ -162,22 +161,42 @@ def spent(conn: Connection, role: Role, worst_usd: float = 0.0) -> str | None:
         "TC's monthly Claude cap",
         "spend",
     )
-    for period, when, cap, roles, name, what in (day, month):
+    for code, (period, when, cap, roles, name, what) in (
+        ("daily_cap", day),
+        ("monthly_cap", month),
+    ):
         if cap is None:
             continue
         spend = claude_spend(conn, period, roles)
         if isinstance(spend, str):
-            return f"{spend} has no price in agent/pricing.py, so {name} cannot be checked"
+            unpriced = f"{spend} has no price in agent/pricing.py, so {name} cannot be checked"
+            return "unpriced", unpriced
         if spend + worst_usd > cap:
-            return (
+            return code, (
                 f"{when} Claude {what} of ${spend:.4f} plus this call's worst case of "
                 f"${worst_usd:.4f} passes {name} of ${cap:.2f} (UTC)"
             )
     if role.rpd > 0 and calls_today(conn, role.model) >= role.rpd:
-        return f"it made its {role.rpd} requests for today (Pacific)"
+        return "daily_requests", f"it made its {role.rpd} requests for today (Pacific)"
     with conn.begin():
-        stop = conn.execute(STOPPED, {"model": role.model, "provider": role.provider}).scalar()
-    return STOP_REASONS[stop] if stop else None
+        found = conn.execute(STOPPED, {"model": role.model, "provider": role.provider}).scalar()
+    return (found, STOP_REASONS[found]) if found else None
+
+
+def spent(conn: Connection, role: Role, worst_usd: float = 0.0) -> str | None:
+    """stop()'s sentence alone. Parked investigations then stay parked instead of trying again
+    every sweep, and the skipped call records the reason."""
+    found = stop(conn, role, worst_usd)
+    return None if found is None else found[1]
+
+
+def stop_code(conn: Connection, role: Role, limiter: "Limiter") -> str | None:
+    """Why the role takes no call now, judged on the largest call as Router.available judges it,
+    with a key the provider rejected first; None while it takes calls."""
+    if limiter.rejected(role) is not None:
+        return "key_rejected"
+    found = stop(conn, role, _worst(role, *LARGEST_CALL))
+    return None if found is None else found[0]
 
 
 class Limiter:

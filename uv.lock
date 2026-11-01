@@ -21,6 +21,7 @@ members = [
 [manifest.dependency-groups]
 dev = [
     { name = "agent", editable = "services/agent" },
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "datamodel-code-generator", specifier = ">=0.83.0" },
     { name = "executor", editable = "services/executor" },
     { name = "faker", specifier = ">=40.43.0" },

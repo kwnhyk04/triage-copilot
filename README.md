@@ -222,13 +222,13 @@ The web runs on Vercel. The backend runs on this PC as its own compose project, 
 
 Only the gateway's public port is reachable from outside production: on `127.0.0.1:4202` (`PROD_GATEWAY_PORT`) for `watch`, which the egress proxy publishes and forwards to the gateway, and through a Tailscale Funnel sidecar at `https://triage-copilot.<tailnet>.ts.net`. Postgres, ElasticMQ, the gateway's internal listener (4201) and the agent publish nothing. The sim and the executor are not deployed.
 
-Every production network is internal except the egress proxy's, so no other container reaches the internet or this PC's own ports (Egress, below).
+Every production network is internal except the egress proxy's, so no other container reaches the internet or this PC's own ports (Egress, below). With the `observability` profile, Prometheus's rules alert to Discord and to an inbox through the same proxy (Alerting, below).
 
-The three env files are never committed (`.gitignore` covers `.env.*`). Make every secret fresh on this PC with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. In production, the gateway and the web refuse the `.env.example` keys.
+`make prod-env` writes the three env files with a fresh secret for every internal password, key and token. It prints no value, leaves empty only what you paste (it lists those names), and refuses to run when any of the three files exists. The files are never committed (`.gitignore` covers `.env.*`). In production, the gateway and the web refuse the `.env.example` keys.
 
 | File | Read by | Holds |
 | --- | --- | --- |
-| `.env.prod` | compose, for interpolation | `PROD_POSTGRES_PASSWORD`, `PROD_GATEWAY_DB_PASSWORD`, `PROD_AGENT_DB_PASSWORD`; `TC_IMAGES` (`ghcr.io/<owner>`, lower case); `TC_TAG` (`sha-` and the merged commit's first 12 characters, once `publish.yml` has pushed it); `TS_AUTHKEY` (a one-off, tagged, pre-approved auth key: the container keeps it in its environment) |
+| `.env.prod` | compose, for interpolation | `PROD_POSTGRES_PASSWORD`, `PROD_GATEWAY_DB_PASSWORD`, `PROD_AGENT_DB_PASSWORD`, `PROD_GRAFANA_ADMIN_PASSWORD`; `TC_IMAGES` (`ghcr.io/<owner>`, lower case, from the GitHub remote); `TC_TAG` (`sha-` and the merged commit's first 12 characters, once `publish.yml` has pushed it); `TS_AUTHKEY` (a one-off, tagged, pre-approved auth key: the container keeps it in its environment); the four `ALERT_*` values and `COMPOSE_PROFILES=observability` once alerting is set up (Alerting) |
 | `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY=10.231.233.18`, the sidecar's fixed address, once checked (check 5) |
 | `.env.prod.agent` | the agent, its migration and the runbook load | the same `AGENT_SERVICE_TOKEN`, `AI_ENABLED=true`, `ANTHROPIC_API_KEY` (the TC workspace's), `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `LIVE_TENANTS` |
 
@@ -238,6 +238,7 @@ The agent never holds the approver key, and no container holds the web's sign-in
 
 | Target | Does |
 | --- | --- |
+| `make prod-env` | Writes `.env.prod`, `.env.prod.gateway` and `.env.prod.agent` with fresh secrets, printing none, and lists what you paste: `TC_TAG`, `TS_AUTHKEY`, the Anthropic, Gemini and NVIDIA keys, and the four `ALERT_*` values. Refuses, writing nothing, when any of the three exists |
 | `make prod-up` | Pulls the images; migrates both schemas and loads the runbooks in one-shot containers; starts Postgres, ElasticMQ, the gateway, the egress proxy, the agent and the Funnel sidecar; waits at most 300 s for the proxy's ports and for the gateway and the agent to answer `/readyz`. If the wait ends there, `docker compose -p triagecopilot-prod ps -a` shows which service is not up, and `docker compose -p triagecopilot-prod logs <service> --tail 30` names the setting it refused |
 | `make prod-down` | Removes production's containers and network; the volumes stay (never `-v`) |
 | `make prod-token NAME=<tenant>` | Issues a tenant's webhook token in the production database (it has no host port) |
@@ -299,6 +300,9 @@ Docker Desktop lets any container on a routed network reach the internet and thi
 | 3128 | agent (10.231.233.2) | `api.anthropic.com`, `generativelanguage.googleapis.com`, `integrate.api.nvidia.com` |
 | 3129 | tailscale (10.231.233.3) | `controlplane.tailscale.com`; the relays, by `^derp[0-9]+[a-z]*[.]tailscale[.]com$` (with no UDP out, all traffic rides a relay, Funnel's included); `acme-v02.api.letsencrypt.org` (Funnel's certificate) |
 | 4202 | watch, on this PC | the gateway's public listener only |
+| 3130 | Alertmanager (10.231.233.50, observability profile) | `discord.com` |
+| 3131 | the mail relay (10.231.233.51, observability profile) | `smtp.gmail.com`, on 587 alone |
+| 4240 | Prometheus (10.231.233.52, observability profile) | `GET /readyz` of watch on this PC (`host.docker.internal:4240`) only |
 
 - Not allowed: Tailscale's log server (`--no-logs-no-support` turns its upload off), OpenRouter and Ollama (not used in production), and every other host.
 - The agent's model clients read `HTTPS_PROXY` themselves (`test_providers.py` checks each); every internal address is `http://`, which it leaves alone.
@@ -307,7 +311,7 @@ Docker Desktop lets any container on a routed network reach the internet and thi
 
 Egress checks, after check 2, in PowerShell:
 
-1. Run `docker inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' triagecopilot-prod-gateway-1 triagecopilot-prod-agent-1 triagecopilot-prod-tailscale-1 triagecopilot-prod-egress-proxy-1`. Expect the gateway on `data`, `edge` and `ingress`; the agent on `data` and `outbound`; the sidecar on `edge` and `outbound`; the proxy on `egress`, `ingress` and `outbound`, each with the `triagecopilot-prod_` prefix.
+1. Run `docker inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' triagecopilot-prod-gateway-1 triagecopilot-prod-agent-1 triagecopilot-prod-tailscale-1 triagecopilot-prod-egress-proxy-1`. Expect the gateway on `data`, `edge` and `ingress`; the agent on `data` and `outbound`; the sidecar on `edge` and `outbound`; the proxy on `alerting`, `egress`, `ingress` and `outbound`, each with the `triagecopilot-prod_` prefix.
 2. Run `docker logs triagecopilot-prod-egress-proxy-1 | Select-String CONNECT`. Expect `TCP_TUNNEL/200` for Tailscale's hosts from 10.231.233.3. Then `Select-String TCP_DENIED`: nothing. If the sidecar asks for another host, report it; never allow a bare IP address.
 3. The model routes, with no key and no model call: `docker exec triagecopilot-prod-agent-1 python -c "import httpx2; [print(h, httpx2.head('https://' + h, timeout=10).status_code) for h in ('api.anthropic.com', 'generativelanguage.googleapis.com', 'integrate.api.nvidia.com')]"`. Each host prints an HTTP status, and the proxy's log shows a tunnel from 10.231.233.2 for each.
 4. This PC's ports are closed to the agent, so every result is non-zero (`10.231.233.1` is `outbound`'s gateway address): `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.setdefaulttimeout(2); [print(h, p, socket.socket().connect_ex((h, p))) for h in ('192.168.65.254', '10.231.233.1') for p in (4200, 4201, 4231, 5434, 4566, 445)]"`. And `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.create_connection(('host.docker.internal', 4231), 3)"` fails. This is P1.12 (4) for TC's own containers.
@@ -320,6 +324,74 @@ Rollback, if Funnel's `/healthz` is not 200 within 10 minutes, or the model call
 1. Run `make prod-down`.
 2. Run `git checkout <the commit before the egress lockdown> -- infra/docker-compose.prod.yml`, then `make prod-up`. Every container is back on one routed network, with open egress, and the gateway publishes 4202 itself.
 3. Report what failed. Later, `git checkout HEAD -- infra/docker-compose.prod.yml` restores the lockdown.
+
+### Alerting
+
+```
+prometheus   --data--> agent:4210/metrics
+blackbox     (in Prometheus's network namespace) --data--> gateway:4200/readyz, agent:4210/readyz
+blackbox     --alerting, 10.231.233.52--> egress-proxy:4240 --egress--> watch's 127.0.0.1:4240/readyz
+egress-proxy --alerting, UDP--> egress-log:5514 (counts the refusals) <--alerting-- prometheus
+prometheus   --alerting--> alertmanager:9093
+alertmanager --alerting, 10.231.233.50--> egress-proxy:3130 --egress--> discord.com:443
+alertmanager --alerting--> smtp-relay:2525 (10.231.233.51) --> egress-proxy:3131 --egress--> smtp.gmail.com:587
+```
+
+With `COMPOSE_PROFILES=observability` in `.env.prod`, production runs Prometheus with its rules (`infra/prometheus-alerts.yml`) and Alertmanager (`infra/alertmanager/`), which sends each alert to a Discord channel and to an inbox. `docs/alerts.md` says what each alert means and what to do.
+
+| Rule | Fires when | Severity |
+| --- | --- | --- |
+| GatewayNotReady | the gateway's `/readyz` fails for 2 minutes | critical |
+| AgentNotReady | the agent's `/readyz` or `/metrics` fails for 2 minutes | critical |
+| WatchNotReady | watch's `/readyz` on this PC fails for 5 minutes | warning |
+| InvestigationsFailing | an investigation message went to the dead-letter queue, or failed validation, in the last hour | warning |
+| ClaudeOff | Claude takes no live triage call for a minute: switched off, key rejected, credits or TC's monthly cap used up. Not its planned end on `LLM_CLAUDE_UNTIL` | warning |
+| ClaudeDailyCapReached | today's Claude spend leaves less than one largest call under the triage cap ($0.40, UTC) | warning |
+| EgressDenied | the egress proxy refused a request in the last 10 minutes | warning |
+| MonitoringBlind | Prometheus cannot read the probe exporter or egress-log for 5 minutes | warning |
+
+- **No route of its own.** Alertmanager, the mail relay and egress-log sit on `alerting` alone: internal, with Prometheus and the egress proxy, so no app container reaches Alertmanager's API, which has no login. Nothing publishes a port.
+- **Discord** goes through the proxy's port 3130, which serves 10.231.233.50 alone and allows `discord.com:443` alone. So the webhook URL must start with `https://discord.com/api/webhooks/`; `discordapp.com`, `canary.` and `ptb.` are refused, and the entrypoint says so at start.
+- **Mail:** Alertmanager sends no SMTP through a proxy, so `smtp-relay` (socat, from the proxy's image) takes its connections, from 10.231.233.50 alone, and opens each as a CONNECT to `smtp.gmail.com:587` on port 3131. STARTTLS runs from Alertmanager to Gmail, the certificate checked against `smtp.gmail.com`. A connection idle for 60 s closes.
+- **Probes:** the blackbox exporter runs in Prometheus's network namespace and answers on its loopback alone, so no other container can make it probe anything. watch runs on this PC, which only the proxy reaches: port 4240 forwards `GET /readyz` from Prometheus's address alone to `host.docker.internal:4240`, which reaches watch's 127.0.0.1 listener (checked on Docker Desktop on 2026-11-01).
+- **Refusals:** the proxy sends every access log line over UDP to egress-log, a collector of its own on `alerting`, which serves the count of `TCP_DENIED` lines to Prometheus. With the profile off, nobody listens and nothing waits.
+- **The agent's `/metrics`** serves the failed investigation messages of the last hour and, while live triage's Claude takes no call, why. It takes no credential, like the probes, and answers on internal networks only.
+- **Messages:** one per rule, its alerts listed, titled `Triage Copilot firing: <rule>` with a count when several fire. Each alert gives its severity, its summary, `Firing since <UTC time>` and its runbook link. No other link, no HTML part. Discord also says when an alert resolves; email gets firing messages only. A group waits 30 s, then at least 10 minutes between messages, and reminds every 12 hours while it fires.
+- **Secrets:** `.env.prod` holds the four `ALERT_*` values. Alertmanager's entrypoint writes the webhook URL and the password to tmpfs files only its user can read, puts the two addresses into a copy of the config, and starts Alertmanager without the four in its environment. It stops, naming the setting and never its value, when one is missing or malformed. The committed config holds placeholders only.
+- **Silence** an alert you are working on: `docker exec triagecopilot-prod-alertmanager-1 amtool silence add alertname=<name> --duration=2h --comment="<why>" --alertmanager.url=http://127.0.0.1:9093`. `amtool silence query` lists silences and `amtool silence expire <id>` ends one, with the same `--alertmanager.url`. Silences, what was sent, and Prometheus's history survive restarts in the volumes `alertmanager-data` and `prometheus-data`.
+- **Change the rules or the messages** by pull request, with their tests (`infra/prometheus-alerts.test.yml`, `services/agent/tests/test_alerting_int.py`). After the merge and a `git pull` here:
+  - Rules: `docker kill --signal=HUP triagecopilot-prod-prometheus-1` reloads them. A restart would also need the probe exporter restarted after it, since it shares Prometheus's network namespace.
+  - Messages: `docker restart triagecopilot-prod-alertmanager-1`. The entrypoint writes the config only at start.
+- **A new webhook or password:** change `.env.prod`, then `make prod-up`.
+- **Not watched:** see `docs/alerts.md`, Not watched. If Alertmanager, the relay, the proxy or Prometheus stops, nothing says so.
+
+Alerting rollout, after the egress checks pass, in PowerShell:
+
+1. Make the two channels:
+   - Discord: Server Settings → Integrations → Webhooks → New Webhook. Pick the channel, then Copy Webhook URL. It starts with `https://discord.com/api/webhooks/`.
+   - Gmail: Google Account → Security → 2-Step Verification (on) → App passwords. Create "Triage Copilot alerts" and keep the 16 letters, without spaces.
+2. In `.env.prod`, fill in `ALERT_DISCORD_WEBHOOK_URL`, `ALERT_SMTP_PASSWORD`, `ALERT_EMAIL_FROM` (the Gmail address) and `ALERT_EMAIL_TO` (where alerts go; it may be the same, and several are comma-separated). Then add `COMPOSE_PROFILES=observability`. `make prod-up` reads the profile from `.env.prod` alone; dev's `.env` no longer reaches it.
+3. Run `make prod-up`. It pulls the new images and creates `triagecopilot-prod_alerting`. It starts the collector, Jaeger, Prometheus, the probe exporter, Grafana, egress-log, the mail relay and Alertmanager. It recreates the egress proxy with its new network and ports, which pauses the model calls and watch's posts for a few seconds. If the wait ends with Alertmanager restarting, `docker compose -p triagecopilot-prod logs alertmanager --tail 5` names the missing or malformed setting.
+4. Checks:
+   1. `docker compose -p triagecopilot-prod ps`: Alertmanager, Prometheus, the egress proxy, the gateway and the agent are `(healthy)`, the rest Up. Only the egress proxy shows a port.
+   2. `docker inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' triagecopilot-prod-alertmanager-1 triagecopilot-prod-smtp-relay-1 triagecopilot-prod-egress-log-1 triagecopilot-prod-prometheus-1`: Alertmanager, the relay and egress-log on `alerting` alone, and Prometheus on `alerting`, `data` and `monitoring`. `docker inspect --format '{{.HostConfig.NetworkMode}}' triagecopilot-prod-blackbox-1` starts with `container:`.
+   3. Prometheus found Alertmanager: `docker exec triagecopilot-prod-prometheus-1 wget -qO- http://127.0.0.1:9090/api/v1/alertmanagers` lists `http://alertmanager:9093/api/v2/alerts`.
+   4. Every target answers: `docker exec triagecopilot-prod-prometheus-1 wget -qO- "http://127.0.0.1:9090/api/v1/query?query=up"` shows 1 for `agent`, `egress-log`, `otel-collector` and the three `readyz` probes. Then `query=probe_success` shows 1 for the gateway and the agent, and for watch while `make dev-watch` runs. Without watch, WatchNotReady fires after 5 minutes.
+   5. Alertmanager has no way around the proxy, so both of these fail: `docker exec triagecopilot-prod-alertmanager-1 wget -q -T 3 -O /dev/null http://192.168.65.254:4240/readyz` and the same with `https://discord.com/`.
+   6. No app container reaches Alertmanager. This fails with `gaierror`: `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.create_connection(('alertmanager', 9093), 3)"`.
+5. One test alert to both channels: `docker exec triagecopilot-prod-alertmanager-1 amtool alert add alertname=DeliveryTest severity=warning --annotation=summary="A test of alert delivery; nothing is wrong." --annotation=runbook_url=https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md --alertmanager.url=http://127.0.0.1:9093`
+   - Within a minute, Discord shows "Triage Copilot firing: DeliveryTest", and the inbox gets the same. The first mail may land in Spam: mark it Not spam.
+   - It resolves by itself after 5 minutes. Discord then says so within 10 more; email sends nothing for it.
+   - `docker logs triagecopilot-prod-egress-proxy-1 | Select-String "discord.com|smtp.gmail.com"` shows `TCP_TUNNEL/200` for `discord.com:443` from 10.231.233.50 and `smtp.gmail.com:587` from 10.231.233.51.
+   - If a channel stays silent, `docker logs triagecopilot-prod-alertmanager-1 --since 15m` names the failing integration, never the secret. Fix the value in `.env.prod`, run `make prod-up`, and send the test again.
+6. The refusal path: run egress check 5 again. Within about a minute EgressDenied reaches both channels, and Discord says it resolved within about 20 minutes.
+7. A day later: `docker stats --no-stream` keeps each new container well under its limit, and Discord and the inbox hold nothing but real alerts and the two tests.
+
+Rollback of alerting alone, about 2 minutes; the egress proxy keeps its ports, which serve nobody:
+
+1. In `.env.prod`, set `COMPOSE_PROFILES=` (empty).
+2. Run `docker compose -p triagecopilot-prod -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file .env.prod --profile observability rm --stop --force alertmanager smtp-relay egress-log blackbox prometheus grafana jaeger otel-collector`. The volumes stay; never `-v`.
+3. A leaked webhook or password: delete the webhook in Discord (Integrations → Webhooks) and revoke the app password in the Google Account, then make new ones for `.env.prod`.
 
 ## Known gaps
 

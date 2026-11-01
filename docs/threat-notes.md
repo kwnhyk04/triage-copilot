@@ -56,3 +56,17 @@ Known threats to TC's own setup that are not yet closed. Each entry gives what t
   - The sidecar shares `outbound` with the agent, so it reaches the agent's API on 4210: the probes and FastAPI's `/docs` and `/openapi.json` answer anyone, and `/internal` needs the service token. One internal network per client, each with its own proxy address, would close it.
   - The proxy is the one container with a route out, so a compromised squid could reach the internet and this PC's listeners. It runs read-only, without capabilities, as the `proxy` user, from Ubuntu's squid.
   - A compromised agent can still send data to the three model providers, which it already sends prompts to. Tunnels are TLS, so the proxy checks names, never contents.
+
+## 2026-11-01: alert delivery joins the egress proxy (observability profile)
+
+- What: a new internal network, `alerting`, holds Alertmanager (10.231.233.50), its mail relay (.51), Prometheus (.52), egress-log (.53) and the egress proxy. Branch `prod-alerting`, not committed, not yet run in production. The proxy gains:
+  - CONNECT `discord.com:443` for Alertmanager's address on port 3130, and `smtp.gmail.com:587` for the relay's on port 3131;
+  - a reverse-proxy port, 4240, that forwards `GET /readyz` from Prometheus's address alone to `host.docker.internal:4240`, watch's probe port on this PC;
+  - a UDP copy of its access log to egress-log.
+- Confirmed on 2026-11-01 (Docker 29.9.2): a container on a routed network reaches a listener this PC binds to 127.0.0.1, through `host.docker.internal` (192.168.65.254). A throwaway container on the default bridge got `HTTP/1.0 200 OK` from a server on 127.0.0.1:4240. This answers P1.12 (4) for routed networks. TC's own containers are all on internal networks except the proxy. FilingLens's production, which context.md says has that route, could reach TC's 127.0.0.1 ports.
+- Why it matters:
+  - Alertmanager's API has no login. On `alerting`, the proxy, the relay, Prometheus and egress-log can reach it; no app container can. A compromised proxy could silence or forge alerts, as in FilingLens's design.
+  - The webhook URL and the app password sit in `.env.prod` and in Alertmanager's container environment, which `docker inspect` shows. Anyone with Docker access on this PC can read them, as they can read `.env.prod`. The entrypoint writes them to tmpfs files only Alertmanager's user can read, and unsets them before Alertmanager starts.
+  - Anyone on `alerting` can send egress-log fake log lines, which can only raise false EgressDenied alerts.
+- What holds: `test_prod_compose.py` pins the network map, the fixed addresses and the hardening (read-only, no capabilities). `test_egress_int.py` shows each new port serves its client's address and destination alone, and the probe port GET /readyz alone. `test_alerting_int.py` sends alerts through the real images to fakes on a network with no route out: they reach the fakes and nothing else, and no secret or other link is in them. The blackbox exporter shares Prometheus's network namespace and listens on its loopback, so no container can make it probe anything.
+- Still open: nothing reports Alertmanager, the relay, the proxy or Prometheus stopping (docs/alerts.md, Not watched).

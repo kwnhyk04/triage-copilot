@@ -164,6 +164,13 @@ def test_readyz_is_unavailable_without_dependencies() -> None:
     assert response.json() == {"status": "unavailable"}
 
 
+def test_metrics_fail_without_postgres_so_prometheus_sees_the_scrape_fail() -> None:
+    # A 503 makes the scrape's `up` 0, which AgentNotReady reports; no stale numbers are served.
+    response = TestClient(create_app(OFFLINE)).get("/metrics")
+    assert response.status_code == 503
+    assert response.text == ""
+
+
 @pytest.mark.parametrize(
     "authorization", [None, f"Bearer wrong-{TOKEN}", f"Basic {TOKEN}", f"Bearer {TOKEN} extra"]
 )

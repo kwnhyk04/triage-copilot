@@ -1,0 +1,232 @@
+# promtool's unit tests of production's alert rules (prometheus-alerts.yml, mounted beside this
+# file as alerts.yml), run in the Prometheus image by services/agent/tests/test_monitoring_int.py.
+# Each test is independent; series are sampled each minute, as the rules' waits are written.
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+
+tests:
+  # The gateway: one failed probe sends nothing; two minutes of them fire.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="readyz",instance="http://gateway:4200/readyz",service="gateway"}'
+        values: '1 0 1 1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GatewayNotReady
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GatewayNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GatewayNotReady
+        exp_alerts:
+          - exp_labels: { severity: critical, service: gateway }
+            exp_annotations:
+              summary: 'The gateway is down or fails its readiness check: no alert reaches an investigation, and the web shows the demo.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#gatewaynotready
+
+  # The agent's readiness probe fails while its metrics still answer.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="readyz",instance="http://agent:4210/readyz",service="agent"}'
+        values: '1 0 0 0 0'
+      - series: 'up{job="agent",instance="agent:4210",service="agent"}'
+        values: '1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AgentNotReady
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: AgentNotReady
+        exp_alerts:
+          - exp_labels: { severity: critical, service: agent }
+            exp_annotations:
+              summary: 'The agent is down, fails its readiness check or serves no metrics: investigations wait in the queue.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#agentnotready
+
+  # The agent passes its probe but its metrics fail, so the Claude and investigation rules are blind.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="readyz",instance="http://agent:4210/readyz",service="agent"}'
+        values: '1 1 1 1 1'
+      - series: 'up{job="agent",instance="agent:4210",service="agent"}'
+        values: '1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AgentNotReady
+        exp_alerts:
+          - exp_labels: { severity: critical, service: agent }
+            exp_annotations:
+              summary: 'The agent is down, fails its readiness check or serves no metrics: investigations wait in the queue.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#agentnotready
+
+  # A healthy agent sends nothing.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="readyz",instance="http://agent:4210/readyz",service="agent"}'
+        values: '1 1 1 1 1'
+      - series: 'up{job="agent",instance="agent:4210",service="agent"}'
+        values: '1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AgentNotReady
+        exp_alerts: []
+
+  # watch: a slow poll can fail its readiness for a few minutes; five minutes fire.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="readyz",instance="http://egress-proxy:4240/readyz",service="watch"}'
+        values: '1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WatchNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WatchNotReady
+        exp_alerts:
+          - exp_labels: { severity: warning, service: watch }
+            exp_annotations:
+              summary: 'watch is down or fails its readiness check: no FreightAudit or FilingLens incident reaches TC.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#watchnotready
+
+  # Investigations: the first failure of the last hour fires at once; none sends nothing.
+  - interval: 1m
+    input_series:
+      - series: 'tc_investigations_failed_recent{job="agent",instance="agent:4210",service="agent",kind="dlq"}'
+        values: '0 0 2 2'
+      - series: 'tc_investigations_failed_recent{job="agent",instance="agent:4210",service="agent",kind="unreadable"}'
+        values: '0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: InvestigationsFailing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: InvestigationsFailing
+        exp_alerts:
+          - exp_labels:
+              { severity: warning, job: agent, instance: 'agent:4210', service: agent, kind: dlq }
+            exp_annotations:
+              summary: '2 investigation messages failed in the last hour (dlq).'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#investigationsfailing
+
+  # Claude switched off fires after a minute; its planned end (LLM_CLAUDE_UNTIL) never does.
+  - interval: 1m
+    input_series:
+      - series: 'tc_claude_stopped{job="agent",instance="agent:4210",service="agent",reason="switched_off"}'
+        values: '1 1 1'
+      - series: 'tc_claude_stopped{job="agent",instance="agent:4210",service="agent",reason="credits_ended"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: ClaudeOff
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ClaudeOff
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                job: agent,
+                instance: 'agent:4210',
+                service: agent,
+                reason: switched_off,
+              }
+            exp_annotations:
+              summary: 'Claude takes no live triage call (switched_off), so live triage runs on the free models.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudeoff
+      - eval_time: 1m
+        alertname: ClaudeDailyCapReached
+        exp_alerts: []
+
+  # Today's triage cap is its own rule, not ClaudeOff.
+  - interval: 1m
+    input_series:
+      - series: 'tc_claude_stopped{job="agent",instance="agent:4210",service="agent",reason="daily_cap"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ClaudeOff
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ClaudeDailyCapReached
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                job: agent,
+                instance: 'agent:4210',
+                service: agent,
+                reason: daily_cap,
+              }
+            exp_annotations:
+              summary: "Claude has reached today's triage cap (UTC), so live triage runs on the free models until midnight UTC."
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudedailycapreached
+
+  # The proxy's first refusal: egress-log's counter appears.
+  - interval: 1m
+    input_series:
+      - series: 'tc_egress_denied_total{job="egress-log",instance="egress-log:8889"}'
+        values: '_ _ _ _ _ _ _ _ _ _ _ _ 1 1'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: EgressDenied
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: EgressDenied
+        exp_alerts:
+          - exp_labels: { severity: warning, job: egress-log, instance: 'egress-log:8889' }
+            exp_annotations:
+              summary: 'The egress proxy refused a request in the last 10 minutes: a container asked for a host, port or path outside its allowlist.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#egressdenied
+
+  # A later refusal: the counter rises.
+  - interval: 1m
+    input_series:
+      - series: 'tc_egress_denied_total{job="egress-log",instance="egress-log:8889"}'
+        values: '3+0x14 4 4 4'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: EgressDenied
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: EgressDenied
+        exp_alerts:
+          - exp_labels: { severity: warning, job: egress-log, instance: 'egress-log:8889' }
+            exp_annotations:
+              summary: 'The egress proxy refused a request in the last 10 minutes: a container asked for a host, port or path outside its allowlist.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#egressdenied
+
+  # A counter that stays where it was sends nothing.
+  - interval: 1m
+    input_series:
+      - series: 'tc_egress_denied_total{job="egress-log",instance="egress-log:8889"}'
+        values: '3+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EgressDenied
+        exp_alerts: []
+
+  # Prometheus cannot read the probe exporter or egress-log, so the rules that need them are blind.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="readyz",instance="http://gateway:4200/readyz",service="gateway"}'
+        values: '1 0 0 0 0 0 0'
+      - series: 'up{job="egress-log",instance="egress-log:8889"}'
+        values: '1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MonitoringBlind
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MonitoringBlind
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                job: readyz,
+                instance: 'http://gateway:4200/readyz',
+                service: gateway,
+              }
+            exp_annotations:
+              summary: 'Prometheus cannot read readyz, so the rules that need it stay silent.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind

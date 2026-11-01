@@ -1,0 +1,83 @@
+# Production's alert rules (the observability profile; README, Alerting). Alertmanager sends one
+# message per rule, its alerts listed, to Discord and to the inbox (infra/alertmanager), with the
+# rule's own section of docs/alerts.md as its only link. Summaries say what happened and what it
+# stops; nothing in them is secret. promtool tests each rule (prometheus-alerts.test.yml).
+groups:
+  - name: triage-copilot
+    rules:
+      - alert: GatewayNotReady
+        expr: min by (service) (probe_success{service="gateway"}) == 0
+        for: 2m
+        keep_firing_for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: 'The gateway is down or fails its readiness check: no alert reaches an investigation, and the web shows the demo.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#gatewaynotready
+
+      # The probe, or the agent's own metrics, which the investigation and Claude rules read.
+      - alert: AgentNotReady
+        expr: min by (service) (probe_success{service="agent"} or up{job="agent"}) == 0
+        for: 2m
+        keep_firing_for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: 'The agent is down, fails its readiness check or serves no metrics: investigations wait in the queue.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#agentnotready
+
+      # watch is ready while its last poll, at most three intervals ago, read and posted everything.
+      - alert: WatchNotReady
+        expr: min by (service) (probe_success{service="watch"}) == 0
+        for: 5m
+        keep_firing_for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: 'watch is down or fails its readiness check: no FreightAudit or FilingLens incident reaches TC.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#watchnotready
+
+      # dlq: a message moved to the dead-letter queue after 5 tries; unreadable: one failed
+      # validation. The count covers the last hour, so the alert ends an hour after the last.
+      - alert: InvestigationsFailing
+        expr: tc_investigations_failed_recent > 0
+        labels: { severity: warning }
+        annotations:
+          summary: '{{ $value }} investigation messages failed in the last hour ({{ $labels.kind }}).'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#investigationsfailing
+
+      # Switched off, a rejected key, the credits or TC's monthly cap used up. Not the credits'
+      # planned end (LLM_CLAUDE_UNTIL), and today's cap is its own rule.
+      - alert: ClaudeOff
+        expr: tc_claude_stopped{reason!~"daily_cap|credits_ended"} == 1
+        for: 1m
+        keep_firing_for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: 'Claude takes no live triage call ({{ $labels.reason }}), so live triage runs on the free models.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudeoff
+
+      - alert: ClaudeDailyCapReached
+        expr: tc_claude_stopped{reason="daily_cap"} == 1
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Claude has reached today's triage cap (UTC), so live triage runs on the free models until midnight UTC."
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudedailycapreached
+
+      # A rise of egress-log's count, or the count appearing: it has no series before the first
+      # refusal since egress-log started.
+      - alert: EgressDenied
+        expr: >-
+          increase(tc_egress_denied_total[10m]) > 0
+          or (tc_egress_denied_total unless tc_egress_denied_total offset 10m)
+        labels: { severity: warning }
+        annotations:
+          summary: 'The egress proxy refused a request in the last 10 minutes: a container asked for a host, port or path outside its allowlist.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#egressdenied
+
+      # Without the probe exporter or egress-log, the readiness and refusal rules cannot fire.
+      - alert: MonitoringBlind
+        expr: up{job=~"readyz|egress-log"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: 'Prometheus cannot read {{ $labels.job }}, so the rules that need it stay silent.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind

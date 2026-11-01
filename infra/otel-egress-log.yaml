@@ -1,0 +1,28 @@
+# egress-log (infra/docker-compose.prod.yml): the egress proxy sends it every access log line over
+# UDP (infra/squid/squid.conf), and it counts the refusals for Prometheus as tc_egress_denied_total.
+receivers:
+  udp_log:
+    listen_address: 0.0.0.0:5514
+
+connectors:
+  count:
+    logs:
+      tc_egress_denied:
+        description: Requests the egress proxy refused (TCP_DENIED in its access log).
+        conditions:
+          - 'IsMatch(log.body, " TCP_DENIED/")'
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # The count stays between refusals, so a new one shows as a rise of the same series.
+    metric_expiration: 24h
+
+service:
+  pipelines:
+    logs:
+      receivers: [udp_log]
+      exporters: [count]
+    metrics:
+      receivers: [count]
+      exporters: [prometheus]

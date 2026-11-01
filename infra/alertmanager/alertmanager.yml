@@ -1,0 +1,40 @@
+# Production's alert delivery (README, Alerting): every alert to a Discord channel and to an inbox.
+# entrypoint.sh writes the webhook URL and the SMTP password to the files named here, and the two
+# Gmail addresses over their placeholders in a copy on /tmp, so this file holds none of them.
+global:
+  # Alertmanager sends no SMTP through a proxy, so mail goes to smtp-relay, which tunnels it through
+  # the egress proxy. STARTTLS runs from here to Gmail, its certificate checked against Gmail's name.
+  smtp_smarthost: smtp-relay:2525
+  smtp_require_tls: true
+  smtp_tls_config: { server_name: smtp.gmail.com }
+  smtp_from: ALERT_EMAIL_FROM
+  smtp_auth_username: ALERT_EMAIL_FROM
+  smtp_auth_password_file: /tmp/smtp-password
+
+templates: [/etc/alertmanager/triage-copilot.tmpl]
+
+# One message per rule, its alerts listed: 30 s to gather a new group, at least 10 minutes between
+# messages about it, and a reminder every 12 hours while it fires.
+route:
+  receiver: triage-copilot
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 10m
+  repeat_interval: 12h
+
+receivers:
+  - name: triage-copilot
+    discord_configs:
+      - webhook_url_file: /tmp/discord-webhook-url
+        http_config: { proxy_url: http://egress-proxy:3130 }
+        title: '{{ template "triage-copilot.title" . }}'
+        message: '{{ template "triage-copilot.text" . }}'
+        send_resolved: true
+    # Firing messages only: the inbox gets what needs action, and Discord also says when it ends.
+    # No HTML part, since Alertmanager's default one links to Alertmanager.
+    email_configs:
+      - to: ALERT_EMAIL_TO
+        headers: { Subject: '{{ template "triage-copilot.title" . }}' }
+        text: '{{ template "triage-copilot.text" . }}'
+        html: ''
+        send_resolved: false

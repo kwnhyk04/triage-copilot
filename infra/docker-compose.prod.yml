@@ -3,7 +3,9 @@
 # so dev, test and eval work run beside it. Run it through make (prod-up, prod-down, prod-token,
 # prod-switch, prod-digest), which loads .env and reads .env.prod for the names below.
 # Only the egress proxy has a route out or a published port: watch's 127.0.0.1:4202, which it
-# forwards to the gateway, and HTTPS from the agent and the Funnel sidecar to their own hosts.
+# forwards to the gateway, and HTTPS from the agent and the Funnel sidecar to their own hosts. The
+# observability profile adds alerting (README, Alerting): Prometheus's rules, delivered by
+# Alertmanager to Discord and Gmail through the proxy too.
 name: triagecopilot-prod
 
 # Docker Desktop lets any container on a routed network reach the internet and this PC's own
@@ -28,6 +30,12 @@ networks:
     ipam: { config: [{ subnet: 10.231.233.0/28, ip_range: 10.231.233.8/29 }] }
   # The observability profile's services; the collector also joins `data` for the apps' OTLP.
   monitoring: { internal: true }
+  # Alert delivery, at fixed addresses the proxy's rules name (squid.conf): Alertmanager .50, its
+  # mail relay .51, Prometheus .52 and egress-log .53, with the proxy. No app container joins it,
+  # so none reaches Alertmanager's API, which has no login.
+  alerting:
+    internal: true
+    ipam: { config: [{ subnet: 10.231.233.48/28, ip_range: 10.231.233.56/29 }] }
   egress: {}
 
 # Fixed here, not in the env files, so a line copied from .env never points a container at
@@ -83,15 +91,128 @@ services:
     restart: unless-stopped
     mem_limit: 512m
 
+  # Production's rules (prometheus-alerts.yml; docs/alerts.md). It reads the agent's /metrics and
+  # its exporter's probes on `data`, and egress-log, Alertmanager and the proxy's probe port for
+  # watch on `alerting`. Its data volume keeps the rules' history across restarts, so a counter
+  # that existed before a restart is not taken for a new one.
   prometheus:
     ports: !reset []
-    networks: [monitoring]
+    networks:
+      data: {}
+      monitoring: {}
+      alerting: { ipv4_address: 10.231.233.52 }
+    volumes:
+      - ./prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
     restart: unless-stopped
     mem_limit: 256m
+
+  # Probes the gateway's, the agent's and watch's /readyz for Prometheus, from inside Prometheus's
+  # network namespace and on its loopback only, so no other container can ask it to probe anything.
+  blackbox:
+    image: prom/blackbox-exporter:v0.29.0
+    profiles: [observability]
+    network_mode: service:prometheus
+    command: [--config.file=/etc/blackbox_exporter/config.yml, --web.listen-address=127.0.0.1:9115]
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    depends_on: [prometheus]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  # Sends every alert to Discord and to an inbox (infra/alertmanager). Its entrypoint stops it,
+  # naming the setting and never its value, while one of the four is missing or malformed; a
+  # required (:?) value here would stop every production command, profile on or off.
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    profiles: [observability]
+    entrypoint: [/bin/sh, /etc/alertmanager/entrypoint.sh]
+    command:
+      [
+        /bin/alertmanager,
+        --config.file=/tmp/alertmanager.yml,
+        --storage.path=/alertmanager,
+        --cluster.listen-address=,
+      ]
+    environment:
+      ALERT_DISCORD_WEBHOOK_URL: ${ALERT_DISCORD_WEBHOOK_URL:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+      # Silences and what was sent survive restarts.
+      - alertmanager-data:/alertmanager
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    networks:
+      alerting: { ipv4_address: 10.231.233.50 }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:9093/-/healthy]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 128m
+
+  # Alertmanager sends no SMTP through a proxy, so socat (from the proxy's image) takes its
+  # connections, from Alertmanager's address alone, and opens each as a CONNECT to Gmail's
+  # submission port on the proxy's port for the relay. STARTTLS runs from Alertmanager to Gmail.
+  # A connection idle for 60 s closes, so a stuck mail cannot hold back the next.
+  smtp-relay:
+    image: ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-squid:${TC_TAG:?set TC_TAG in .env.prod}
+    profiles: [observability]
+    entrypoint:
+      [
+        socat,
+        -d,
+        -T,
+        '60',
+        'TCP4-LISTEN:2525,fork,reuseaddr,range=10.231.233.50/32',
+        'PROXY:egress-proxy:smtp.gmail.com:587,proxyport=3131',
+      ]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    networks:
+      alerting: { ipv4_address: 10.231.233.51 }
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 32m
+
+  # Counts the proxy's refusals for Prometheus: the proxy sends it every access log line over UDP
+  # (squid.conf), and it serves the count as tc_egress_denied_total. A collector of its own, on
+  # `alerting` alone, so no app's telemetry reaches it.
+  egress-log:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    profiles: [observability]
+    volumes:
+      - ./otel-egress-log.yaml:/etc/otelcol-contrib/config.yaml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    networks:
+      alerting: { ipv4_address: 10.231.233.53 }
+    restart: unless-stopped
+    mem_limit: 128m
 
   grafana:
     ports: !reset []
     networks: [monitoring]
+    # Production's own password, never dev's from .env.
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${PROD_GRAFANA_ADMIN_PASSWORD:?set PROD_GRAFANA_ADMIN_PASSWORD in .env.prod}
     restart: unless-stopped
     mem_limit: 256m
 
@@ -245,8 +366,9 @@ services:
     restart: unless-stopped
     mem_limit: 256m
 
-  # The only container with a route out (squid, infra/squid/squid.conf): CONNECT on 443, a port and
-  # an allowlist per client, nothing in a private range, and watch's port to the gateway alone.
+  # The only container with a route out (squid, infra/squid/squid.conf): CONNECT on 443 (587 for
+  # the mail relay), a port and an allowlist per client, nothing in a private range, watch's port
+  # to the gateway alone, and Prometheus's probe to watch's /readyz alone.
   egress-proxy:
     image: ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-squid:${TC_TAG:?set TC_TAG in .env.prod}
     read_only: true
@@ -255,7 +377,7 @@ services:
     security_opt: ['no-new-privileges:true']
     volumes:
       - ./squid/squid.conf:/etc/squid/squid.conf:ro
-    networks: [outbound, ingress, egress]
+    networks: [outbound, ingress, egress, alerting]
     ports:
       - 127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4202
     # A gateway from before the lockdown publishes 4202 itself: compose recreates it first.
@@ -268,7 +390,7 @@ services:
           CMD,
           bash,
           -c,
-          'for port in 3128 3129 4202; do echo > /dev/tcp/127.0.0.1/$$port || exit 1; done',
+          'for port in 3128 3129 3130 3131 4202 4240; do echo > /dev/tcp/127.0.0.1/$$port || exit 1; done',
         ]
       interval: 10s
       timeout: 3s
@@ -279,3 +401,5 @@ services:
 
 volumes:
   tailscale-state:
+  prometheus-data:
+  alertmanager-data:

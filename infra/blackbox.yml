@@ -1,0 +1,11 @@
+# The probe exporter's one check (infra/docker-compose.prod.yml; Prometheus's readyz job): a GET
+# that must answer 200 within 5 seconds, with no redirect followed.
+modules:
+  readyz:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      no_follow_redirects: true
+      preferred_ip_protocol: ip4

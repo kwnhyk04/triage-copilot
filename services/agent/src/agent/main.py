@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import httpx2
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import Engine, create_engine, text
 
 from agent.api import add_internal_api
@@ -16,6 +16,7 @@ from agent.consumer import Consumer, sqs_client
 from agent.job import Job
 from agent.live import live_tools
 from agent.llm import Binding, Limiter, Router, spent
+from agent.metrics import render
 from agent.model import Model, ScriptedModel
 from agent.outbox import Relay, sqs_sender
 from agent.partitions import maintain_partitions
@@ -170,6 +171,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.warning("readiness check failed", exc_info=True)
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return JSONResponse({"status": "ok"})
+
+    # Live triage's Claude, which the alert rules report on; none without its key or with AI off.
+    live = live_model if isinstance(live_model, Router) else None
+    claude = live.claude.role if live and live.claude else None
+    limiter = live.limiter if live else Limiter(None)
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        """Prometheus's view of the agent (agent.metrics); 503 while Postgres is unreachable, so
+        the scrape fails rather than serving old numbers."""
+        try:
+            with engine.connect() as connection:
+                body = render(connection, claude, limiter)
+        except Exception:
+            log.warning("metrics failed", exc_info=True)
+            return Response(status_code=503)
+        return Response(body, media_type="text/plain; version=0.0.4")
 
     return app
 

@@ -1,7 +1,8 @@
 """Production's egress proxy, live, on throwaway networks: the real squid image and squid.conf,
 with the compose file's networks and hardening, at test addresses so it runs beside production.
-Each client tunnels to its own hosts only, everything else gets 403, and watch's port reaches the
-gateway alone. Allowed tunnels open to the real hosts; nothing is sent through them.
+Each client tunnels to its own hosts only, everything else gets 403, watch's port reaches the
+gateway alone, and Prometheus's probe port reaches watch's /readyz alone. Allowed tunnels open to
+the real hosts; nothing is sent through them.
 """
 
 import re
@@ -20,12 +21,21 @@ pytestmark = pytest.mark.integration
 
 DOCKER = shutil.which("docker") or "docker"
 IMAGE = "triagecopilot-squid:test"
-# Any HTTP server on 4200 stands in for the gateway: toxiproxy's API, an image make infra-up pulls.
-FAKE_GATEWAY = "ghcr.io/shopify/toxiproxy:2.12.0"
+# Any HTTP server stands in for the gateway and for watch: toxiproxy's API, an image make infra-up
+# pulls. It answers 404 for a path it does not serve, which only the fake itself can send.
+FAKE = "ghcr.io/shopify/toxiproxy:2.12.0"
 # Production's fixed addresses, moved to a block of their own so the test runs beside production.
 PROD_BLOCK, TEST_BLOCK = "10.231.233.", "10.231.239."
 LABEL = "triagecopilot.test=egress"
-CLIENTS = ("agent", "tailscale", "other")
+# Each client and the network it reaches the proxy on; all but "other" at their fixed addresses.
+CLIENTS = {
+    "agent": "outbound",
+    "tailscale": "outbound",
+    "other": "outbound",
+    "alertmanager": "alerting",
+    "smtp-relay": "alerting",
+    "prometheus": "alerting",
+}
 # Names in the relays' pattern that resolve to non-public addresses inside the proxy: a private
 # address is refused by every address a name resolves to, even for an allowed name.
 PRIVATE = {
@@ -59,14 +69,18 @@ GATEWAY = moved(address("gateway", "ingress"))
 OPEN, REFUSED = 200, 403
 # Squid's own answer to a CONNECT on an accelerator port, before any rule and any peer.
 NO_TUNNEL = 405
+# The fake watch's answer: the probe reached it.
+WATCH = 404
 CASES = [
-    # Each client's own hosts, on 443.
+    # Each client's own hosts, on 443, and the mail relay's on 587.
     ("agent", 3128, "CONNECT api.anthropic.com:443", OPEN),
     ("agent", 3128, "CONNECT generativelanguage.googleapis.com:443", OPEN),
     ("agent", 3128, "CONNECT integrate.api.nvidia.com:443", OPEN),
     ("tailscale", 3129, "CONNECT controlplane.tailscale.com:443", OPEN),
     ("tailscale", 3129, "CONNECT derp1.tailscale.com:443", OPEN),
     ("tailscale", 3129, "CONNECT acme-v02.api.letsencrypt.org:443", OPEN),
+    ("alertmanager", 3130, "CONNECT discord.com:443", OPEN),
+    ("smtp-relay", 3131, "CONNECT smtp.gmail.com:587", OPEN),
     # Another client's host, port or address.
     ("agent", 3128, "CONNECT controlplane.tailscale.com:443", REFUSED),
     ("tailscale", 3129, "CONNECT api.anthropic.com:443", REFUSED),
@@ -74,6 +88,16 @@ CASES = [
     ("tailscale", 3128, "CONNECT api.anthropic.com:443", REFUSED),
     ("other", 3128, "CONNECT api.anthropic.com:443", REFUSED),
     ("other", 3129, "CONNECT controlplane.tailscale.com:443", REFUSED),
+    ("alertmanager", 3130, "CONNECT api.anthropic.com:443", REFUSED),
+    ("alertmanager", 3131, "CONNECT smtp.gmail.com:587", REFUSED),
+    ("smtp-relay", 3130, "CONNECT discord.com:443", REFUSED),
+    ("smtp-relay", 3131, "CONNECT discord.com:443", REFUSED),
+    ("prometheus", 3130, "CONNECT discord.com:443", REFUSED),
+    ("agent", 3128, "CONNECT discord.com:443", REFUSED),
+    ("agent", 3128, "CONNECT smtp.gmail.com:587", REFUSED),
+    ("agent", 3130, "CONNECT discord.com:443", REFUSED),
+    ("other", 3130, "CONNECT discord.com:443", REFUSED),
+    ("other", 3131, "CONNECT smtp.gmail.com:587", REFUSED),
     # No plain request, no other port, no other name: look-alikes and Tailscale's log server too.
     ("agent", 3128, "GET http://api.anthropic.com/", REFUSED),
     ("agent", 3128, "CONNECT api.anthropic.com:80", REFUSED),
@@ -82,14 +106,28 @@ CASES = [
     ("agent", 3128, "CONNECT 1.1.1.1:443", REFUSED),
     ("tailscale", 3129, "CONNECT log.tailscale.com:443", REFUSED),
     ("tailscale", 3129, "CONNECT derp1.tailscale.com.example.com:443", REFUSED),
+    ("alertmanager", 3130, "GET https://discord.com/api/webhooks/1/x", REFUSED),
+    ("alertmanager", 3130, "CONNECT discord.com:80", REFUSED),
+    ("alertmanager", 3130, "CONNECT discordapp.com:443", REFUSED),
+    ("alertmanager", 3130, "CONNECT canary.discord.com:443", REFUSED),
+    ("smtp-relay", 3131, "CONNECT smtp.gmail.com:443", REFUSED),
+    ("smtp-relay", 3131, "CONNECT smtp.gmail.com:465", REFUSED),
+    ("smtp-relay", 3131, "CONNECT smtp.example.com:587", REFUSED),
     # This PC, the containers beside the proxy and the private ranges, by address and by name.
     ("agent", 3128, "CONNECT host.docker.internal:443", REFUSED),
     ("agent", 3128, f"CONNECT {GATEWAY}:4200", REFUSED),
     ("agent", 3128, "CONNECT 127.0.0.1:443", REFUSED),
     ("agent", 3128, "CONNECT [::1]:443", REFUSED),
     *[("tailscale", 3129, f"CONNECT {name}:443", REFUSED) for name in PRIVATE],
-    # watch's port opens no tunnel for a client either.
+    # watch's port and the probe port open no tunnel for a client either.
     ("agent", 4202, "CONNECT api.anthropic.com:443", NO_TUNNEL),
+    ("prometheus", 4240, "CONNECT api.anthropic.com:443", NO_TUNNEL),
+    # Prometheus's probe of watch on this PC: GET /readyz alone, from Prometheus's address alone.
+    ("prometheus", 4240, "GET /readyz", WATCH),
+    ("prometheus", 4240, "GET /docs", REFUSED),
+    ("prometheus", 4240, "POST /readyz", REFUSED),
+    ("agent", 4240, "GET /readyz", REFUSED),
+    ("alertmanager", 4240, "GET /readyz", REFUSED),
 ]
 
 
@@ -110,12 +148,20 @@ def _start(name: str, *args: str) -> None:
     docker("run", "--detach", f"--label={LABEL}", f"--name={name}", *args)
 
 
+def pinned_in_squid() -> set[str]:
+    """The fixed addresses compose pins that squid.conf names: each client's, the gateway's and
+    egress-log's, where the proxy sends its log."""
+    clients = [(who, network) for who, network in CLIENTS.items() if who != "other"]
+    return {address(who, network) for who, network in clients} | {
+        address("gateway", "ingress"),
+        address("egress-log", "alerting"),
+    }
+
+
 def _conf() -> str:
     """squid.conf with its fixed addresses, each one that compose pins, moved to the test block."""
     conf = SQUID_CONF.read_text("utf-8")
-    pinned = {address("agent", "outbound"), address("tailscale", "outbound")}
-    pinned.add(address("gateway", "ingress"))
-    assert set(re.findall(r"10\.231\.233\.\d+", conf)) == pinned
+    assert set(re.findall(r"10\.231\.233\.\d+", conf)) == pinned_in_squid()
     return conf.replace(PROD_BLOCK, TEST_BLOCK)
 
 
@@ -147,7 +193,7 @@ class Proxy:
     def ask(self, client: str, port: int, request: str) -> int:
         """The proxy's status for one request line, sent from inside the client's container."""
         target = request.split()[1]
-        host = target.split("/")[2] if "://" in target else target
+        host = target.split("/")[2] if "://" in target else "x" if target[0] == "/" else target
         script = ["bash", "-c", ASK, "_", str(port), request, host]
         return int(docker("exec", self.clients[client], *script))
 
@@ -155,8 +201,8 @@ class Proxy:
 @pytest.fixture(scope="module")
 def proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxy]:
     run = f"triagecopilot-test-egress-{uuid.uuid4().hex[:8]}"
-    nets = {prod: f"{run}-{prod}" for prod in ("outbound", "ingress", "egress")}
-    names = {who: f"{run}-{who}" for who in ("proxy", "gateway", *CLIENTS)}
+    nets = {prod: f"{run}-{prod}" for prod in ("outbound", "ingress", "egress", "alerting")}
+    names = {who: f"{run}-{who}" for who in ("proxy", "gateway", "watch", *CLIENTS)}
     conf = tmp_path_factory.mktemp("squid") / "squid.conf"
     conf.write_text(_conf(), "utf-8")
     service = PROD["services"]["egress-proxy"]
@@ -173,19 +219,27 @@ def proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxy]:
         docker("build", "-q", f"--tag={IMAGE}", dockerfile, str(INFRA / "squid"), timeout=900)
         for prod, net in nets.items():
             _network(net, prod)
-        fake = [FAKE_GATEWAY, "-host=0.0.0.0", "-port=4200"]
+        fake = [FAKE, "-host=0.0.0.0", "-port=4200"]
         _start(names["gateway"], f"--network={nets['ingress']}", f"--ip={GATEWAY}", *fake)
+        # watch runs on this PC, which the proxy reaches as host.docker.internal: here, a fake on
+        # the proxy's routed network under that name.
+        _start(names["watch"], f"--network={nets['egress']}", FAKE, "-host=0.0.0.0", "-port=4240")
+        ips = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
+        watch = docker("inspect", f"--format={ips}", names["watch"])
+        hardening.append(f"--add-host=host.docker.internal={watch}")
         egress = [f"--network={nets['egress']}", "--publish=127.0.0.1::4202", mount, IMAGE]
         docker("create", f"--label={LABEL}", f"--name={names['proxy']}", *hardening, *egress)
-        docker("network", "connect", "--alias=egress-proxy", nets["outbound"], names["proxy"])
+        for prod in ("outbound", "alerting"):
+            docker("network", "connect", "--alias=egress-proxy", nets[prod], names["proxy"])
         docker("network", "connect", nets["ingress"], names["proxy"])
         docker("start", names["proxy"])
-        for who in CLIENTS:
-            fixed = [] if who == "other" else [f"--ip={moved(address(who, 'outbound'))}"]
+        for who, network in CLIENTS.items():
+            fixed = [] if who == "other" else [f"--ip={moved(address(who, network))}"]
             idle = ["--entrypoint=sleep", IMAGE, "infinity"]
-            _start(names[who], f"--network={nets['outbound']}", *fixed, *idle)
+            _start(names[who], f"--network={nets[network]}", *fixed, *idle)
         _wait(names["proxy"], "127.0.0.1", 3128)
         _wait(names["proxy"], GATEWAY, 4200)
+        _wait(names["proxy"], "host.docker.internal", 4240)
         published = docker("port", names["proxy"], "4202/tcp").splitlines()[0]
         clients = {who: names[who] for who in CLIENTS}
         yield Proxy(names["proxy"], clients, int(published.rsplit(":", 1)[1]))
