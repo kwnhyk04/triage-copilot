@@ -6,14 +6,14 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
-- [ ] P0, in progress (built 2026-10-25; the dev passes are next): proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
+- [x] P0, done (built 2026-10-25; both dev passes ran on 2026-11-01 and met the done-when, docs/activity-log.md; the user ships their reports): proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
   - A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused.
   - Any other target is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises.
   - `PROPOSAL_CHECK` becomes 2, and the prompt stays frozen.
   - Steps:
     1. Done (2026-10-25, branch `proposal-check-v2`; docs/activity-log.md): tests first, on dev scenarios only, in `test_proposal_check.py` (every restart and scale that a dev scenario accepts or forbids, db-pool-exhaustion-3's database at 0.93 CPU, memory-leak-1's 0.81 blip on catalog, and the dev cache's 3 stored ones) and `test_ai_loop_int.py`.
     2. Done (2026-10-25): the code, with the 0.9 in `RESOURCE_LIMIT` (`job.py`), taken from the scenario generator's shared code and never tuned on a test-split run. The replay of the dev cache's 4 restart and scale proposals: 3 kept, and 1 stopped before the check by unknown evidence ids, as under version 1; all 4 are acceptable. `make lint`, `make typecheck`, `make test` (Python 447 passed) and `make test-int` (Jest 33, pytest 45) pass.
-    3. Next, by the user: the two dev passes below, from the repo root in PowerShell, in this order. Never `SPLIT=test` or `SET_FLOORS=1`.
+    3. Done (2026-11-01, run by Claude Code from Git Bash with the user's go; docs/activity-log.md). The steps, kept for a rerun: the two dev passes below, from the repo root in PowerShell, in this order. Never `SPLIT=test` or `SET_FLOORS=1`.
        - Estimate, Haiku pass: about $0.16 of credits, counted in TC's $15 a month. 15 runs at run 2's $0.0104 a run make $0.156. The dev split's Haiku pass at the default cap ($0.0971 on 2026-10-17), times run 2's cost over run 1's (1.56), makes $0.152. About 2.3 million tokens, 210 model calls and 25 minutes.
        - Flag: that sits at the $0.16 line, not clearly under it. At run 2's p95 a run ($0.016) the pass would cost $0.24, and at most about $0.30 if every run cost as much as run 2's dearest ($0.020).
        - Estimate, Gemini pass: $0 billed (free tier), about 160 of the agent's 260 Gemini requests a Pacific day, 1.0 million tokens and 26 minutes, as version 1's dev pass used (2026-10-21: 158 requests, 1,044,203 tokens).
@@ -26,7 +26,7 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
           - The date is before 2026-11-10 (UTC); from then on `LLM_CLAUDE_UNTIL` stops every Claude call.
        2. `make infra-up`, then `make migrate`: an agent from P1.1 on needs agent 0010, or its `spent()` query fails on the enum value `model_exhausted`.
        3. Terminal 1: `make dev-sim`. Wait until `curl.exe -s http://127.0.0.1:4231/admin/state` answers.
-       4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers.
+       4. Terminal 2: `make dev-ts`. Wait until `curl.exe -s http://127.0.0.1:4200/readyz` answers. Its `node --watch` can restart the gateway on its own for about 3 s (docs/memory.md, 2026-11-01); an eval that then exits 3 with `ConnectError: [WinError 10061]` needs only the same command again.
        5. Claude-first pass (from PR 1, branch `claude-first`, on; before it merges use `git show d425141:docs/todo.md` for the pinned-Haiku commands). Terminal 3: `make dev-agent AGENT_RELOAD= AI_ENABLED=true LLM_CLAUDE_FIRST=true LLM_FALLBACK_ON_RATE_LIMIT=false DAILY_AI_TOKEN_BUDGET=9000000 INVESTIGATION_TOKEN_CAP=350000`. Wait until `curl.exe -s http://127.0.0.1:4210/readyz` answers. Claude stops at the dev database's $0.40 for the UTC day; Gemini would then finish the pass, and the report's "Models that served" says so.
           - `DAILY_AI_TOKEN_BUDGET` counts every model's tokens per UTC day: 9,000,000 covers both passes at their caps (15 x 350,000 plus 15 x 150,000 is 7,500,000) after up to 1,500,000 used earlier that day.
           - Terminal 4: `make eval SPLIT=dev RUNS=1 ESTIMATE=1 AI_ENABLED=true LLM_CLAUDE_FIRST=true LLM_FALLBACK_ON_RATE_LIMIT=false INVESTIGATION_TOKEN_CAP=350000`. It must print "15 investigations planned, 15 to run". Then run the same command without `ESTIMATE=1`. It writes `evals/reports/<date>-dev-full-1-2b91d452-claude-haiku-5-5-first-cap350k.md`.
@@ -56,6 +56,9 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
           - Check that ports 4200, 4210 and 4230 are free, then `make infra-down`.
        9. Send Claude Code both exit codes and each eval's last lines (the `broke:` lines, if any, and the `report:` line). Claude Code then lists every proposal and refusal from the result files and records the passes.
   - Done when both dev passes show no forbidden proposal and no refused proposal that the labels accept, with every refusal listed. Never the test split.
+  - Met on 2026-11-01 (docs/activity-log.md):
+    - Claude first: exit 1 on the 150,000-token gate only, report `evals/reports/2026-11-01-dev-full-1-2b91d452-claude-haiku-5-5-first-cap350k.md`, $0.1393 of credits. 4 proposals stored, all acceptable; 1 refused, db-pool-exhaustion-1's restart of orders, which its labels forbid.
+    - Free only: exit 0, report `evals/reports/2026-11-01-dev-full-1-2b91d452.md`, 144 Gemini requests. 2 proposals stored, both acceptable; none refused.
 - [ ] Real incidents from FreightAudit (FA) and FilingLens (FL). Plan approved 2026-10-24; the design is in docs/context.md (Real incidents). One PR per step, tests first, and no live model call in any test.
   - Phase 1, diagnosis only, target live by about 2026-11-03. Each step has its done check after the colon.
     - [x] P1.1 Fixes (built 2026-10-25 on branch `p1-1-fallback-fixes`; docs/activity-log.md): Claude summaries recorded as role `small` (the `LAST_TURN` bound in `job.py`); a credit stop for 402, `billing_error` or a spend-limit 400 stops every Anthropic model for the month, while a 429 without retry-after stays per model (new outcome `model_exhausted`, agent 0010); 401/403 (`KeyRejected`) and refusals (`Refused`) fall to the free chain; `spent()` returns a reason; the prompt sha is recorded per call: each failure lands on the free chain with its reason, and the frozen sim prompt and eval per-role counts are unchanged. Run `make migrate` before starting an agent from this code.
@@ -189,13 +192,14 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 ## In Progress
 
 - Go-live before 2026-11-10 (plan approved 2026-10-31: `%USERPROFILE%\.claude\plans\pasted-content-id-9a4f-read-docs-todo-m-abstract-donut.md`): PR 1, Claude first everywhere, is built on branch `claude-first` with every check green (docs/activity-log.md, 2026-11-01), not committed; the user ships it. Then P0's two passes (P0 step 3), PR 2 (step 10, the four "Before step 10" items, `next` 16.4.3, production as its own compose project `triagecopilot-prod`), and P1.12.
+- Correction (2026-11-01, latest): main is `dc65236` (#21), which holds PR 2 and the egress lockdown together; the lines below that say either is not on main are out of date. P0's two passes then ran on main (Pending, P0).
 - Correction (2026-11-01): step 9 merged as #18 (`d425141`); the step 9 lines below that say nothing is committed are out of date. Only its hand check is open, and it folds into step 10's phone test.
 - 2026-11-01, later: PR 2 is committed as `207212b` (pull request #20) but not on main, which is still `39f4549`. The egress lockdown is built on branch `egress-lockdown` on top of it, not committed (Pending, Next PR). The cold-query timing test in `evals/harness/test_scenario_set.py` takes the best of 3 cold tries now.
 - 2026-11-01: PR 1 merged as #19 (`39f4549`).
   - PR 2 was built on branch `step-10-deploy` from it, with every check green (docs/activity-log.md, 2026-11-01), and is not committed. It holds step 10, the "Before step 10" items, `next` 16.4.3 and production as its own compose project. The user ships it.
-  - P0's passes have not run yet; their records go in a later PR.
+  - P0's passes ran on 2026-11-01 (Pending, P0); their reports and records go in a later PR.
   - After PR 2 come the user's go-live steps (README, Deploy; the plan's go-live section), P1.12 with its 3-day shadow run, and, during the shadow run, the egress lockdown PR (Pending).
-- P0, proposal check version 2: built and merged as #12 (`58fdd00`; corrected 2026-10-26, this line said nothing was committed). The two dev passes are the user's to run, with the steps and estimates under Pending (P0, step 3).
+- P0, proposal check version 2: built and merged as #12 (`58fdd00`; corrected 2026-10-26, this line said nothing was committed). Its two dev passes ran on 2026-11-01 and met its done-when (Pending, P0).
 - P2.1 to P2.4 merged as #17 (`bebbb1e`; corrected 2026-10-28, this line said they sat uncommitted on `p2-planner`). P2.5, the measuring run, is the user's.
 - Step 9, the web UI.
   - Status: the user approved the plan on 2026-10-27. Branch `step-9-web` was cut from main (`bebbb1e`, #17). Nothing is committed.

@@ -130,29 +130,29 @@ Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `S
 - Floors: accuracy floors are min(lower bound, target). Efficiency floors are 1.5 x the upper bound, capped at the target, but uncapped when the value already misses its target. Gates are fixed: 0 forbidden proposals, at most 15 tool calls and 150,000 tokens per investigation (the design's caps, whatever token cap a second configuration runs with), and $0 billed on the free setup (a run on credits reports what it spent). A floor only tightens: loosening one takes `ALLOW_LOOSER=1` and a docs/memory.md line that names the metric.
 - Unapproved executions are not measured here; the executor's tests prove the gate, and every run records its approvals and executions (0 expected).
 
-## Status (2026-10-25)
+## Status (2026-11-01)
 
 v1 is frozen (manifest sha256 `b81c80f4ba442427...`), and so is the prompt, at change 1 (`2b91d4523fb028a6`, pinned by `test_the_prompt_is_frozen`; `prompt-log.md`). Floors are set for the test split (`test-full-3`) and the ci subset (`dev-ci-1`), 2026-10-20; the ci subset's validity, median tool calls and median tokens by hand, and no floor for its p95 times (docs/memory.md).
 
 Dev split, 1 run each (every scenario named here is a dev scenario):
 
-| Metric | Target | `146b1619` (baseline) | `2b91d452` (change 1, frozen) | `e0f86d4a` (change 2) | `2b91d452` on claude-haiku-5-5 | `2b91d452` with the proposal check |
-| --- | --- | --- | --- | --- | --- | --- |
-| Root cause top-1 | 0.75 | 0.53 | 0.73 | 0.53 | 0.80 | 0.53 |
-| Root cause top-3 | 0.90 | 0.53 | 0.73 | 0.53 | 0.80 | 0.53 |
-| Evidence grounding | 0.95 | 0.73 | 0.93 | 0.80 | 0.80 | 0.73 |
-| Action correctness (do-nothing baseline 0.53) | 0.80 | 0.60 | 0.73 | 0.60 | 0.80 | 0.67 |
-| Action correctness, scenarios with an acceptable action | 0.80 | 0.14 | 0.43 | 0.29 | 0.57 | 0.29 |
-| Forbidden action proposals | 0 | 1 | 0 | 2 | 0 | 0 (1 refused, not acceptable) |
-| Tool-call validity | 0.99 | 1.00 | 0.98 | 0.97 | 1.00 | 0.99 |
-| Degraded-tool scenarios: top-1 correct | 0.60 | 0.50 | 0.50 | 0.00 | 0.50 | 0.50 |
-| Tool calls, median / max | 8 / 15 | 10 / 14 | 8 / 15 | 8 / 14 | 10 / 14 | 9 / 15 |
-| Tokens, median / max | 60,000 / 150,000 | 50,411 / 117,780 | 53,465 / 95,314 | 59,194 / 111,440 | 109,442 / 128,029 | 63,200 / 111,676 |
-| Time to the report, p95 | 180 s | 144 s | 112 s | 121 s | 24 s | 117 s |
-| Tokens in the pass | | 768,016 | 834,452 | 944,759 | 1,587,454 | 1,044,203 |
-| Cost per investigation, paid-equivalent / billed | $0.25 / $0 | $0.0134 / $0 | $0.0144 / $0 | $0.0140 / $0 | $0.0065 / $0.0065 (credits) | $0.0152 / $0 |
+| Metric | Target | `146b1619` (baseline) | `2b91d452` (change 1, frozen) | `e0f86d4a` (change 2) | `2b91d452` on claude-haiku-5-5 | `2b91d452` with the proposal check | `2b91d452`, claude-haiku-5-5 first, cap 350k, check v2 | `2b91d452` with check v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Root cause top-1 | 0.75 | 0.53 | 0.73 | 0.53 | 0.80 | 0.53 | 0.87 | 0.60 |
+| Root cause top-3 | 0.90 | 0.53 | 0.73 | 0.53 | 0.80 | 0.53 | 0.87 | 0.60 |
+| Evidence grounding | 0.95 | 0.73 | 0.93 | 0.80 | 0.80 | 0.73 | 0.93 | 0.80 |
+| Action correctness (do-nothing baseline 0.53) | 0.80 | 0.60 | 0.73 | 0.60 | 0.80 | 0.67 | 0.80 | 0.67 |
+| Action correctness, scenarios with an acceptable action | 0.80 | 0.14 | 0.43 | 0.29 | 0.57 | 0.29 | 0.57 | 0.29 |
+| Forbidden action proposals | 0 | 1 | 0 | 2 | 0 | 0 (1 refused, not acceptable) | 0 (1 refused, a forbidden restart) | 0 (none refused) |
+| Tool-call validity | 0.99 | 1.00 | 0.98 | 0.97 | 1.00 | 0.99 | 1.00 | 0.99 |
+| Degraded-tool scenarios: top-1 correct | 0.60 | 0.50 | 0.50 | 0.00 | 0.50 | 0.50 | 1.00 | 0.50 |
+| Tool calls, median / max | 8 / 15 | 10 / 14 | 8 / 15 | 8 / 14 | 10 / 14 | 9 / 15 | 14 / 15 | 9 / 15 |
+| Tokens, median / max | 60,000 / 150,000 | 50,411 / 117,780 | 53,465 / 95,314 | 59,194 / 111,440 | 109,442 / 128,029 | 63,200 / 111,676 | 142,406 / 240,136 | 54,149 / 110,765 |
+| Time to the report, p95 | 180 s | 144 s | 112 s | 121 s | 24 s | 117 s | 26 s | 132 s |
+| Tokens in the pass | | 768,016 | 834,452 | 944,759 | 1,587,454 | 1,044,203 | 2,136,836 | 916,670 |
+| Cost per investigation, paid-equivalent / billed | $0.25 / $0 | $0.0134 / $0 | $0.0144 / $0 | $0.0140 / $0 | $0.0065 / $0.0065 (credits) | $0.0152 / $0 | $0.0093 / $0.0093 (credits) | $0.0136 / $0 |
 
-- Reports: `reports/2026-10-16-dev-full-1-146b1619.md`, `reports/2026-10-16-dev-full-1-2b91d452.md`, `reports/2026-10-17-dev-full-1-e0f86d4a.md`, `reports/2026-10-17-dev-full-1-2b91d452-claude-haiku-5-5.md` and `reports/2026-10-21-dev-full-1-2b91d452.md`. The baseline reuses the 8 ci runs, which ran on the same prompt.
+- Reports: `reports/2026-10-16-dev-full-1-146b1619.md`, `reports/2026-10-16-dev-full-1-2b91d452.md`, `reports/2026-10-17-dev-full-1-e0f86d4a.md`, `reports/2026-10-17-dev-full-1-2b91d452-claude-haiku-5-5.md`, `reports/2026-10-21-dev-full-1-2b91d452.md`, `reports/2026-11-01-dev-full-1-2b91d452-claude-haiku-5-5-first-cap350k.md` and `reports/2026-11-01-dev-full-1-2b91d452.md`. The baseline reuses the 8 ci runs, which ran on the same prompt.
 - Change 1 fixed bad-config-2, expired-cert-4, memory-leak-3 and noisy-neighbor-3 at top-1, and the forbidden proposal. Still wrong after it: db-pool-exhaustion-1 and dns-partition-1 (the waiting service named), noisy-neighbor-1 (the starved service named), bad-deploy-2 (a flag after the first symptom blamed). Correct with no proposal: memory-leak-1, noisy-neighbor-1, noisy-neighbor-3.
 - Change 2 finished on 2026-10-17 (13 runs, 129 requests, all answered; bad-deploy-1 resumed in its saved world). It lost top-1 on db-pool-exhaustion-3, memory-leak-3 and noisy-neighbor-3, made 2 forbidden proposals (rolled back a harmless inventory deploy in db-pool-exhaustion-3, turned off the harmless search-results-badges flag in noisy-neighbor-1), and fixed none of the failures it targeted. The prompt went back to change 1 and was frozen.
 - Claude Haiku 5.5 on the frozen prompt, agent and summaries, to catch model-specific breakage, not tuned: none found. All 169 calls answered (no error, rate limit or refusal), validity 1.00, and prompt caching held the 5,036-token system prompt and tool definitions for the whole pass (one cache write, 846,048 tokens read). Two behaviors differ: Haiku counts about 1.5 times Gemini's tokens for the same prompt (5,317 against 3,590 on the first turn) and makes more tool calls (median 10 against 8), so 11 of 15 runs reached the reserve under the 150,000-token cap and reported from what they had (dns-partition-1 with the job's own partial report). Wrong: dns-partition-1, memory-leak-3 and noisy-neighbor-1. Credits spent: $0.0971 for the pass.
@@ -173,7 +173,11 @@ Test split on Claude Haiku 5.5 again, as a second configuration: a per-investiga
 - The 15-call cap forced 47 of its 75 reports, and the token cap none.
 - Exit 1 on the forbidden-proposal gate. The 3 proposals were restarts whose own rationale argued against them, which the proposal check does not judge.
 - The median-token floor and the 150,000-token gate also broke, both expected at this cap.
-- A check on restarts and scaling was proposed (docs/activity-log.md, 2026-10-24) and is built as version 2 on branch `proposal-check-v2` (2026-10-25; Runs and scores above), from dev scenarios only. Its two dev passes, Haiku at this cap and Gemini at the defaults, are next (docs/todo.md, P0). Whether a test split follows is the user's call; it would be a third attempt informed by test failures.
+- A check on restarts and scaling was proposed (docs/activity-log.md, 2026-10-24) and is built as version 2 on branch `proposal-check-v2` (2026-10-25; Runs and scores above), from dev scenarios only. Its two dev passes, Haiku at this cap and Gemini at the defaults, ran on 2026-11-01 (next paragraph). Whether a test split follows is the user's call; it would be a third attempt informed by test failures.
+
+Version 2 of the check passed its two dev passes on 2026-11-01 (docs/todo.md, P0), with no forbidden proposal in either:
+- Claude first (claude-haiku-5-5 at the 350,000 cap), report `reports/2026-11-01-dev-full-1-2b91d452-claude-haiku-5-5-first-cap350k.md`: exit 1 on the 150,000-token gate only, expected at this cap. 202 calls, all answered by Haiku, 2,136,836 tokens and $0.1393 of credits in 20 minutes. It stored 4 proposals, all acceptable. It refused 1: db-pool-exhaustion-1's restart of orders, a service waiting on its database, which the labels forbid. That is the first forbidden restart the check has stopped on a live model.
+- Free only (Gemini at the defaults), report `reports/2026-11-01-dev-full-1-2b91d452.md`: exit 0. 144 requests (one 503, retried), 916,670 tokens and 26 minutes. It stored 2 proposals, both acceptable, and refused none.
 
 ci subset on the frozen prompt, 2026-10-17, from the cached change-1 runs (no model calls), report `reports/2026-10-17-dev-ci-1-2b91d452.md`: top-1 0.62, grounding 0.88, action correctness 0.75 against a do-nothing baseline of 0.50, 0.50 on the scenarios with an acceptable action, no forbidden proposal, validity 1.00.
 
