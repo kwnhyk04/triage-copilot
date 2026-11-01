@@ -1,7 +1,9 @@
 """Production is its own compose project, and only its egress proxy has a route out or a published
 port: 127.0.0.1:4202 for watch, which it forwards to the gateway. The data services, the gateway's
 internal listener and the sim's admin port are never published, each service gets only its
-secrets, and each proxy client reaches the proxy on its own port from its fixed address.
+secrets, and each proxy client reaches the proxy on its own port from its fixed address. Alert
+delivery (the observability profile) sits on `alerting` with the proxy alone, and Prometheus's
+probes, its rules' inputs and the proxy's refusals reach it by the addresses the configs name.
 """
 
 import ipaddress
@@ -15,6 +17,16 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 INFRA = ROOT / "infra"
 SQUID_CONF = INFRA / "squid" / "squid.conf"
+ALERTMANAGER = INFRA / "alertmanager"
+# Alertmanager's settings, in .env.prod; compose hands them to it alone.
+ALERT_SETTINGS = {
+    "ALERT_DISCORD_WEBHOOK_URL",
+    "ALERT_SMTP_PASSWORD",
+    "ALERT_EMAIL_FROM",
+    "ALERT_EMAIL_TO",
+}
+# Alert delivery's containers, all in the observability profile.
+ALERTING = ("alertmanager", "smtp-relay", "blackbox", "egress-log")
 
 
 class _Reset(list[Any]):
@@ -69,6 +81,8 @@ OWN: dict[str, tuple[str | None, set[str]]] = {
     "agent-runbooks": ("../.env.prod.agent", {"PROD_AGENT_DB_PASSWORD"}),
     "agent": ("../.env.prod.agent", {"PROD_AGENT_DB_PASSWORD"}),
     "tailscale": (None, {"TS_AUTHKEY"}),
+    "grafana": (None, {"PROD_GRAFANA_ADMIN_PASSWORD"}),
+    "alertmanager": (None, ALERT_SETTINGS),
 }
 
 
@@ -86,8 +100,12 @@ def _environment(name: str) -> dict[str, Any]:
 
 def networks(name: str) -> dict[str, dict[str, Any]]:
     """The networks a service joins in production, with their settings. The base file names none,
-    so a service production leaves alone joins compose's routed `default`."""
-    joined = PROD["services"].get(name, {}).get("networks", ["default"])
+    so a service production leaves alone joins compose's routed `default`; one that shares another
+    container's network namespace joins none of its own."""
+    service = PROD["services"].get(name, {})
+    if "network_mode" in service:
+        return {}
+    joined = service.get("networks", ["default"])
     if isinstance(joined, list):
         return {network: {} for network in cast("list[str]", joined)}
     return {key: value or {} for key, value in cast("dict[str, Any]", joined).items()}
@@ -114,10 +132,15 @@ def test_only_the_egress_proxy_publishes_and_only_on_127_0_0_1() -> None:
     published = {name: _ports(name) for name in SERVICES if _ports(name)}
     assert published == {"egress-proxy": ["127.0.0.1:${PROD_GATEWAY_PORT:-4202}:4202"]}
     # So the internal listener (4201) and the sim's admin port (4231) never are, and no service
-    # joins the host's network instead.
-    for name in SERVICES:
-        merged = BASE["services"].get(name, {}) | PROD["services"].get(name, {})
-        assert (name, "network_mode" in merged) == (name, False)
+    # joins the host's network instead. The probe exporter shares Prometheus's network namespace,
+    # so no other container can ask it to probe anything.
+    modes = {
+        name: merged["network_mode"]
+        for name in SERVICES
+        if "network_mode"
+        in (merged := BASE["services"].get(name, {}) | PROD["services"].get(name, {}))
+    }
+    assert modes == {"blackbox": "service:prometheus"}
     assert {"sim", "executor"}.isdisjoint(SERVICES)
 
 
@@ -128,21 +151,28 @@ def test_only_the_egress_proxy_has_a_route_out() -> None:
     assert routed == {"egress"}
     # The internet-facing sidecar shares `edge` with the gateway alone and no network with
     # Postgres or ElasticMQ; `ingress` carries watch's port from the proxy to the gateway.
+    # `alerting` holds the alert path and the proxy alone, so no app container reaches
+    # Alertmanager's API, which has no login. Prometheus also joins `data` for the agent's metrics
+    # and the readiness probes, which its exporter sends from Prometheus's own namespace.
     assert {name: set(networks(name)) for name in SERVICES} == {
         "postgres": {"data"},
         "elasticmq": {"data"},
         "toxiproxy": {"data"},
         "otel-collector": {"data", "monitoring"},
         "jaeger": {"monitoring"},
-        "prometheus": {"monitoring"},
+        "prometheus": {"data", "monitoring", "alerting"},
+        "blackbox": set(),
         "grafana": {"monitoring"},
+        "alertmanager": {"alerting"},
+        "smtp-relay": {"alerting"},
+        "egress-log": {"alerting"},
         "gateway-migrate": {"data"},
         "gateway": {"data", "edge", "ingress"},
         "agent-migrate": {"data"},
         "agent-runbooks": {"data"},
         "agent": {"data", "outbound"},
         "tailscale": {"edge", "outbound"},
-        "egress-proxy": {"outbound", "ingress", "egress"},
+        "egress-proxy": {"outbound", "ingress", "egress", "alerting"},
     }
 
 
@@ -162,9 +192,126 @@ def test_each_proxy_client_has_its_own_port_and_fixed_address() -> None:
     assert address("tailscale", "edge") == "10.231.233.18"
 
 
+def _alertmanager_config() -> dict[str, Any]:
+    return yaml.safe_load((ALERTMANAGER / "alertmanager.yml").read_text("utf-8"))
+
+
+def test_alert_delivery_reaches_the_proxy_on_its_own_ports_from_fixed_addresses() -> None:
+    conf = SQUID_CONF.read_text("utf-8")
+    config = _alertmanager_config()
+    [receiver] = config["receivers"]
+    [discord] = receiver["discord_configs"]
+    # Alertmanager sends Discord's webhooks through its own proxy port.
+    assert discord["http_config"]["proxy_url"] == "http://egress-proxy:3130"
+    # It sends no SMTP through a proxy, so mail goes to the relay, which tunnels each connection
+    # through the relay's own proxy port to Gmail, and takes connections from Alertmanager alone.
+    relay = PROD["services"]["smtp-relay"]["entrypoint"]
+    assert "PROXY:egress-proxy:smtp.gmail.com:587,proxyport=3131" in relay
+    # TCP4: socat takes a /32 range only with the address family given.
+    listen = f"TCP4-LISTEN:2525,fork,reuseaddr,range={address('alertmanager', 'alerting')}/32"
+    assert listen in relay
+    assert config["global"]["smtp_smarthost"] == "smtp-relay:2525"
+    # STARTTLS runs from Alertmanager to Gmail, the certificate checked against Gmail's name.
+    assert config["global"]["smtp_require_tls"] is True
+    assert config["global"]["smtp_tls_config"] == {"server_name": "smtp.gmail.com"}
+    for name, port, acl in (
+        ("alertmanager", 3130, "alertmanager"),
+        ("smtp-relay", 3131, "smtp_relay"),
+    ):
+        assert re.search(rf"^http_port {port} name={acl}$", conf, re.MULTILINE)
+        ip = re.escape(address(name, "alerting"))
+        assert re.search(rf"^acl {acl}_ip src {ip}$", conf, re.MULTILINE)
+
+
+def test_alert_delivery_runs_only_with_the_observability_profile_and_hardened() -> None:
+    assert BASE["services"]["prometheus"]["profiles"] == ["observability"]
+    for name in ALERTING:
+        service = PROD["services"][name]
+        assert (name, service["profiles"]) == (name, ["observability"])
+        hardening = (service["read_only"], service["cap_drop"], service["security_opt"])
+        assert (name, hardening) == (name, (True, ["ALL"], ["no-new-privileges:true"]))
+    # The relay is socat from the proxy's own image, at the same tag.
+    assert PROD["services"]["smtp-relay"]["image"] == PROD["services"]["egress-proxy"]["image"]
+    # One collector version for the apps' telemetry and the proxy's refusals.
+    assert PROD["services"]["egress-log"]["image"] == BASE["services"]["otel-collector"]["image"]
+
+
+def _prometheus_config() -> dict[str, Any]:
+    return yaml.safe_load((INFRA / "prometheus.prod.yml").read_text("utf-8"))
+
+
+def _job(name: str) -> dict[str, Any]:
+    [job] = [job for job in _prometheus_config()["scrape_configs"] if job["job_name"] == name]
+    return job
+
+
+def test_prometheus_loads_production_s_config_and_rules_and_alerts_alertmanager() -> None:
+    mounts = PROD["services"]["prometheus"]["volumes"]
+    assert "./prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro" in mounts
+    assert "./prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro" in mounts
+    config = _prometheus_config()
+    assert config["rule_files"] == ["/etc/prometheus/alerts.yml"]
+    [manager] = config["alerting"]["alertmanagers"]
+    assert manager["static_configs"] == [{"targets": ["alertmanager:9093"]}]
+    # The agent's metrics feed the investigation and Claude rules; its `service` label lets
+    # AgentNotReady join their scrape with the agent's probe.
+    agent = [{"targets": ["agent:4210"], "labels": {"service": "agent"}}]
+    assert _job("agent")["static_configs"] == agent
+
+
+def test_each_readiness_probe_runs_from_inside_prometheus() -> None:
+    blackbox = PROD["services"]["blackbox"]
+    assert "--web.listen-address=127.0.0.1:9115" in blackbox["command"]
+    probes = _job("readyz")
+    [exporter] = [
+        rule for rule in probes["relabel_configs"] if rule.get("target_label") == "__address__"
+    ]
+    assert exporter["replacement"] == "127.0.0.1:9115"
+    targets = {
+        target: group["labels"]["service"]
+        for group in probes["static_configs"]
+        for target in group["targets"]
+    }
+    # watch runs on this PC, which only the proxy reaches: its probe port forwards /readyz there.
+    assert targets == {
+        "http://gateway:4200/readyz": "gateway",
+        "http://agent:4210/readyz": "agent",
+        "http://egress-proxy:4240/readyz": "watch",
+    }
+    conf = SQUID_CONF.read_text("utf-8")
+    probe = r"^http_port 4240 accel defaultsite=watch no-vhost name=watch_probe$"
+    assert re.search(probe, conf, re.MULTILINE)
+    assert re.search(
+        r"^cache_peer host\.docker\.internal parent 4240 0 .*\bname=watch_host\b", conf, re.M
+    )
+    ip = re.escape(address("prometheus", "alerting"))
+    assert re.search(rf"^acl prometheus_ip src {ip}$", conf, re.MULTILINE)
+
+
+def test_the_proxy_logs_every_request_to_egress_log_which_prometheus_reads() -> None:
+    conf = SQUID_CONF.read_text("utf-8")
+    collector = yaml.safe_load((INFRA / "otel-egress-log.yaml").read_text("utf-8"))
+    port = collector["receivers"]["udp_log"]["listen_address"].rsplit(":", 1)[1]
+    ip = re.escape(address("egress-log", "alerting"))
+    assert re.search(rf"^access_log udp://{ip}:{port}\b", conf, re.MULTILINE)
+    assert PROD["services"]["egress-log"]["volumes"] == [
+        "./otel-egress-log.yaml:/etc/otelcol-contrib/config.yaml:ro"
+    ]
+    exporter = collector["exporters"]["prometheus"]["endpoint"].rsplit(":", 1)[1]
+    assert _job("egress-log")["static_configs"] == [{"targets": [f"egress-log:{exporter}"]}]
+
+
+def test_the_proxy_s_healthcheck_checks_every_port_it_serves() -> None:
+    served = re.findall(r"^http_port (\d+)", SQUID_CONF.read_text("utf-8"), re.MULTILINE)
+    check = " ".join(PROD["services"]["egress-proxy"]["healthcheck"]["test"])
+    looped = re.search(r"for port in ([\d ]+);", check)
+    assert looped
+    assert sorted(looped[1].split()) == sorted(served)
+
+
 def test_fixed_addresses_sit_outside_the_range_docker_hands_out() -> None:
     pinned = {name: net for name, net in PROD["networks"].items() if "ipam" in net}
-    assert set(pinned) == {"outbound", "edge", "ingress"}
+    assert set(pinned) == {"outbound", "edge", "ingress", "alerting"}
     for network, settings in pinned.items():
         [config] = settings["ipam"]["config"]
         subnet = ipaddress.IPv4Network(config["subnet"])
@@ -233,9 +380,18 @@ def test_each_service_gets_only_its_own_secrets() -> None:
         env_file, allowed = OWN.get(name, (None, set()))
         assert (name, service.get("env_file")) == (name, env_file)
         environment = _environment(name)
-        used = set(re.findall(r"\$\{(PROD_[A-Z_]+|TS_AUTHKEY)", json.dumps(environment)))
+        pattern = r"\$\{(PROD_[A-Z_]+|TS_AUTHKEY|ALERT_[A-Z_]+)"
+        used = set(re.findall(pattern, json.dumps(environment)))
         assert (name, used - allowed) == (name, set())
         assert (name, SECRETS & set(environment)) == (name, set())
+    # Compose asks for a `:?` value even for a service whose profile is off, so a required alert
+    # setting would stop every production command until alerting is set up; the entrypoint
+    # checks them instead.
+    alerting = _environment("alertmanager")
+    assert alerting == {name: f"${{{name}:-}}" for name in ALERT_SETTINGS}
+    # Production's Grafana has a password of its own, never dev's from .env.
+    grafana = re.findall(r"\$\{(\w+)", _environment("grafana")["GF_SECURITY_ADMIN_PASSWORD"])
+    assert grafana == ["PROD_GRAFANA_ADMIN_PASSWORD"]
     postgres = _environment("postgres")
     passwords = {key: re.findall(r"\$\{(\w+)", value) for key, value in postgres.items()}
     assert passwords == {

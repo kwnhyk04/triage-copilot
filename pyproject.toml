@@ -21,6 +21,8 @@ dev = [
   "types-boto3-lite[sqs]>=1.43.113",
   "watchfiles>=1.3.0",
   "faker>=40.43.0",
+  # The alert delivery test's certificates for its fake Discord and Gmail.
+  "cryptography>=50.0.2",
 ]
 
 [tool.uv.sources]

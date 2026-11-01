@@ -15,6 +15,9 @@ unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
 unexport SIM_ADMIN_URL
 # Only watch gets the apps' webhook tokens.
 unexport WATCH_FA_TOKEN WATCH_FL_TOKEN
+# Only dev's compose (infra-up, infra-down) takes its profiles from .env. Production's come from
+# .env.prod, which an exported value, even an empty one, would override.
+unexport COMPOSE_PROFILES
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 # Production is its own compose project (own containers, network and volumes). Compose's own values
@@ -25,17 +28,19 @@ PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
 	scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
-	prod-up prod-down prod-token prod-switch prod-digest
+	prod-env prod-up prod-down prod-token prod-switch prod-digest
 
 install:
 	pnpm install
 	uv sync
 	uv run python -m pre_commit install
 
+infra-up: export COMPOSE_PROFILES := $(COMPOSE_PROFILES)
 infra-up:
 	$(COMPOSE) up -d --wait
 
 # Removes this project's containers and network; the Postgres volume stays.
+infra-down: export COMPOSE_PROFILES := $(COMPOSE_PROFILES)
 infra-down:
 	$(COMPOSE) down
 
@@ -186,6 +191,12 @@ digest:
 # live investigation. Writes apps/web/src/demo/generated/eval-runs.ts.
 demo-save:
 	pnpm --filter @triage/gateway demo:save $(IDS)
+
+# Writes production's .env.prod, .env.prod.gateway and .env.prod.agent here (README, Deploy): a fresh
+# secret for every internal one, empty values for what the user pastes, no value printed. It
+# refuses, writing nothing, when any of the three exists.
+prod-env:
+	uv run python scripts/prod_env.py
 
 # Production (README, Deploy): pulls the images, migrates, loads the runbooks, starts the gateway,
 # the egress proxy, the agent and the Funnel sidecar, and waits until they are ready. The timeout

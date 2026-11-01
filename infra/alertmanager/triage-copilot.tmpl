@@ -1,0 +1,12 @@
+{{/*
+Triage Copilot's alert messages: one title and one text for Discord and email (alertmanager.yml).
+They say which alert, how severe and since when, and link only the rule's runbook in the public
+repo (docs/alerts.md): no Alertmanager, Prometheus or silence link. Times are UTC.
+*/}}
+{{ define "triage-copilot.title" }}Triage Copilot {{ .Status }}: {{ .GroupLabels.alertname }}{{ if gt (len .Alerts.Firing) 1 }} ({{ len .Alerts.Firing }}){{ end }}{{ end }}
+
+{{ define "triage-copilot.text" }}{{ range .Alerts }}{{ .Labels.alertname }} ({{ .Labels.severity }}): {{ .Annotations.summary }}
+{{ if eq .Status "firing" }}Firing since {{ .StartsAt.UTC.Format "2006-01-02 15:04 UTC" }}{{ else }}Resolved at {{ .EndsAt.UTC.Format "2006-01-02 15:04 UTC" }}, firing since {{ .StartsAt.UTC.Format "2006-01-02 15:04 UTC" }}{{ end }}
+Runbook: {{ .Annotations.runbook_url }}
+
+{{ end }}{{ end }}

@@ -6,6 +6,16 @@ Each step maps to a Claude Code prompt in the design doc. Done when the check af
 
 ## Pending
 
+- [ ] Production alerting and an env-file helper (the user, 2026-11-01; branch `prod-alerting` from main `e1656d8`, one PR, not committed). FilingLens's `infra/alertmanager`, `infra/squid` and the alert steps of its docs/deploy.md were read read-only for the pattern.
+  1. Tests first, each run red before its code: compose and squid structure (`test_prod_compose.py`), the env helper (`test_prod_env.py`), the rules (`promtool test rules`) and their runbook links, the agent's `/metrics`, the proxy's new ports (`test_egress_int.py`), and a live check on throwaway networks that alerts reach a fake Discord and a fake SMTP server and nothing else (`test_alerting_int.py`).
+  2. The code: Prometheus rules and Alertmanager in the production compose's `observability` profile, delivered to Discord and Gmail through the egress proxy (new ports for `discord.com:443` and `smtp.gmail.com:587`, an SMTP relay on the internal `alerting` network). Rules: the gateway or the agent down or not ready, watch's `/readyz` failing, investigations failing, Claude switched off or at its daily cap, the proxy refusing. `make prod-env` writes the three env files with fresh secrets and refuses to overwrite one.
+  3. `make lint`, `make typecheck`, `make test`, `make contracts-check`, `make test-int` and `make test-e2e` (the user's go), then README (rollout steps) and the docs.
+  - Done when every check above passes; the rollout itself is the user's.
+  - Open, the user's: ship it, then README, Deploy, Alerting: the two channels, the four values and `COMPOSE_PROFILES=observability` in `.env.prod`, `make prod-up`, the checks and the test alert. `make prod-env` makes the env files for a first deploy.
+  - Follow-ups, none needed for the rollout:
+    - squid logs "pinger| FATAL: Unable to open any ICMP sockets" at each start, since it runs without capabilities; `pinger_enable off` would end it (docs/memory.md, 2026-11-01).
+    - Nothing reports Alertmanager, the relay, the proxy or Prometheus stopping (docs/alerts.md, Not watched); a dead man's switch would need a service outside this PC.
+    - After a restart of Prometheus alone, the probe exporter in its network namespace needs a restart too (README, Alerting); `make prod-up` recreates both.
 - [x] P0, done (built 2026-10-25; both dev passes ran on 2026-11-01 and met the done-when, docs/activity-log.md; the user ships their reports): proposal check version 2, on restarts and scaling, on the sim (approved 2026-10-24). It comes before P1.1 because its Haiku dev pass needs Claude credits before 2026-11-10. Haiku's second configuration made 3 forbidden restarts, which version 1 does not judge. `refusal` also judges `restart_service` and `scale_service` from the investigation's `query_metrics` results:
   - A database target (one with a `db_connections`, `db_lock_wait_seconds` or `db_slow_queries_per_second` series) is refused.
   - Any other target is stored only when its own `memory_usage_ratio`, `cpu_usage_ratio` or `node_cpu_usage_ratio` reaches 0.9, or its `container_restarts_total` rises.

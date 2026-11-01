@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot agent
-  version: 0.3.0
+  version: 0.4.0
   description: >-
     Internal API of the agent service. Only other backend services call it, with the service
     token. Errors are RFC 9457 Problem Details (application/problem+json).
@@ -38,6 +38,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: >-
+        Prometheus's view of the agent, in its text format (version 0.0.4): the investigation
+        messages that failed in the last hour (tc_investigations_failed_recent, by kind), and,
+        while live triage's Claude takes no call, why (tc_claude_stopped, by reason).
+      security: []
+      responses:
+        '200':
+          description: The metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: Postgres is unreachable, so no number is served.
   /internal/investigations/{id}/cancel:
     parameters:
       - $ref: '#/components/parameters/InvestigationId'
