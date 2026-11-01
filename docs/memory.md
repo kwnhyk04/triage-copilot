@@ -280,6 +280,12 @@ From the approved design doc:
   - `make prod-env` leaves empty values for what the user pastes. Why: compose's `:?`, the agent's settings (empty counts as unset) and the alert entrypoint all refuse them, while a placeholder text would pass compose. It also makes `PROD_GRAFANA_ADMIN_PASSWORD`: production's Grafana used dev's password from the exported `.env` before. `TC_IMAGES` comes from the GitHub remote. It refuses if any of the three files exists, since the agent's token is shared between two of them.
   - Images: `prom/alertmanager:v0.34.1` and `prom/blackbox-exporter:v0.29.0`, the newest releases over two weeks old (v0.34.2 was 3 days old). `cryptography` (already locked at 50.0.2 through google-auth) is now a dev dependency, for the live test's certificates.
 - 2026-11-01: The cold full-log query test (`test_scenario_set.py`) takes the best of 3 cold tries, each on a fresh activation, under the same 1.5 s. Why: alone the query takes 0.37 s at the median and 0.50 to 0.63 s for bad-deploy-1, the slowest, but a long pytest run stalled one try to 1.66 s, locally and in CI. A real slowdown slows every try. What we did: a scratch harness stalled the timed client 1.6 s once (the old test failed, the new one passes) and on every try (the new one fails, listing the 3 times). Why that was best: it keeps the 1.5 s guard and costs nothing when the first try passes.
+- 2026-11-02: FL's go-live on TC, prepared read-only (FL's `docs/deploy.md` and `infra/docker-compose.prod.yml` only; docs/activity-log.md). Decisions, the user's or made while preparing it, each with its reason:
+  - FL's drill runs with `claude` on only (the user): FA's drill with it off proved the fallback.
+  - The health URL is FL's `/readyz` through its Funnel, `https://filinglens.codlet-chroma.ts.net/readyz`, for `api` alone. Why: FL publishes no host port but Grafana's, only the api is public, and `/readyz` checks Postgres, RabbitMQ and Redis (200 on 2026-11-02).
+  - No `WATCH_FL_PROMETHEUS_URL`. Why: FL production's Prometheus publishes no port, the catalog's FL rules apply to a dev stack only, and an unreachable URL keeps watch unready.
+  - The drill's report is found by the POST's `group_id`, not by its title. Why: FA's drill is also "TCDrill on api".
+  - Gemini: the move planned on 2026-10-24 (the "Gemini" item above) was done on 2026-10-31: FA, FL and TC each have their own Google project (the user). The user compared the keys: FL's differs from TC's, in dev and in prod. FL's own `docs/deploy.md` step 28 still says its dev key shares TC's project quota.
 
 ## Preferences and Instructions
 
@@ -296,6 +302,9 @@ From the approved design doc:
 
 ## Known Issues and Pitfalls
 
+- 2026-11-02: watch's FL catalog dates from 2026-10-25 and has no `egress-proxy`, which FL added with its egress rollout.
+  - Why it matters: watch neither checks that container nor reads its logs. The live prompt's `get_dependencies` links neither FL's api nor its sidecar to it, so a proxy outage looks like FL's api failing its Funnel check.
+  - What we did: nothing yet; it is a follow-up (docs/todo.md, watch follow-ups). The five FL log signals also date from 2026-10-25. They were not checked against FL's code, which was not read; the last 24 h of the api's logs confirm only the format (`level`, `event`).
 - 2026-11-01: squid drops a client's `Authorization` header on its way to an `originserver` cache_peer unless the peer has `login=PASS`, `PASSTHRU` or `PROXYPASS`. The egress proxy's gateway peer had none, so the P1.12 drill's alert got 401 "Send a valid tenant webhook token." though the token's SHA-256 matched `gateway.tenants` (the user's finding).
   - Why: confirmed in squid 6.14's source, the version both the production and the test image install (`6.14-0ubuntu0.24.04.5`). `src/http.cc` copies `Authorization` to an origin peer (`toOriginPeer()`, `src/http/StateFlags.h`) only with one of those three options. Ubuntu's patches for this build touch neither file. Then live: `test_egress_int.py`'s gateway stand-in got the request without the header.
   - What we did: `login=PASSTHRU` on the gateway's `cache_peer` alone. It passes what the client sent and adds nothing, where PASS could add an external ACL's credentials, which TC does not use. Squid never passes `Proxy-Authorization` to an origin server, and `watch_host` keeps no login. `test_prod_compose.py` pins both peers' options. `test_egress_int.py`'s gateway stand-in is now an echo (bash and socat from the proxy's image) in place of toxiproxy, which stays watch's stand-in.

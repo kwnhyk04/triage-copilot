@@ -19,6 +19,51 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-02: FL's go-live on TC prepared read-only, and FL production recorded as live
+
+- What happened: the user asked for P1.12's go-live steps for FilingLens, like FA's:
+  - the token, and a `LIVE_TENANTS` line holding both tenants;
+  - every `WATCH_FL_*` setting, checked against watch's code;
+  - which containers to recreate, and the restart of `make dev-watch`;
+  - a drill with `claude` on, its body built and checked against the gateway's schema but not sent;
+  - anything in FL that blocks it.
+
+  FL production is live (`filinglens-prod`), and FA has been live on TC since 2026-11-02 (tenant freight-audit; drill passed; Claude first). They also asked to fix docs/context.md, which said FL production had never been started.
+  - Bounds: from FilingLens, only its README's Deploy section, `docs/deploy.md` and `infra/docker-compose.prod.yml`. Production, `make prod-token`, starting or stopping containers, and commits were out of bounds.
+  - The user approved the plan with one change: FL's Gemini key has had its own Google project since 2026-10-31. Each of FA, FL and TC has its own, and the user compared FL's key with TC's in dev and in prod. So it is recorded as done instead of asked.
+- Why: docs/todo.md's P1.12 (3) issues FL's token once FL production is live, which it now is.
+- What we did:
+  1. Read:
+     - TC: watch's `main.py`, `catalog.py`, `readers.py` and `poll.py`; the agent's `live.py` and `settings.py`; the gateway's `cli.ts`, `config.ts`, `intake.ts` and `app.ts`; the investigation list in the gateway contract; the Makefile; the prod compose file.
+     - FilingLens: its compose file in full, and `docs/deploy.md` (What runs where, Egress proxy, Alert delivery and Settings, plus a search of the rest). Its README has no Deploy section.
+  2. docker, read-only (`ps` and `inspect --format`): 12 FL containers up, healthy where they have a check. The sidecar's hostname is `filinglens`. Only Grafana sits on a routed network (`default`).
+  3. watch's own readers, with the candidate values and a dummy token that was never sent. Not `Watcher.poll`, which could post to TC's webhook.
+     - `Settings` validated. The catalog maps `prod` to `filinglens-prod`, FL's compose `name:`.
+     - `GET https://filinglens.codlet-chroma.ts.net/readyz` answered 200 in 1212 ms, with Postgres, RabbitMQ and Redis true. `/healthz` answered 200. These were the only two requests to FL.
+     - `docker ps` found api, postgres, rabbitmq, redis and tailscale. `ingest` and `embed` are absent, which the catalog allows.
+     - The last 24 h of logs: the api's 2,321 JSON lines all carry `level` and `event`, all `info`, with no error and no signal. The other containers log plain text, which watch ignores.
+     - git: 3 commits on FL's `origin/main` in 24 h. The newest, `58baddd`, is the commit FL production's images are tagged with.
+  4. The two-tenant `LIVE_TENANTS` line, with a placeholder uuid for FL, parsed in the gateway's own `liveTenantsSetting` and in the agent's `dict[UUID, LiveApp]`.
+  5. The drill body was built as a Windows PowerShell 5.1 here-string and piped to node. Nothing was sent.
+     - The gateway's zod `webhookSchema` accepts it.
+     - `fingerprint()` from `intake.ts` gives its `5e1e57bce0304137`, as watch's function does.
+     - It is ASCII only.
+     - PowerShell 5.1's `ConvertFrom-Json` read `group_id` from a sample reply.
+  6. Findings (the steps went to the user in chat): no blocker. The FL catalog has no `egress-proxy`, and its log signals were not checked against FL's code (docs/memory.md, Known Issues; docs/todo.md, watch follow-ups).
+  7. Docs:
+     - docs/context.md: FL production live, with its shape; the open risk's route; Gemini's quota; the go-live status.
+     - docs/todo.md: P1.12's status, and a watch follow-up.
+     - docs/memory.md, and this entry.
+  8. Small events:
+     - GateGuard's fact-forcing gate blocked the first Bash call, the plan file's creation and the first edit of each of the four docs. I stated the facts and retried each.
+     - The first ExitPlanMode was rejected with the user's change on Gemini; the plan was updated and then approved.
+     - FilingLens's README has no Deploy section, so only `docs/deploy.md` and the compose file were read.
+     - RabbitMQ's 24 h of logs filled the 20,000-line read limit, so it wrote at least that many.
+     - The shell stayed in `apps/gateway` after the node checks. Later commands used absolute paths.
+- Files: docs/context.md, docs/todo.md, docs/memory.md, docs/activity-log.md.
+- Validation: Prettier passes on the four files, and `git status --short` lists only them. No container was started or stopped, `make prod-token` was not run, and nothing was sent to TC's webhook.
+- Outstanding: the user runs FL's steps: the token, `LIVE_TENANTS`, `make prod-up`, the `.env` lines, the watch restart and the drill. The catalog follow-up is still open.
+
 ### 2026-11-01: The egress proxy dropped watch's token; login=PASSTHRU (on main, not committed)
 
 - What happened: the user reported a 401 in the P1.12 drill. `POST http://127.0.0.1:4202/v1/alerts` got "Send a valid tenant webhook token." with a token whose SHA-256 matched `gateway.tenants.webhook_token_sha256` for freight-audit. They named the likely cause: the gateway `cache_peer` in `infra/squid/squid.conf` has no `login=` option. They asked for four things:
