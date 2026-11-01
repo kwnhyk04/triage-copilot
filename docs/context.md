@@ -350,7 +350,7 @@ The plan was approved by the user on 2026-10-24. Its steps are in docs/todo.md (
 **The two apps today**, read-only on 2026-10-24:
 - **Alerting:** neither app delivers alerts anywhere. FreightAudit (FA) has 4 Prometheus rules and FilingLens (FL) has 14, all on their dev stacks, with no Alertmanager.
 - **FA production** (`freightaudit-prod`) runs now. It has OpenTelemetry off, so no metrics. Its only alert signals are JSON log lines with an `alert` field (`extract_paused`, `claude_switched_off`).
-- **FL production** (`filinglens-prod`) has never been started.
+- **FL production** (`filinglens-prod`) had not been started then. Correction (2026-11-02): it runs now (the user). Its compose file, read read-only on 2026-11-02, puts the api behind its own Funnel node (`https://filinglens.<tailnet>.ts.net`), and the api and the sidecar on internal networks behind an egress proxy like FA's. Alertmanager sends its Prometheus rules to Discord and email, so the Alerting line above no longer holds for FL. It publishes Grafana's port alone, on 127.0.0.1:3111, an exception to the Exposure line below.
 - **Exposure:** both productions publish no host ports, and their apis are public only through Tailscale Funnel sidecars. Windows is not on the tailnet.
 
 **Alert path: pull, no new port.** A new TC service, `watch`, is deterministic, makes no model calls, and listens only for its own probes on 127.0.0.1. It polls:
@@ -402,7 +402,7 @@ The agent also scrubs provider error text. Canary tests cover `watch`, gateway, 
 - TC gets $15 a month of the shared $50, evals included (FA $15, FL $15).
 - Daily caps: triage $0.40, planner $1.00, coder $0.60. A call runs only if its worst-case cost fits, and it is then charged its real cost. Built so far: the triage cap (P1.8), the $15 monthly cap over every Claude call (P1.10 branch) and the planner's cap (P2.1); the coder's comes with P4.2.
 - Triage cost measured in run 2: $0.0104 mean, $0.0202 max. Estimates: a plan about $0.20 (worst $0.48), a code draft about $0.13 (worst $0.25).
-- Free models keep `DAILY_AI_TOKEN_BUDGET` and Gemini's RPD. Gemini's roughly 260 daily requests are shared with FA until FA's key moves to its own Google project.
+- Free models keep `DAILY_AI_TOKEN_BUDGET` and Gemini's RPD. Gemini's roughly 260 daily requests are TC's alone: FA, FL and TC each have their own Google project since 2026-10-31 (the user).
 
 **Safety.**
 - The approval gate exists.
@@ -420,7 +420,7 @@ The agent also scrubs provider error text. Canary tests cover `watch`, gateway, 
 
 **Quality after 2026-11-10,** when every role is free. On the sim, triage drops from Haiku's top-1 of 0.85 to Gemini's 0.60, and p95 rises from 43 s to 77 s. Plans and drafts are unmeasured.
 
-**Open risk:** Docker Desktop containers may reach host 127.0.0.1 ports through `host.docker.internal`, and FL production has that route. This gets checked at go-live (P1.12). Since the egress lockdown (2026-11-01), TC's own production containers sit on internal networks, and the one on a routed network, the egress proxy, refuses every private destination; the go-live check confirms it from the agent (README, Deploy).
+**Open risk:** Docker Desktop containers on a routed network reach this PC's 127.0.0.1 ports through `host.docker.internal` (confirmed on 2026-11-01, docs/threat-notes.md). In FL production only Grafana, on `default`, has that route, and its ingest workers while they run; its api and Funnel sidecar sit on internal networks behind its egress proxy (FL's compose file, read 2026-11-02). From there they reach every port this PC binds to 127.0.0.1: TC's dev services while they run, production's 4202 (its webhook needs a tenant token, which FL never holds) and watch's 4240. Since the egress lockdown (2026-11-01), TC's own production containers sit on internal networks, and the one on a routed network, the egress proxy, refuses every private destination; the go-live check confirms it from the agent (README, Deploy).
 
 ## Current Development Status
 
@@ -458,6 +458,7 @@ Next, in this order:
    - Correction (2026-11-01, latest): main is `dc65236` (#21), which holds PR 2 and the egress lockdown together.
    - P0's two passes ran on 2026-11-01. Then: the user's go-live steps (README, Deploy) and P1.12 with its shadow run.
    - Production alerting and `make prod-env` are built on branch `prod-alerting` from main `e1656d8` (2026-11-01), not committed; every check passes (docs/activity-log.md). The rollout is the user's (README, Deploy, Alerting), after the egress checks.
+   - 2026-11-02: main is `fd9566f` (#24, the egress proxy's token fix), after production alerting (#23, `be4c51a`). The user reports FA live on TC since 2026-11-02 (tenant freight-audit; its drill passed; Claude first) and FL production live. FL's go-live steps were prepared on 2026-11-02 (docs/todo.md, P1.12) and are not yet run.
 1. P0: proposal check version 2 on the sim passed its two dev passes on 2026-11-01 (docs/todo.md). The user ships their reports and records.
 2. Real incidents, phase 1 (diagnosis only), target live by about 2026-11-03 (Real Incidents above; docs/todo.md). P1.1 to P1.3 merged as #13 (`883497d`). P1.4 to P1.6 (`watch`) merged as #14 (`bca8e9f`). P1.7 to P1.9 (report v2, live triage, flood guard) merged as #15 (`26d7d6e`). P1.10 and P1.11 (the report view, retention) and TC's monthly Claude cap merged as #16 (`cb132e6`). P1.12, the go-live, is the user's. Phase 2's P2.1 to P2.4 (the planner, plans, the check on real targets, plan decisions) merged as #17 (`bebbb1e`; this line said `p2-planner` until 2026-10-28). Step 9, the web UI, is built on branch `step-9-web` (2026-10-27 and 2026-10-28), not committed. P2.5, the measuring run and turning `planner` on, is the user's. Run `make migrate` (agent 0013, gateway 0008) before the agent or gateway from that branch starts.
    - P1.2: `LIVE_TENANTS` maps a tenant to its app. `agent.switches` holds `live` (default off) and `claude` (default on), flipped with `make switch NAME=<name> STATE=on|off`. The job reads `live` before every model turn of a live tenant, which parks as `budget` while it is off, and the limiter reads `claude` before every Claude request. Live tenants get their own tools, none until P1.8, so they never reach the sim. They still get the sim's prompt until then, so `live` stays off.
