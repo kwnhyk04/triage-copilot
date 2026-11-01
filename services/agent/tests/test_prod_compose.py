@@ -336,6 +336,18 @@ def test_watch_s_port_reaches_the_gateway_alone() -> None:
     assert re.search(rf"^cache_peer {gateway} parent 4200 0 .*\bname=gateway\b", conf, re.M)
 
 
+def test_watch_s_token_passes_to_the_gateway_alone() -> None:
+    # Squid drops a client's Authorization on its way to an originserver peer unless the peer has
+    # login=PASS or login=PASSTHRU (squid 6.14, src/http.cc), and the gateway then refuses every
+    # alert with 401. PASSTHRU passes only what the client sent; the probe of watch sends none.
+    conf = SQUID_CONF.read_text("utf-8")
+    logins = {
+        name: re.findall(r"\blogin=\S+", peer)
+        for peer, name in re.findall(r"^(cache_peer .*\bname=(\w+).*)$", conf, re.M)
+    }
+    assert logins == {"gateway": ["login=PASSTHRU"], "watch_host": []}
+
+
 def test_the_gateway_frees_4202_before_the_proxy_takes_it() -> None:
     # Before the lockdown the gateway published 4202 itself; compose must recreate it first, or the
     # proxy's start fails with "port is already allocated".

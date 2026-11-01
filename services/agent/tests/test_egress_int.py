@@ -1,8 +1,8 @@
 """Production's egress proxy, live, on throwaway networks: the real squid image and squid.conf,
 with the compose file's networks and hardening, at test addresses so it runs beside production.
 Each client tunnels to its own hosts only, everything else gets 403, watch's port reaches the
-gateway alone, and Prometheus's probe port reaches watch's /readyz alone. Allowed tunnels open to
-the real hosts; nothing is sent through them.
+gateway alone and passes watch's token on, and Prometheus's probe port reaches watch's /readyz
+alone. Allowed tunnels open to the real hosts; nothing is sent through them.
 """
 
 import re
@@ -21,9 +21,20 @@ pytestmark = pytest.mark.integration
 
 DOCKER = shutil.which("docker") or "docker"
 IMAGE = "triagecopilot-squid:test"
-# Any HTTP server stands in for the gateway and for watch: toxiproxy's API, an image make infra-up
-# pulls. It answers 404 for a path it does not serve, which only the fake itself can send.
+# Any HTTP server stands in for watch: toxiproxy's API, an image make infra-up pulls. It answers
+# 404 for a path it does not serve, which only the fake itself can send.
 FAKE = "ghcr.io/shopify/toxiproxy:2.12.0"
+# The gateway's stand-in, bash and socat from the proxy's own image: it answers each request with
+# the request line and headers it got, so a test sees what the proxy passed on.
+ECHO = r"""
+answer() {
+  head=""
+  while IFS= read -r line && line=${line%$'\r'} && [ -n "$line" ]; do head+="$line"$'\n'; done
+  printf 'HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "${#head}" "$head"
+}
+export -f answer
+exec socat TCP-LISTEN:4200,fork,reuseaddr EXEC:'bash -c answer'
+"""
 # Production's fixed addresses, moved to a block of their own so the test runs beside production.
 PROD_BLOCK, TEST_BLOCK = "10.231.233.", "10.231.239."
 LABEL = "triagecopilot.test=egress"
@@ -219,8 +230,8 @@ def proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxy]:
         docker("build", "-q", f"--tag={IMAGE}", dockerfile, str(INFRA / "squid"), timeout=900)
         for prod, net in nets.items():
             _network(net, prod)
-        fake = [FAKE, "-host=0.0.0.0", "-port=4200"]
-        _start(names["gateway"], f"--network={nets['ingress']}", f"--ip={GATEWAY}", *fake)
+        echo = ["--entrypoint=bash", IMAGE, "-c", ECHO]
+        _start(names["gateway"], f"--network={nets['ingress']}", f"--ip={GATEWAY}", *echo)
         # watch runs on this PC, which the proxy reaches as host.docker.internal: here, a fake on
         # the proxy's routed network under that name.
         _start(names["watch"], f"--network={nets['egress']}", FAKE, "-host=0.0.0.0", "-port=4240")
@@ -266,9 +277,10 @@ def test_the_proxy_idles_well_under_its_memory_limit(proxy: Proxy) -> None:
     assert mib < limit / 4, used
 
 
-def _through_watch_port(proxy: Proxy, request_line: str) -> tuple[int, bytes]:
+def _through_watch_port(proxy: Proxy, request_line: str, *headers: str) -> tuple[int, bytes]:
+    head = "".join(f"{line}\r\n" for line in (f"{request_line} HTTP/1.1", "Host: x", *headers))
     with socket.create_connection(("127.0.0.1", proxy.watch_port), timeout=20) as conn:
-        conn.sendall(f"{request_line} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode())
+        conn.sendall(f"{head}Connection: close\r\n\r\n".encode())
         reply = b""
         while chunk := conn.recv(65536):
             reply += chunk
@@ -277,12 +289,20 @@ def _through_watch_port(proxy: Proxy, request_line: str) -> tuple[int, bytes]:
 
 
 def test_watch_s_port_reaches_the_gateway_alone(proxy: Proxy) -> None:
-    # toxiproxy's version answers for the gateway.
+    # The gateway's stand-in answers with the request line it got.
     status, body = _through_watch_port(proxy, "GET /version")
-    assert (status, b"2.12" in body) == (200, True)
+    assert (status, body.split(b"\n", 1)[0]) == (200, b"GET /version HTTP/1.1")
     # A full URL still reaches the gateway, never the host it names.
     status, body = _through_watch_port(proxy, "GET http://example.com/version")
-    assert (status, b"2.12" in body) == (200, True)
+    assert (status, body.split(b"\n", 1)[0]) == (200, b"GET /version HTTP/1.1")
     assert _through_watch_port(proxy, "CONNECT example.com:443")[0] == NO_TUNNEL
     # Squid's cache manager would show its traffic and config to any process on this PC.
     assert _through_watch_port(proxy, "GET cache_object://localhost/info")[0] == REFUSED
+
+
+def test_watch_s_token_reaches_the_gateway(proxy: Proxy) -> None:
+    # Without login=PASSTHRU on the gateway's cache_peer, squid drops it and the gateway answers
+    # every alert with 401.
+    header = "Authorization: Bearer watch-token"
+    status, body = _through_watch_port(proxy, "POST /v1/alerts", header, "Content-Length: 0")
+    assert (status, header.encode() in body.splitlines()) == (200, True)

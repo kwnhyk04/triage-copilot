@@ -70,3 +70,9 @@ Known threats to TC's own setup that are not yet closed. Each entry gives what t
   - Anyone on `alerting` can send egress-log fake log lines, which can only raise false EgressDenied alerts.
 - What holds: `test_prod_compose.py` pins the network map, the fixed addresses and the hardening (read-only, no capabilities). `test_egress_int.py` shows each new port serves its client's address and destination alone, and the probe port GET /readyz alone. `test_alerting_int.py` sends alerts through the real images to fakes on a network with no route out: they reach the fakes and nothing else, and no secret or other link is in them. The blackbox exporter shares Prometheus's network namespace and listens on its loopback, so no container can make it probe anything.
 - Still open: nothing reports Alertmanager, the relay, the proxy or Prometheus stopping (docs/alerts.md, Not watched).
+
+## 2026-11-01: watch's token passes the egress proxy
+
+- What: the gateway's `cache_peer` gets `login=PASSTHRU`, so port 4202 passes the client's own `Authorization` header to the gateway. Without it squid dropped the header, and the gateway refused the P1.12 drill's alert with 401 (docs/memory.md, Known Issues). On main, not committed, not yet read by the running proxy.
+- Why it matters: any process on this PC that reaches 4202 can present a token to the gateway, as it could when the gateway published 4202 itself. Squid adds no credentials of its own, passes none to the probe's peer (`watch_host`), and never passes `Proxy-Authorization` to an origin server. Its access log, in squid's default format, records no request header.
+- What holds: `test_prod_compose.py` pins each peer's `login=` options, and `test_egress_int.py` shows the header reaching the gateway's stand-in.
