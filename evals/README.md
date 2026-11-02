@@ -10,6 +10,7 @@ Scenario-based evaluation of the agent. The sim serves scripted incidents; each 
 | `harness/run.py` | One run through the real path; `make smoke` runs one scenario. |
 | `harness/score.py` | Per-run scores, the metrics, 95% bootstrap intervals and the floor rules. |
 | `harness/eval.py` | `make eval`: the plan, the run cache and resume, the quota estimate, the reports and the README table. |
+| `harness/plans.py`, `harness/test_plans.py` | `make eval-plans` (P2.5): the planner on the dev split's recorded triage reports, one Claude call a plan, and its tests with a scripted planner. |
 | `harness/test_eval_score.py`, `harness/test_scenario_set.py` | Scoring, floor, plan and report tests. Scenario-set tests: the frozen manifest pins every file, the generator writes the same bytes, deploy and config timing give no answer away, and every required signal shows in the real tools' results. |
 | `thresholds.json` | The floor rules and the floors per scope (`test-full-3`, `dev-ci-1`), written by `SET_FLOORS=1` on 2026-10-20; three `dev-ci-1` floors were then set by hand and its p95 times left without one, so `SET_FLOORS=1` is never rerun on the ci subset. |
 | `pricing.json` | Paid-tier rates of the pinned models, from the official pricing page (updated 2026-10-15), for the paid-equivalent cost. The project bills $0 on the free tier. |
@@ -105,6 +106,13 @@ Its runs cache under their own key, its reports carry `-claude-haiku-5-5` in the
 In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (about 85 Gemini requests) or a chosen scope by hand, only once the repository variable `EVAL_ENABLED` is `true`. It fails on the gates and the `dev-ci-1` floors in `thresholds.json`, and only reports the two p95 times. A quota stop fails it with "rerun after the quota resets"; CI keeps no run cache, so a rerun starts over.
 
 Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `SUBSET=full`, `RUNS` 1 for the ci subset and 3 otherwise.
+
+The planner (P2.5) has its own pass, `make eval-plans`, which needs no stack: it plans each dev scenario's cached Claude-first run of P0 (2026-11-01) with the planner's Claude (`claude-opus-5-5` at effort medium), one call a plan with no model behind it, and runs the agent's check on each answer. Its catalog is the scenario's services with the kinds in `KINDS` (`harness/plans.py`), the external providers left out; the sim keeps no watch snapshot, so the check refuses every restart. `ESTIMATE=1` prints the most the pass can cost and a likely range, and calls nothing. Answered plans are kept in `reports/plans/` (git-ignored), so a stopped pass (exit 2) goes on where it stopped; the finished pass writes `reports/<date>-dev-plans-<planner sha, first 8>-<model>.json` and `.md`. Exit 1 means the check kept a restart or code fix of a database, queue, cache, storage or proxy. Nothing is scored against the labels; the report shows them beside each plan for a human to read.
+
+```sh
+make eval-plans ESTIMATE=1
+make eval-plans
+```
 
 ## Runs and scores
 

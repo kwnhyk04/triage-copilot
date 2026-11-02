@@ -199,6 +199,7 @@ CI (GitHub Actions): `ci.yml` runs lint, types, unit, integration and browser te
 | `make migrate` | Drizzle (gateway) and Alembic (agent) migrations; see `docs/migrations.md` |
 | `make seed` | The same fake history every run in both schemas; `SEED_ARGS=--reset` replaces existing rows, `SEED_ARGS=--large` tops the agent up to 2,000,000 steps |
 | `make eval` | The eval against the running stack (`make dev` with `AI_ENABLED=true LLM_FALLBACK_ON_RATE_LIMIT=false`, the agent started with `AGENT_RELOAD=` so no edit restarts it): `SPLIT=dev\|test`, `SUBSET=ci\|full`, `RUNS`; `ESTIMATE=1` prints the quota days, `SET_FLOORS=1` writes the floors (default models and token cap only); `INVESTIGATION_TOKEN_CAP`, passed to the agent too, runs a second configuration with its own report. See `evals/README.md` |
+| `make eval-plans` | The planner on the dev split's recorded triage reports, one Claude Opus 5.5 call a plan, no stack needed (`evals/README.md`); `ESTIMATE=1` prints the cost and calls nothing |
 | `make scenarios-check` | Validates every scenario set and fails when a released set's file changed against `SCENARIOS_BASE` (default `HEAD`) |
 | `make embed-model` | Downloads the runbook embedding model (nomic-embed-text-v1.5, about 0.5 GB) into `FASTEMBED_CACHE_PATH`; the only command that downloads it |
 | `make runbooks` | Embeds `runbooks/*.md` into `agent.runbook_chunks` for `search_runbooks` |
@@ -214,7 +215,7 @@ Reports: with `make dev` running, sign in at `http://127.0.0.1:3200`. Investigat
 
 Demo: `/demo` is public and reads no gateway, so it works while the PC is off; a signed-in page goes there when the gateway does not answer. It holds five recorded eval runs (`make demo-save`: bad-deploy-1 run 1 `59787641-d31c-47d7-a1de-f06c7af65275`, a right cause with a pending rollback; bad-deploy-2 run 1 `0d25cd1d-7a50-4739-a74a-abae2c2db81e`, a degraded tool; bad-config-1 run 1 `58728e0f-9005-4b4b-ab1b-ea311430acb8`, a partial report; bad-config-1 run 1 on Haiku `de2a7b93-d3d6-4f8a-8a53-4b4c4bc31a24`; noisy-neighbor-4 run 3 `dac2fc6a-7bee-469c-bf12-84e7bf516753`, the test split's forbidden rollback, held for approval) and three hand-written live samples, each labeled illustrative. Its plan buttons are disabled.
 
-Plans: with the `planner` switch on (off until the P2.5 measuring run), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report shows it first, with Approve plan and Reject plan; the decision is recorded once, as the signed-in `operator`, and nothing runs from it yet.
+Plans: with the `planner` switch on (off by default; measured on the dev split on 2026-11-02 at $0.0538 a plan, `make eval-plans`), a real incident's report gets one plan for its fix (no fixed action, a restart of an app or worker container, or a code fix), made by Claude Opus 5.5 within $1.00 a day and TC's $15 a month, else by the free models, and checked in code against the newest snapshot and the app's catalog. The report shows it first, with Approve plan and Reject plan; the decision is recorded once, as the signed-in `operator`, and nothing runs from it yet.
 
 ## Deploy
 

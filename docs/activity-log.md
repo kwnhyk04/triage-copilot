@@ -19,6 +19,48 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-02: P2.5, the planner measured on the dev split's reports (Opus 5.5), and two watch follow-ups
+
+- What happened: the user asked for P2.5: measure the planner on the dev split's reports (about 15 plans), estimating first and running only after their OK. They had approved Opus spend up to about $50 on 2026-11-02, since Claude's credits end on 2026-11-10. They also asked:
+  - to read each plan against its report, saying which to trust and which are wrong, and that no plan may target a database, queue, cache or proxy;
+  - for the steps to turn the planner on in production, and off;
+  - for two follow-ups under the watch follow-ups, from the first real live alert (FL ReadinessCheckFailed, 2026-11-01 21:56 UTC, verdict real, cause postgres timeouts at 0.5).
+  - Bounds: production untouched, nothing switched on, no commit.
+- Why: P2.5 in docs/todo.md, before the credits end.
+- What we did:
+  1. Read AGENTS.md and the docs, then the planner path: `planner.py`, `Router.plan`, `AnthropicProvider.structured`, `Settings.planner()`, `pricing.py`, the job's plan step and `make_routers`. Also read the eval harness (`eval.py`, `run.py`), the dev scenarios' labels, and watch's catalog and scrubber. The claude-api skill gave Opus 5.5's rates ($4 in, $20 out a million) and its tokenizer note.
+  2. Found no harness for the planner: it serves FA's and FL's catalogs only. The eval's run cache (git-ignored) holds each run's report and tool results. So `evals/harness/plans.py` and `make eval-plans` were built, then `test_plans.py`. The decisions are in docs/memory.md (2026-11-02).
+  3. `make eval-plans ESTIMATE=1`, which calls nothing: 15 plans to make, prompts of 8,618 to 36,794 bytes, at most $6.03, likely $0.80 to $2.47. The user chose "Run it now".
+  4. `make eval-plans` from Git Bash, 09:48:24Z to 09:51:04Z UTC: exit 0, 15 plans, $0.8067. Report: `evals/reports/2026-11-02-dev-plans-04fbbe4f-claude-opus-5-5.md`.
+  5. Read every plan against its triage report, the results it cites and the scenario's labels. Three claims were checked in the run files: bad-deploy-1's deploy times and error series, memory-leak-1's v1.8.7, and noisy-neighbor-1's one mention of nightly-reindex.
+  6. Wrote the production steps (the reply, and README, Plans) and the two follow-ups (docs/todo.md, watch follow-ups). The egress-proxy one was already listed (found 2026-11-02), so it gained the live alert's date instead of a second copy.
+  - Why this was the best option: the planner's own prompt, call, parsing and check ran on Opus as production makes them, and the cost could not pass its maximum. Nothing touched a database, the gateway, the sim or production.
+- Result:
+  - Cost: $0.8067 for 15 plans; per plan mean $0.0538, median $0.0499, max $0.0847. Input was 3,933 to 16,739 tokens, at 2.21 bytes a token against Haiku's 2.47 on the same runs. Output was 663 to 1,263 tokens, thinking included, and a call took 8.5 to 15.5 s. Nothing was cached.
+  - Kinds: none 14, code_fix 1, restart_service 0. The check refused none, so there is no refusal to list.
+  - No plan restarts or changes a database, queue, cache, storage or proxy. Five `none` plans name one as the service at fault, as the prompt asks: orders-db, inventory-db, coredns, events-broker and search-index.
+  - Per plan, with the labels in brackets:
+    - Trusted: bad-config-1 [flag-off acceptable] none, turn new-tax-engine off. bad-config-2 [nothing acceptable] none, set the timeout back in config-service. db-pool-exhaustion-1 none, end pid 48213. db-pool-exhaustion-3 none, EXPLAIN, index and statistics checks. dns-partition-1 [restart of coredns forbidden] none, fix the upstream resolver. expired-cert-1 and expired-cert-4 none, renew the certificate. noisy-neighbor-3 none, cap or move log-compactor. slow-dependency-1 and slow-dependency-2 none naming the caller, since the providers are not in the catalog, and contact the provider.
+    - Diagnosis trusted, file not: bad-deploy-2 [rollback of search acceptable] code_fix of search with `services/search/query_parser.py`, which it calls "a best guess", and an interim rollback to v5.1.4.
+    - Safe but short of the accepted action: memory-leak-1 [restart or scale of orders acceptable; the flag-off forbidden] none, bound the export cache. Its stopgaps include turning order-notes-field off "to rule it out", and its v1.8.7 hint names a log-formatting deploy 24.6 h before the alert. memory-leak-3 [restart of recommendations acceptable] none, "cause not confirmed", check the container first.
+    - Wrong: bad-deploy-1 [rollback of checkout acceptable, of catalog forbidden] none, doubting checkout because the first high error sample (3-minute steps) fell on catalog's deploy second. Its steps roll back catalog if catalog's response changed, else checkout, though the error lines the triage cites all carry `version=v1.8.0`, checkout's new release, with its NullPointerException. noisy-neighbor-1 [infrastructure in nightly-reindex; the triage said config_change in search] none naming search-index. It rightly clears the flag and asks whether nightly-reindex started, then turns the flag off "to rule it out", which the labels forbid.
+- Small events:
+  - GateGuard asked for facts before the first Bash call and before the first write of each file, 10 times; stating them cleared each.
+  - Mistake: the tests were written after `plans.py`, not run red before it, against this project's tests-first habit. Instead, a mutation probe made each test fail: `KINDS` without coredns, then orders-db kinded as an app.
+  - pyright reported `Argument of type "str" cannot be assigned to parameter "kind" of type "Kind"` twice, since a comprehension widened the literals; annotations fixed it. ruff reported three E501 lines, which were rewrapped.
+  - One Bash call ran from `evals/harness`, which moved the shell there; the next call went back to the repo root.
+  - The claude.ai n8n MCP server failed to connect (CONNECT_TIMEOUT); nothing needed it.
+- Files: new `evals/harness/plans.py`, `evals/harness/test_plans.py` and the report pair `evals/reports/2026-11-02-dev-plans-04fbbe4f-claude-opus-5-5.json` and `.md`. Changed: `Makefile` (`eval-plans`), `README.md`, `evals/README.md`, docs/todo.md, docs/context.md, docs/memory.md and this entry. Git-ignored: the 15 kept plans in `evals/reports/plans/`.
+- Validation:
+  - `make lint`: exit 0. `make typecheck`: exit 0 (pyright 0 errors). `make test`: exit 0, pytest 674 passed (4 new in `test_plans.py`), Jest gateway 79, web 84, ts-clients 52, ts-config 3.
+  - Prettier on the edited docs after the last edit: exit 0.
+  - `make test-int` was not run: no service, migration or integration path changed.
+- Outstanding:
+  - The user's `make prod-switch NAME=planner STATE=on`.
+  - The two watch follow-ups, not built (the user).
+  - From 2026-11-10 the free chain makes the plans, unmeasured.
+  - Nothing is committed.
+
 ### 2026-11-02: FL's go-live on TC prepared read-only, and FL production recorded as live
 
 - What happened: the user asked for P1.12's go-live steps for FilingLens, like FA's:
