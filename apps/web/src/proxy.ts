@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 
-import { loadWebConfig } from './lib/config.ts';
-import { SESSION_COOKIE, validSession } from './lib/session.ts';
+import { sessionValid } from './lib/auth.ts';
+import { SESSION_COOKIE } from './lib/session.ts';
 
 // Open without a session: the landing, sign-in and out, the probes, and the demo.
 const PUBLIC = /^\/(?:login|logout|healthz|readyz|demo(?:\/.*)?)?$/;
@@ -28,14 +28,11 @@ const policy = (nonce: string, dev: boolean) =>
  */
 export function proxy(request: NextRequest): NextResponse {
   const { pathname, search } = request.nextUrl;
-  if (!PUBLIC.test(pathname)) {
-    const token = request.cookies.get(SESSION_COOKIE)?.value;
-    if (!validSession(token, loadWebConfig().SESSION_SECRET)) {
-      const login = new URL('/login', request.url);
-      login.searchParams.set('next', pathname + search);
-      // 303, so a form posted without a session reaches sign-in as a GET.
-      return NextResponse.redirect(login, 303);
-    }
+  if (!PUBLIC.test(pathname) && !sessionValid(request.cookies.get(SESSION_COOKIE)?.value)) {
+    const login = new URL('/login', request.url);
+    login.searchParams.set('next', pathname + search);
+    // 303, so a form posted without a session reaches sign-in as a GET.
+    return NextResponse.redirect(login, 303);
   }
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
   const csp = policy(nonce, process.env.NODE_ENV === 'development');

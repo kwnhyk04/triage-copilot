@@ -1,7 +1,8 @@
 const WINDOW_MS = 15 * 60_000;
 const PER_ADDRESS = 5;
 const EVERYONE = 30;
-const HOME = '/investigations';
+/** Where a signed-in reader starts: the live incidents. */
+export const HOME = '/investigations';
 const BASE = 'http://site.invalid';
 
 /**

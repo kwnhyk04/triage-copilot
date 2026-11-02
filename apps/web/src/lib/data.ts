@@ -1,9 +1,9 @@
 // The data-access layer: pages and actions reach the gateway only through these functions, and
 // each checks the session first (app/data-access.test.ts keeps it so). Server code only.
 import { z } from '@triage/ts-config';
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
+import { signedIn } from './auth.ts';
 import { loadWebConfig, type WebConfig } from './config.ts';
 import { decidePlan, decisionFrom } from './decisions.ts';
 import {
@@ -15,8 +15,6 @@ import {
   sent,
   type Source,
 } from './investigations.ts';
-import { SESSION_COOKIE, validSession } from './session.ts';
-
 /** The one approver: decisions name the signed-in operator. */
 export const APPROVER = 'operator';
 const OFFLINE = '/demo?offline=1';
@@ -24,10 +22,8 @@ const ids = z.tuple([z.guid(), z.guid()]);
 
 /** The settings, once the request carries a valid session; otherwise a redirect to sign-in. */
 async function requireSession(): Promise<WebConfig> {
-  const config = loadWebConfig();
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!validSession(token, config.SESSION_SECRET)) redirect('/login');
-  return config;
+  if (!(await signedIn())) redirect('/login');
+  return loadWebConfig();
 }
 
 /** Runs a gateway call; a gateway that does not answer sends the reader to the demo. */

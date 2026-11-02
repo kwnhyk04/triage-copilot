@@ -19,6 +19,36 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-03: Bug: the header said Sign out while `/` offered sign-in; one session check
+
+- What happened: the user reported that, signed in with the header showing Sign out, the logo led to `/`, which offered sign-in. Expected: a signed-in visit to `/` or the sign-in page goes on to Live incidents, or to a safe `next`; the form shows only when signed out; an expired or invalid session shows Sign in, never Sign out.
+- Why (confirmed by the tests below):
+  1. `/` and `/login` never looked at the session. Both are public, so the proxy skipped them, and neither page checked: they always rendered the signed-out view. Meanwhile the header ran its own `validSession` call in the root layout.
+  2. The header's check ran once, in the root layout. A layout does not re-render on client-side navigation, so after a session expired, later pages kept the old Sign out until a full reload.
+  - Behind both: the proxy, `lib/data.ts` and the root layout each put the cookie, the config's secret and `validSession` together themselves, and the two pages did not.
+- What we did, in order:
+  1. Tests first. `lib/auth.test.ts`, which failed: no module. Browser tests in `auth.spec.ts`:
+     - signed in, the logo leads to Live incidents with no form;
+     - signed in, `/` and `/login` go on to Live incidents or a safe `next`, and `//evil.example/x` is refused;
+     - signed out, the form and Sign in show;
+     - an expired session shows Sign in on `/`, `/demo` and `/login`, and the form;
+     - a session that expires between pages shows Sign in on the next page without a reload.
+     Against the old pages, the first two and the last failed (3). The signed-out and expired-on-load tests passed, as guards.
+  2. `src/lib/auth.ts` with `sessionValid(token)` and `signedIn()`; the proxy and `lib/data.ts` use them.
+  3. `SiteHeader` in `components/header.tsx`, rendered by every page and `not-found.tsx`; the root layout keeps only the theme.
+     - `/` and `/login` redirect a signed-in reader, using `HOME` (now exported from `lib/guards.ts`) and `safeNext`.
+     - The demo banner moved to `components/demo-banner.tsx`, rendered by the two demo pages, and `app/demo/layout.tsx` was deleted.
+     - `(app)/error.tsx` draws a logo-only bar.
+  4. `playwright.config.ts` hands the workers the servers' session secret as `E2E_SESSION_SECRET`, so a test can sign an expired session. `a11y.spec.ts` checks `/` and `/login` after clearing the cookies, since a session now skips them.
+  - Small events, each with what we did:
+    - The first build failed type-checking the new tests: `auth.ts` did not exist yet, and a loop over test pairs needed `as const`. What we did: wrote `auth.ts` alone first, which nothing used yet, so the old pages still showed the bug for the red run.
+    - `context.addCookies` with a `url` failed: "Protocol error (Storage.setCookies): Invalid cookie fields". Why: not confirmed; a `__Host-` Secure cookie given by URL on http. What we did: set it by `domain` and `path`, as a saved session restores.
+    - One web unit run reported 2 suites (`decisions.test.ts`, `demo.test.ts`) as failing to run. Run alone, and in two full runs after, all 21 suites passed. Why: not confirmed; that run came right after `app/demo/layout.tsx` was deleted.
+    - Prettier wanted two lines rewrapped; fixed by hand. The design hook's cache files were deleted again before `make lint`.
+- Files: `apps/web/src/lib/{auth.ts,auth.test.ts,guards.ts,data.ts}`, `apps/web/src/proxy.ts`, `apps/web/src/components/{header.tsx,demo-banner.tsx}`, `apps/web/src/app/{layout.tsx,page.tsx,not-found.tsx}`, `apps/web/src/app/login/page.tsx`, `apps/web/src/app/(app)/{error.tsx,investigations/page.tsx,investigations/[id]/page.tsx}`, `apps/web/src/app/demo/{page.tsx,investigations/[id]/page.tsx}`, `apps/web/src/app/demo/layout.tsx` (deleted), `apps/web/playwright.config.ts`, `apps/web/e2e/{auth,a11y}.spec.ts`, README, docs.
+- Validation: `make lint` exit 0; `make typecheck` exit 0 (5 TypeScript tasks; pyright 0 errors); `make test` exit 0 (web 102, gateway 80, ts-clients 55, ts-config 3; pytest 693 passed, 154 deselected); `make test-e2e` exit 0 (24 passed).
+- Outstanding: nothing is committed.
+
 ### 2026-11-03: Web UI pass so TC matches FreightAudit and FilingLens (header, logo, list tables, badges, report order)
 
 - What happened: the user asked for a light UI pass of the web so it matches FA's and FL's apps, planned first. It was built after their go with four answers: Atkinson Hyperlegible stays; one amber for the logo at 3:1 or more on white and dark; the plan note worded by the plan's kind; the CSP stays, with the column widths in `globals.css`. Built in main's working tree, not committed.

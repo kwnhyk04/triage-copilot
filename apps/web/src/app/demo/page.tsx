@@ -1,3 +1,5 @@
+import { DemoBanner } from '../../components/demo-banner.tsx';
+import { SiteHeader } from '../../components/header.tsx';
 import { InvestigationList } from '../../components/investigation-list.tsx';
 import { demoPage, ILLUSTRATIVE } from '../../demo/index.ts';
 import type { Source } from '../../lib/investigations.ts';
@@ -15,23 +17,27 @@ export default async function DemoList({
   const source: Source = asked === 'sim' ? 'sim' : 'live';
   const page = demoPage(source);
   return (
-    <main id="main" className="page">
-      {offline === '1' && (
-        <p className="notice" role="status">
-          The live system is not answering. It runs on a PC that may be off, so these are the saved
-          samples.
-        </p>
-      )}
-      <h1>{TABS[source]}</h1>
-      <InvestigationList
-        items={page.items}
-        source={source}
-        nextCursor={page.next_cursor}
-        basePath="/demo/investigations"
-        listPath="/demo"
-        now={requestTime()}
-        illustrative={ILLUSTRATIVE}
-      />
-    </main>
+    <>
+      <SiteHeader />
+      <DemoBanner />
+      <main id="main" className="page">
+        {offline === '1' && (
+          <p className="notice" role="status">
+            The live system is not answering. It runs on a PC that may be off, so these are the
+            saved samples.
+          </p>
+        )}
+        <h1>{TABS[source]}</h1>
+        <InvestigationList
+          items={page.items}
+          source={source}
+          nextCursor={page.next_cursor}
+          basePath="/demo/investigations"
+          listPath="/demo"
+          now={requestTime()}
+          illustrative={ILLUSTRATIVE}
+        />
+      </main>
+    </>
   );
 }

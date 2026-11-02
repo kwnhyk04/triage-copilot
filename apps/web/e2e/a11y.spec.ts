@@ -4,9 +4,9 @@ import { expect, test } from '@playwright/test';
 import { ANSWERS_AFTER_RENAME, EVAL_RUNS, WORKER_OUT_OF_MEMORY } from '../src/demo/index.ts';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
-const PAGES = [
-  '/',
-  '/login',
+// A session skips the landing and sign-in, so those two are checked after the cookies are cleared.
+const SIGNED_OUT = ['/', '/login'];
+const SIGNED_IN = [
   '/demo',
   '/demo?source=sim',
   `/demo/investigations/${WORKER_OUT_OF_MEMORY.id}`,
@@ -25,7 +25,8 @@ for (const scheme of ['light', 'dark'] as const) {
       test.setTimeout(120_000);
       await page.setViewportSize(viewport);
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
-      for (const path of PAGES) {
+      for (const path of [...SIGNED_IN, ...SIGNED_OUT]) {
+        if (path === SIGNED_OUT[0]) await page.context().clearCookies();
         await page.goto(path);
         // AxeBuilder is built inline: the react-hooks lint flags a fixture's use().
         const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
