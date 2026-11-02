@@ -47,6 +47,22 @@ from agent.settings import Effort, Role
 REQUEST_TIMEOUT = 60.0
 # The planner's one call: streamed, so its 16,000 output tokens meet no read timeout of a turn.
 PLAN_TIMEOUT = 300.0
+# A plan's output allowance (thinking included) and timeout by effort, since more effort thinks
+# longer. 64,000 tokens is Anthropic's starting point at xhigh and max; medium keeps its own.
+PLAN_LIMITS: dict[Effort, tuple[int, float]] = {
+    "low": (16_000, PLAN_TIMEOUT),
+    "medium": (16_000, PLAN_TIMEOUT),
+    "high": (32_000, 600.0),
+    "xhigh": (64_000, 900.0),
+    "max": (64_000, 900.0),
+}
+
+
+def plan_limits(effort: Effort | None) -> tuple[int, float]:
+    """A plan's output allowance and timeout at this effort; a model without one gets medium's."""
+    return PLAN_LIMITS[effort or "medium"]
+
+
 DEFAULT_BASE_URLS = {
     "anthropic": "https://api.anthropic.com",
     "nvidia": "https://integrate.api.nvidia.com/v1",
@@ -364,7 +380,7 @@ class AnthropicProvider:
                 messages=[{"role": "user", "content": text}],
                 max_tokens=max_output_tokens,
                 output_config=config,
-                timeout=PLAN_TIMEOUT,
+                timeout=plan_limits(effort)[1],
             ) as stream:
                 response = await stream.get_final_message()
         usage = _anthropic_usage(response.usage)

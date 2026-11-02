@@ -143,12 +143,26 @@ export function utcTime(iso: string, now: number): string {
 const MINUTE_MS = 60_000;
 // A queued investigation younger than this may start; an older one is parked or stuck.
 const QUEUED_MINUTES = 15;
-// After a real verdict the plan follows within Opus's 300 s timeout; with the planner off, never.
-const PLAN_WAIT_MINUTES = 6;
+// After a real verdict the plan follows: at effort max within about 9 minutes (64,000 tokens at
+// the measured 120 a second); with the planner off, never.
+export const PLAN_WAIT_MINUTES = 10;
+
+/** A plan still being made, its dot pulsing. */
+export const PLANNING: BadgeState = { label: 'Planning', tone: 'info', busy: true };
+
+/** Whether a real verdict's plan may still come: none yet, its report under 10 minutes old. */
+export const planning = (
+  item: Pick<Summary, 'updated_at' | 'verdict' | 'plan_status'>,
+  now: number,
+  planArrived = item.plan_status !== null,
+) =>
+  item.verdict === 'real' &&
+  !planArrived &&
+  now - Date.parse(item.updated_at) < PLAN_WAIT_MINUTES * MINUTE_MS;
 
 /**
  * Whether a page showing this investigation should keep refreshing: while it runs, while it is
- * queued and young, and for a while after a real verdict whose plan has not arrived.
+ * queued and young, and while a real verdict's plan may still come.
  */
 export function stillChanging(
   item: Pick<Summary, 'status' | 'created_at' | 'updated_at' | 'verdict' | 'plan_status'>,
@@ -159,11 +173,7 @@ export function stillChanging(
   if (item.status === 'queued') {
     return now - Date.parse(item.created_at) < QUEUED_MINUTES * MINUTE_MS;
   }
-  return (
-    item.verdict === 'real' &&
-    !planArrived &&
-    now - Date.parse(item.updated_at) < PLAN_WAIT_MINUTES * MINUTE_MS
-  );
+  return planning(item, now, planArrived);
 }
 
 /** How far the investigation has got, such as "Running, 7 steps so far, last at 10:02:41 UTC". */
@@ -173,7 +183,7 @@ export function progressLine({
   plan,
 }: Pick<Schemas['Investigation'], 'status' | 'steps' | 'plan'>) {
   if (status !== 'queued' && status !== 'running') {
-    return `${STATUSES[status]}, ${plan === null ? 'waiting for the plan' : 'plan received'}`;
+    return `${STATUSES[status]}, ${plan === null ? 'still planning' : 'plan received'}`;
   }
   const last = steps.at(-1);
   if (last === undefined) return `${STATUSES[status]}, no steps yet`;

@@ -19,6 +19,95 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-03: Part A: the planner at effort max, a $3.50 planner cap, and a 10-minute Planning wait in the web, on branch planner-effort
+
+- What happened: after the measurement entry below recommended medium, the user chose max, as Part A of two PRs. They asked for:
+  - max with the 64,000-token and 900 s limits already prepared;
+  - a daily planner cap that fits at least three max plans ("about $3.00 a day");
+  - the numbers showing TC stays under the TC workspace's $15 a month, triage included;
+  - a web wait for a plan of about 10 minutes, so a 6.5-minute plan still shows, with a clear "still planning" state;
+  - every package's tests, lint, typecheck and e2e; the docs; no commit; the production steps. Part B, a plan reviewer, waits until Part A is shipped and deployed.
+- Why: the user's reasons: real incidents are rare (one or two a day at most), and Claude ends on 2026-11-10 anyway.
+- What we did, in order:
+  1. Tests first; each failed before the change (1 Python, 5 web):
+     - `test_agent_api.py`: the planner defaults to max and $3.50, and two plans at the dearest measured ($0.98) plus a third's worst case ($1.44) fit. It now unsets `LLM_PLANNER_EFFORT` and `LLM_PLANNER_DAILY_USD` first, since make exports a developer's `.env`.
+     - `report.test.ts`: `planning` and `stillChanging` hold for 9 minutes after a real verdict and stop at 10; the status line reads "Report ready, still planning".
+     - `report.test.tsx`: a recent real verdict without a plan shows a pulsing Planning badge in the header and in a Plan panel that says a plan can take up to 10 minutes; past the wait, or on a page that never refreshes, it says "No plan was made" as before.
+     - `investigation-list.test.tsx`: the Plan column shows Planning while the list refreshes, and the live line says "still running or planning".
+     - e2e, written first but run only after the change (a build each time): the fake gateway has a real incident whose plan lands on its third read. `reports.spec.ts` follows it from "still planning" to Approve plan without a reload, and `a11y.spec.ts` runs axe on its page.
+  2. `services/agent/src/agent/settings.py`: `llm_planner_effort` max, `llm_planner_daily_usd` 3.50. `.env.example` the same, with both worst cases. The limits per effort (`providers.plan_limits`, from the entry below) were already in place: max gets 64,000 output tokens and 900 s.
+  3. `apps/web/src/lib/report.ts`: `PLAN_WAIT_MINUTES` 10 (was 6), `planning()` (a real verdict, no plan yet, under 10 minutes), which `stillChanging` now uses, and the `PLANNING` badge. `report.tsx` shows it in the header and in a Plan panel (`PlanWaiting`) while the page refreshes; `investigation-list.tsx` shows it in the Plan column (`PlanCell`).
+  4. Docs: README (Reports, Plans), `evals/README.md` (the effort, `MAX_USD`, the report name with its effort, which that file had not had since the entry below), docs/context.md, docs/memory.md (a decision entry), docs/todo.md (Part A done, Part B pending).
+  - Why this was the best option: only two defaults change in the agent; production's `.env.prod.agent`, as `make prod-env` writes it, sets neither, so the new image alone moves it, and two explicit lines make it visible. The web reuses its badge and panel styles.
+- Small events and mistakes:
+  - The fact-forcing hook (GateGuard) denied the first edit of each file until its importers and the instruction were stated; each edit then went through.
+  - `make lint`: ruff E501 on a new test line (101 characters); wrapped. Later, `prettier --check` failed on `.impeccable/hook.cache.json`, which the design hook wrote again after a web edit; deleted again (docs/memory.md, 2026-11-03), then exit 0.
+  - `make typecheck`: tsc TS2353, an excess `status` in a test's object literal (that one assertion was dropped; the `not_real` case covers it), and pyright `reportOperatorIssue` on `float | None` (`or 0.0`).
+  - One check printed my "OK" after a failed `make typecheck`, because the `&&` followed `tail`, not make. Every later run echoed make's own exit code.
+  - Two logs went to `/tmp` before the rest went to this session's scratchpad; nothing secret was in them.
+  - docs/memory.md: two Known Issues entries added earlier today sat between the 2026-11-02 FL catalog entry and its two sub-bullets. They were moved below those sub-bullets, with no text changed.
+- Result, the numbers asked for:
+  - A max plan's worst case is $1.44 (40,000 prompt bytes at $4 a million, 64,000 output tokens at $20). At $3.50 a third plan still runs after two at the dearest measured ($0.98 + $0.98 + $1.44 = $3.40), and about five at the mean ($0.43). $3.00 would admit a third only after two costing $1.56 or less together.
+  - The month: Claude runs on 7 more UTC days (2026-11-03 to 2026-11-09). The daily caps allow $3.90 a day ($3.50 plans, $0.40 triage), $27.30 in all, so what holds the month is TC's $15 cap in the agent: no Claude call runs once this month's recorded spend plus its worst case would pass $15.
+  - Expected: one or two plans a day at the $0.43 mean, $3.01 to $6.02 for the 7 days ($6.86 to $13.72 at the dearest measured); triage $0.0104 a run on average (run 2), at most $0.40 a day.
+  - Not counted by the agent: November's plan passes in dev ($0.8067 on 2026-11-02 and $6.86 on 2026-11-02 and 03, $7.67 in all) are in no database. The Anthropic Console counts them on whichever workspace dev's key belongs to; that could not be checked from here.
+  - Production's own November spend is in its database and was not read (production untouched).
+- Files: `services/agent/src/agent/settings.py`, `services/agent/src/agent/planner.py` (a comment), `.env.example`, `services/agent/tests/test_agent_api.py`, `apps/web/src/lib/report.ts`, `apps/web/src/lib/report.test.ts`, `apps/web/src/components/report.tsx`, `report.test.tsx`, `investigation-list.tsx`, `investigation-list.test.tsx`, `apps/web/e2e/shared.ts`, `fake-gateway.ts`, `reports.spec.ts`, `a11y.spec.ts`, README.md, evals/README.md, docs/context.md, docs/memory.md, docs/todo.md, this file. The measurement entry's files (below) are on the same branch.
+- Validation:
+  - `make lint`: exit 0, after the hook cache was deleted.
+  - `make typecheck`: exit 0 (pyright 0 errors).
+  - `make test`: exit 0. ts-config 3, ts-clients 55, gateway 80 and web 104 passed; pytest 696 passed, 154 deselected.
+  - `make test-e2e`: exit 0, 25 passed, the new planning test and axe on the planning page in both themes and sizes included.
+- Outstanding:
+  - Production is the user's: the image tag of the merge commit in `.env.prod`, `LLM_PLANNER_EFFORT=max` and `LLM_PLANNER_DAILY_USD=3.50` in `.env.prod.agent`, then `make prod-up` (the reply has the exact steps).
+  - Part B (docs/todo.md).
+  - The list's Plan column can show Planning for up to 10 minutes after a plan without a proposal has come, since `plan_status` is null for both (docs/context.md).
+
+### 2026-11-03: The planner's effort measured: high and max against medium, on branch planner-effort
+
+- What happened: the user asked to measure the planner's effort. `make eval-plans` was re-run on the same 15 dev reports at high, and at max, the highest level the API takes for Opus 5.5 (`low | medium | high | xhigh | max` in anthropic 1.15.0's `OutputConfigParam`; Opus 5.5 defaults to medium). Everything else was unchanged. The plans were judged against medium's run of 2026-11-02, with up to $8 of credits approved.
+- Why: the user's question.
+- What we did, in order:
+  1. Branch `planner-effort` from main `07ad6ed`.
+  2. Room for the thinking: a plan's output allowance and timeout now follow its effort (`providers.plan_limits`): high 32,000 tokens and 600 s, xhigh and max 64,000 and 900 s. 64,000 is Anthropic's starting point at xhigh and max. Medium keeps 16,000 and 300 s, so its worst case, and with it the $1.00 daily cap, is unchanged. Tests: `test_providers.py` checks each level.
+  3. The harness: `MAX_USD` stops before a plan whose worst case would pass it, since max's worst case for 15 plans ($20.43) was over the budget. The report's name now ends in the effort, since the high and max reports of one day would otherwise overwrite each other. Tests: `test_plans.py`.
+  4. Estimates before each paid run:
+     - High: $0.80 to $2.47 likely, $10.83 at most; run with `MAX_USD=3.00`. Spent $0.8286.
+     - Max: $1 to $4 expected, $20.43 at most; run with `MAX_USD=6.00`. It stopped by design after 10 plans, with $4.71 spent and the next plan's worst case $1.32.
+     - The rest of max, estimated at $1.2 to $2.4: run with `MAX_USD=2.40`. It made 4 more for $1.32, then stopped before slow-dependency-2. Total $6.86 of $8.
+  5. Read each changed plan, and scanned every plan's steps for the scenario's forbidden actions.
+- Result:
+  - Cost, output (thinking included) and latency per plan:
+    - Medium: mean $0.0538 (max $0.0847); 851 tokens (max 1,263); 9.9 s median (max 15.5 s).
+    - High: mean $0.0552 (max $0.0843); 924 tokens (max 1,451); 10.4 s median (max 15.3 s).
+    - Max (14 plans): mean $0.4308 (max $0.9765); 19,635 tokens (max 46,975); 118 s median (max 386 s).
+  - Verdicts:
+    - Medium: trusted 10, partly right 3, wrong 2.
+    - High: trusted 10, partly right 4, wrong 1.
+    - Max (14 plans): trusted 10, partly right 4, wrong 0.
+    - No plan got worse at either level.
+  - bad-deploy-1 (wrong at medium):
+    - High: checkout v1.8.0's NullPointerException named and rolled back, but "consider rolling catalog back" is still offered if errors persist. Partly right.
+    - Max: right cause, no catalog step, but a code fix in `services/checkout/cart_total.py` and a test, invented for a Java fault (CartTotal.java). Partly right.
+  - noisy-neighbor-1 (wrong at medium):
+    - High: still "turn search-results-badges off" to rule the flag out, which the labels forbid. Wrong.
+    - Max: drops the flag-off and names nightly-reindex starting at -5 to -4 minutes. Trusted.
+  - memory-leak-1 (partly right at medium):
+    - High: a code fix of orders whose file is the pattern `services/orders/**/*.py`, which the check kept.
+    - Max: `none`, without medium's forbidden flag-off.
+  - bad-deploy-2 and memory-leak-3: as at medium (partly right). Max's bad-deploy-2 adds a test file.
+  - The other 10: the same kind and target at every level, with no new forbidden step. High's expired-cert-4 says "reload or restart the broker" after the renewal, a human step of the procedure, as medium's "reload the broker".
+  - Recommendation (docs/memory.md): stay at medium.
+    - High buys nothing measurable.
+    - Max fixes the two wrong plans, but on single runs of 15 scenarios, at 8 times the cost and 12 times the latency. Its worst plan, 386 s, passes the web's 6-minute wait, and the $15 monthly Claude cap would hold about 35 plans.
+    - No setting, cap or production step changed.
+  - Small events:
+    - A 600 s foreground limit moved the max pass to the background; it finished there with exit 0.
+    - `python` is not on Git Bash's PATH (a Microsoft Store alias). What we did: ran the scratch comparison with `uv run python`.
+- Files: `services/agent/src/agent/{providers.py,llm.py}`, `services/agent/tests/test_providers.py`, `evals/harness/{plans.py,test_plans.py}`, `Makefile`, `evals/reports/2026-11-02-dev-plans-04fbbe4f-claude-opus-5-5-high.{json,md}`, README, docs. The 29 new kept plans in `evals/reports/plans/` are ignored by git (`evals/reports/*`) and stay on this PC.
+- Validation: `make lint` exit 0; `make typecheck` exit 0; `make test` exit 0 (web 102, gateway 80, ts-clients 55, ts-config 3; pytest 696 passed, 154 deselected).
+- Outstanding: nothing is committed. Max's slow-dependency-2 was not made (budget), and max has no report file, since a stopped pass writes none; its 14 plans are kept, so `LLM_PLANNER_EFFORT=max make eval-plans` finishes the pass for about $0.35.
+
 ### 2026-11-03: Bug: the header said Sign out while `/` offered sign-in; one session check
 
 - What happened: the user reported that, signed in with the header showing Sign out, the logo led to `/`, which offered sign-in. Expected: a signed-in visit to `/` or the sign-in page goes on to Live incidents, or to a safe `next`; the form shows only when signed out; an expired or invalid session shows Sign in, never Sign out.

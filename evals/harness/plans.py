@@ -36,7 +36,7 @@ from typing import Any, cast
 import eval as harness
 
 from agent.job import prompt_sha
-from agent.llm import PLAN_OUTPUT_CAP, Binding, Limiter, Router
+from agent.llm import Binding, Limiter, Router
 from agent.model import PROMPT_OVERHEAD, ModelCall, PlanRequest
 from agent.planner import (
     PLANNER_PROMPT_SHA,
@@ -51,7 +51,7 @@ from agent.planner import (
     planner_text,
 )
 from agent.pricing import RATES, cost, worst
-from agent.providers import make_provider
+from agent.providers import make_provider, plan_limits
 from agent.settings import Role, Settings
 from py_config import ConfigError, load_settings
 from sim.scenario import Scenario, load_scenarios
@@ -218,13 +218,14 @@ def estimate(settings: Settings, runs: Sequence[Run]) -> None:
         tokens = [round(b / per_token * factor) for b in bounds]
         return sum(cost(rates, input=t, cached=0, cache_writes=0, output=output) for t in tokens)
 
-    most = sum(worst(rates, b, PLAN_OUTPUT_CAP, caches=False) for b in bounds)
+    cap = plan_limits(effort)[0]
+    most = sum(worst(rates, b, cap, caches=False) for b in bounds)
     harness.say(f"{len(runs)} plans planned, {len(pending)} to make, on {model}, effort {effort}.")
     if not bounds:
         return
     harness.say(
         f"Prompts {min(bounds):,} to {max(bounds):,} bytes. The most the pass can cost: "
-        f"${most:.2f} (each prompt's bytes as tokens and {PLAN_OUTPUT_CAP:,} output tokens)."
+        f"${most:.2f} (each prompt's bytes as tokens and {cap:,} output tokens)."
     )
     harness.say(
         f"Likely: ${likely(OUTPUT_GUESS[0], 1.0):.2f} to ${likely(OUTPUT_GUESS[1], TOKENIZER):.2f}"
@@ -234,9 +235,23 @@ def estimate(settings: Settings, runs: Sequence[Run]) -> None:
     )
 
 
-async def make(role: Role, runs: Sequence[Run], rows: list[Json]) -> bool:
-    """Makes every plan not kept yet, one at a time; False when a call stopped the pass."""
+def fits(limit: float | None, spent: float, worst_usd: float) -> bool:
+    """Whether the next plan's worst case stays within the pass's spend limit, when it has one."""
+    return limit is None or spent + worst_usd <= limit
+
+
+def report_name(today: str, model: str, effort: str | None) -> str:
+    """The report's name; the effort keeps two passes of one day apart."""
+    return f"{today}-dev-plans-{PLANNER_PROMPT_SHA[:8]}-{model}-{effort}"
+
+
+async def make(
+    role: Role, runs: Sequence[Run], rows: list[Json], limit: float | None = None
+) -> bool:
+    """Makes every plan not kept yet, one at a time; False when a call or the spend limit stopped
+    the pass. The limit holds each next plan's worst case, so the pass never spends past it."""
     binding = Binding(role, make_provider(role))
+    spent, cap = 0.0, plan_limits(role.effort)[0]
     # Only the planner is asked: with fallback_on_rate_limit off a plan's chain is its first model.
     router = Router(
         binding, None, binding, fallback_on_rate_limit=False, limiter=Limiter(None), planner=binding
@@ -246,7 +261,15 @@ async def make(role: Role, runs: Sequence[Run], rows: list[Json]) -> bool:
         if path.exists():
             rows.append(harness.load(path))
             continue
+        most = worst(RATES[role.model], request(catalog(scenario), triage).bound, cap, caches=False)
+        if not fits(limit, spent, most):
+            harness.say(
+                f"eval-plans: stopped before {scenario.id}: ${spent:.2f} spent, and its worst case "
+                f"${most:.2f} would pass the limit of ${limit:.2f}"
+            )
+            return False
         row = await plan_one(router, scenario, triage)
+        spent += row["cost"]
         plan = row["plan"]
         what = "no plan" if plan is None else f"{plan['kind']} of {plan['target']}"
         verdict = "kept" if plan is not None and row["refused"] is None else "not kept"
@@ -336,6 +359,7 @@ def markdown(report: Json, runs: Sequence[Run]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="P2.5: the planner on the dev split's reports.")
     parser.add_argument("--estimate", action="store_true", help="print the cost; call nothing")
+    parser.add_argument("--max-usd", type=float, help="stop before a plan could pass this spend")
     args = parser.parse_args()
     try:
         settings = load_settings(Settings)
@@ -349,7 +373,7 @@ def main() -> int:
         if role.until is not None and datetime.now(UTC).date() >= role.until:
             raise harness.Setup(f"Claude's credits ended on {role.until} (LLM_CLAUDE_UNTIL)")
         rows: list[Json] = []
-        if not asyncio.run(make(role, runs, rows)):
+        if not asyncio.run(make(role, runs, rows, args.max_usd)):
             harness.say(f"{len(rows)} of {len(runs)} plans kept; run the same command to go on.")
             return STOPPED
     except (harness.Setup, ConfigError) as error:
@@ -363,7 +387,7 @@ def main() -> int:
         "summary": summary(rows),
         "plans": rows,
     }
-    name = f"{today}-dev-plans-{PLANNER_PROMPT_SHA[:8]}-{role.model}"
+    name = report_name(today, role.model, role.effort)
     harness.save(harness.REPORTS / f"{name}.json", report)
     (harness.REPORTS / f"{name}.md").write_text(markdown(report, runs), encoding="utf-8")
     harness.say(f"report: evals/reports/{name}.md")

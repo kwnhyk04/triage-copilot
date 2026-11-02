@@ -10,6 +10,9 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import create_engine
 
 from agent.main import create_app, make_routers
+from agent.planner import PLAN_INPUT_BYTES
+from agent.pricing import RATES, worst
+from agent.providers import plan_limits
 from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
@@ -113,20 +116,30 @@ def test_every_claude_role_has_the_daily_and_monthly_caps_and_needs_a_priced_mod
         Settings(**unpriced)
 
 
-def test_the_planner_is_opus_at_medium_effort_under_its_own_daily_cap() -> None:
+def test_the_planner_is_opus_at_max_effort_under_its_own_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The defaults, whatever a developer's .env sets (make exports it).
+    for name in ("LLM_PLANNER_EFFORT", "LLM_PLANNER_DAILY_USD"):
+        monkeypatch.delenv(name, raising=False)
     assert OFFLINE.planner() is None
-    keyed: dict[str, Any] = {**OFFLINE.model_dump(), "anthropic_api_key": SecretStr("sk-ant-test")}
+    key = SecretStr("sk-ant-test")
+    keyed: dict[str, Any] = {**offline().model_dump(), "anthropic_api_key": key}
     planner = Settings(**keyed).planner()
     assert planner is not None
     assert (planner.name, planner.provider, planner.model, planner.effort) == (
         "planner",
         "anthropic",
         "claude-opus-5-5",
-        "medium",
+        "max",
     )
-    # $1.00 a UTC day of its own, inside TC's $15 a month, until Claude's credits end.
+    # $3.50 a UTC day of its own, inside TC's $15 a month, until Claude's credits end.
     caps = (planner.daily_usd, planner.monthly_usd, planner.until)
-    assert caps == (1.0, 15.0, date(2026, 11, 10))
+    assert caps == (3.5, 15.0, date(2026, 11, 10))
+    # Three max plans a day fit: two at the dearest measured ($0.98) leave a third's worst case.
+    most = worst(RATES["claude-opus-5-5"], PLAN_INPUT_BYTES, plan_limits("max")[0], caches=False)
+    assert most == pytest.approx(1.44)
+    assert 2 * 0.98 + most <= (planner.daily_usd or 0.0)
     assert planner.api_key == "sk-ant-test"
     for bad in ({"llm_planner_model": "claude-sonnet-5-5"}, {"llm_planner_effort": "extreme"}):
         changed: dict[str, Any] = {**keyed, **bad}

@@ -23,4 +23,6 @@ export const E2E = {
   session: 'test-results/session.json',
   // The fake gateway's investigation that runs while it is read.
   runningId: 'c0ffee00-0000-4000-8000-000000000001',
+  // Its real incident whose plan lands after a few reads.
+  planningId: 'c0ffee00-0000-4000-8000-000000000003',
 };

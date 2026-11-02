@@ -45,7 +45,7 @@ from agent.model import (
 )
 from agent.pricing import RATES, cost, worst
 from agent.prompt import REPORT_TOOL
-from agent.providers import PLAN_TIMEOUT, REQUEST_TIMEOUT, Provider
+from agent.providers import REQUEST_TIMEOUT, Provider, plan_limits
 from agent.settings import Role, RoleName
 from agent.steps import TokenUsage
 from agent.switches import is_on
@@ -56,8 +56,9 @@ log = logging.getLogger(__name__)
 # The largest call a turn makes: a prompt at the limit, and the forced report's output allowance
 # (job.REPORT_OUTPUT_CAP; a test keeps the two equal).
 LARGEST_CALL = (PROMPT_LIMIT, 4_096)
-# A plan's output allowance, thinking included.
-PLAN_OUTPUT_CAP = 16_000
+# A plan's output allowance at effort medium, thinking included; providers.plan_limits has each
+# effort's.
+PLAN_OUTPUT_CAP = plan_limits("medium")[0]
 SUMMARY_OUTPUT_CAP = 400
 SUMMARY_MIN_OUTPUT = 64
 SUMMARY_SYSTEM = (
@@ -355,9 +356,10 @@ class Router:
         chain = [b for b in (self.planner, self.primary, self.fallback) if b is not None]
         for binding in chain if self.fallback_on_rate_limit else chain[:1]:
             role, provider = binding.role, binding.provider
+            cap, timeout = plan_limits(role.effort)
             try:
                 # A plan marks nothing for the cache, so its input bills at the input rate.
-                worst_usd = _worst(role, bound, PLAN_OUTPUT_CAP, caches=False)
+                worst_usd = _worst(role, bound, cap, caches=False)
                 await self.limiter.acquire(role, worst_usd)
             except QuotaExhausted as error:
                 calls.append(_plan_call(role, "skipped", bound, sha, error=str(error)))
@@ -366,9 +368,9 @@ class Router:
             try:
                 answer, usage = await asyncio.wait_for(
                     provider.structured(
-                        request.system, request.text, request.shape, PLAN_OUTPUT_CAP, role.effort
+                        request.system, request.text, request.shape, cap, role.effort
                     ),
-                    PLAN_TIMEOUT + 5,
+                    timeout + 5,
                 )
             except Exception as error:
                 self._after_failure(role, error)
@@ -528,7 +530,7 @@ def _plan_call(
     """A plan's call, recorded as the planner's whichever model of the chain it went to."""
     ms = 0 if started is None else _ms(started)
     why = _err(error) if isinstance(error, Exception) else error
-    call = _call(role, outcome, bound, PLAN_OUTPUT_CAP, usage, ms, why, sha=sha)
+    call = _call(role, outcome, bound, plan_limits(role.effort)[0], usage, ms, why, sha=sha)
     return replace(call, role="planner")
 
 

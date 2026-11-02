@@ -7,6 +7,8 @@ import {
   causeName,
   percent,
   PLAN_STATES,
+  PLANNING,
+  planning,
   statusBadge,
   stillChanging,
   TABS,
@@ -66,6 +68,17 @@ export interface ListProps {
   refresh?: boolean;
 }
 
+/** A live row's plan: its state, Planning while a refreshing list waits for it, else None. */
+function PlanCell({ item, waiting }: { item: Summary; waiting: boolean }) {
+  const state = item.plan_status === null ? null : PLAN_STATES[item.plan_status];
+  const shown = waiting ? PLANNING : state;
+  return (
+    <td data-card={shown === null ? 'hide' : 'aside'}>
+      {shown === null ? NONE : <Badge state={shown} />}
+    </td>
+  );
+}
+
 /**
  * Investigations as a table, newest first, with a link to the older ones. Below 720 px each row is
  * a card, its cells placed by data-card: the incident and verdict, then the status, plan and age,
@@ -88,7 +101,7 @@ export function InvestigationList({
       {changing > 0 && (
         <LiveRefresh
           seconds={REFRESH_SECONDS}
-          status={`${changing === 1 ? '1 investigation is' : `${String(changing)} investigations are`} still running, so this list updates every ${String(REFRESH_SECONDS)} seconds.`}
+          status={`${changing === 1 ? '1 investigation is' : `${String(changing)} investigations are`} still running or planning, so this list updates every ${String(REFRESH_SECONDS)} seconds.`}
         />
       )}
       {items.length === 0 ? (
@@ -152,13 +165,7 @@ export function InvestigationList({
                     )}
                   </td>
                   {live && (
-                    <td data-card={item.plan_status === null ? 'hide' : 'aside'}>
-                      {item.plan_status === null ? (
-                        NONE
-                      ) : (
-                        <Badge state={PLAN_STATES[item.plan_status]} />
-                      )}
-                    </td>
+                    <PlanCell item={item} waiting={refresh === true && planning(item, now)} />
                   )}
                   <td data-card={live ? 'meta' : 'aside'}>
                     <Badge state={statusBadge(item.status)} />

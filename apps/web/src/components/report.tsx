@@ -9,6 +9,9 @@ import {
   percent,
   PLAN_KINDS,
   PLAN_STATES,
+  PLAN_WAIT_MINUTES,
+  PLANNING,
+  planning,
   planNote,
   progressLine,
   statusBadge,
@@ -141,6 +144,23 @@ function PlanPanel({
   );
 }
 
+const WAITING_NOTE =
+  `Still planning a fix. A plan can take up to ${String(PLAN_WAIT_MINUTES)} minutes; ` +
+  'this page shows it as soon as it lands.';
+
+/** A real verdict's plan on its way: at effort max the planner thinks for minutes. */
+function PlanWaiting() {
+  return (
+    <section className="panel plan" aria-labelledby="plan">
+      <div className="panel-head">
+        <h2 id="plan">Plan</h2>
+        <Badge state={PLANNING} />
+      </div>
+      <p>{WAITING_NOTE}</p>
+    </section>
+  );
+}
+
 export interface ReportProps {
   investigation: Investigation;
   now: number;
@@ -167,7 +187,9 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
   const tools = new Map(
     steps.flatMap((step) => (step.tool_call ? [[step.tool_call.id, step.tool_call.name]] : [])),
   );
-  const side = plan !== null || actions.length > 0;
+  // A page that refreshes says a plan is coming; one that never does cannot show it land.
+  const waiting = refresh === true && planning(investigation, now, plan !== null);
+  const side = plan !== null || waiting || actions.length > 0;
   return (
     <article className="report">
       <header className="report-head">
@@ -178,6 +200,7 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
           {investigation.plan_status !== null && (
             <Badge state={PLAN_STATES[investigation.plan_status]} />
           )}
+          {waiting && <Badge state={PLANNING} />}
         </p>
         <p className="meta">
           <span>Opened {utcTime(investigation.created_at, now)}</span>
@@ -227,7 +250,7 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
               </ul>
             </>
           )}
-          {plan === null && (
+          {plan === null && !waiting && (
             <p className="faint">
               No plan was made: plans are only for real incidents, while the planner is on.
             </p>
@@ -236,6 +259,7 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
 
         {side && (
           <div className="report-side">
+            {waiting && <PlanWaiting />}
             {plan !== null && <PlanPanel plan={plan} decide={decide} demo={demo} now={now} />}
             {actions.length > 0 && (
               <section className="panel" aria-labelledby="proposed">
