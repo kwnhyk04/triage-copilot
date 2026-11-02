@@ -10,9 +10,10 @@ describe('liveTenantsRequired', () => {
   it('refuses an unset or empty LIVE_TENANTS, and reads {} or a mapping', () => {
     expect(() => live({})).toThrow('LIVE_TENANTS is required');
     expect(() => live({ LIVE_TENANTS: '' })).toThrow('LIVE_TENANTS is required');
-    expect(live({ LIVE_TENANTS: '{}' })).toEqual([]);
+    expect(live({ LIVE_TENANTS: '{}' })).toEqual({});
     const tenant = '0b6f2d1e-3c4a-4f5e-8a9b-1c2d3e4f5a6b';
-    expect(live({ LIVE_TENANTS: JSON.stringify({ [tenant]: 'freight-audit' }) })).toEqual([tenant]);
+    const mapping = { [tenant]: 'freight-audit' };
+    expect(live({ LIVE_TENANTS: JSON.stringify(mapping) })).toEqual(mapping);
   });
 });
 
@@ -27,12 +28,13 @@ const env = {
 const TENANT = '0b6f2d1e-3c4a-4f5e-8a9b-1c2d3e4f5a6b';
 
 describe('LIVE_TENANTS', () => {
-  it('is the tenants whose alerts are real incidents, as the agent reads them', () => {
-    expect(loadGatewayConfig(env).LIVE_TENANTS).toEqual([]);
+  it('is the tenants whose alerts are real incidents, with their apps, as the agent reads them', () => {
+    expect(loadGatewayConfig(env).LIVE_TENANTS).toEqual({});
     // Empty, as .env.example leaves it, counts as unset.
-    expect(loadGatewayConfig({ ...env, LIVE_TENANTS: '' }).LIVE_TENANTS).toEqual([]);
+    expect(loadGatewayConfig({ ...env, LIVE_TENANTS: '' }).LIVE_TENANTS).toEqual({});
     const live = { ...env, LIVE_TENANTS: `{"${TENANT}": "freight-audit"}` };
-    expect(loadGatewayConfig(live).LIVE_TENANTS).toEqual([TENANT]);
+    // ActionApproved v2 names the app, whose catalog the executor checks the target against.
+    expect(loadGatewayConfig(live).LIVE_TENANTS).toEqual({ [TENANT]: 'freight-audit' });
   });
 
   it.each([

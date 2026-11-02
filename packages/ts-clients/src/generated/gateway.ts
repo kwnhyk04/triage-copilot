@@ -186,7 +186,7 @@ export interface paths {
         put?: never;
         /**
          * Claims an approved action for the executor, once.
-         * @description Inserts the execution in one transaction. Only an action whose decision is approved can be claimed: the database refuses any other. The action id is the idempotency key, so a second claim returns the first one with 200, and the executor must not run the action again. An execution left in claimed is never retried; it waits for a human.
+         * @description Inserts the execution in one transaction. The id is a proposed action's, or a restart plan's (ActionApproved v2 carries it as its action id). Only an action whose decision is approved can be claimed, and of plans only a restart: the database refuses any other. The action id is the idempotency key, so a second claim returns the first one with 200, and the executor must not run the action again. An execution left in claimed is never retried; it waits for a human. Before every claim the gateway asks the agent's actions switch: while it is off (409) or unknown (503), nothing is claimed.
          */
         post: operations["claimExecution"];
         delete?: never;
@@ -1010,6 +1010,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The actions switch is off, so nothing is claimed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     reportExecutionResult: {

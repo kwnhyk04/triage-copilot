@@ -3,10 +3,13 @@ import { parseMessage } from '@triage/ts-clients/messages';
 import type { Sql } from 'postgres';
 
 import type { Decide, DecidePlan } from './app.ts';
+import type { App } from './config.ts';
 import { sha256 } from './intake.ts';
 import { type PlanRow, toPlan } from './investigations.ts';
 
 type ProposedAction = components['schemas']['ProposedAction'];
+/** LIVE_TENANTS: each live tenant's app, which ActionApproved v2 names; a sim tenant has none. */
+type LiveApps = Readonly<Partial<Record<string, App>>>;
 interface ActionRow {
   id: string;
   tenant_id: string;
@@ -25,7 +28,7 @@ interface ActionRow {
  * actions run in order; the action id is its deduplication id. `onQueued` wakes the relay after
  * the commit.
  */
-export function createDecide(sql: Sql, onQueued: () => void): Decide {
+export function createDecide(sql: Sql, onQueued: () => void, apps: LiveApps): Decide {
   return async (actionId, verdict, { approver, reason }) => {
     const outcome = await sql.begin(async (tx) => {
       const [action] = await tx<ActionRow[]>`
@@ -41,10 +44,12 @@ export function createDecide(sql: Sql, onQueued: () => void): Decide {
         RETURNING decided_at`;
       if (decided === undefined) return 'already_decided';
       if (verdict === 'approved') {
-        const message = parseMessage('action-approved.v1', {
-          schema_version: 1,
+        const message = parseMessage('action-approved.v2', {
+          schema_version: 2,
           action_id: action.id,
           investigation_id: action.investigation_id,
+          tenant_id: action.tenant_id,
+          app: apps[action.tenant_id] ?? null,
           kind: action.kind,
           target: action.target,
           parameters: action.parameters,
@@ -80,14 +85,16 @@ export function createDecide(sql: Sql, onQueued: () => void): Decide {
 /**
  * Records a human decision on a plan in gateway.plan_decisions, whose primary key allows one per
  * plan: a second decision inserts nothing and gets already_decided. A plan without a proposal takes
- * none. Nothing is queued: in phase 2 a plan's approval runs nothing.
+ * none. An approved restart (phase 3) queues ActionApproved v2 in the same transaction, as the
+ * plan's kind and target alone: its rationale, the steps it writes for a human, never reaches the
+ * executor. A code fix's approval queues nothing until the coder exists (phase 4).
  */
-export function createDecidePlan(sql: Sql): DecidePlan {
-  return (planId, verdict, { approver, reason }) =>
-    sql.begin(async (tx) => {
-      const [plan] = await tx<PlanRow[]>`
-        SELECT id, kind, target, files, rationale, problem, models, recorded_at,
-               NULL AS decision, NULL AS approver, NULL AS decided_at, NULL AS reason
+export function createDecidePlan(sql: Sql, onQueued: () => void, apps: LiveApps): DecidePlan {
+  return async (planId, verdict, { approver, reason }) => {
+    const outcome = await sql.begin(async (tx) => {
+      const [plan] = await tx<(PlanRow & { tenant_id: string; investigation_id: string })[]>`
+        SELECT id, tenant_id, investigation_id, kind, target, files, rationale, problem, models,
+               recorded_at, NULL AS decision, NULL AS approver, NULL AS decided_at, NULL AS reason
         FROM gateway.plans WHERE id = ${planId}`;
       if (plan === undefined) return 'not_found';
       if (plan.kind === null) return 'no_proposal';
@@ -98,12 +105,37 @@ export function createDecidePlan(sql: Sql): DecidePlan {
         ON CONFLICT DO NOTHING
         RETURNING decided_at`;
       if (decided === undefined) return 'already_decided';
-      return toPlan({
+      const restart =
+        verdict === 'approved' && plan.kind === 'restart_service' ? plan.target : null;
+      if (restart !== null) {
+        const message = parseMessage('action-approved.v2', {
+          schema_version: 2,
+          action_id: plan.id,
+          investigation_id: plan.investigation_id,
+          tenant_id: plan.tenant_id,
+          app: apps[plan.tenant_id] ?? null,
+          kind: 'restart_service',
+          target: restart,
+          parameters: {},
+          approved_by: approver,
+          approved_at: decided.decided_at.toISOString(),
+        });
+        await tx`
+          INSERT INTO gateway.outbox (queue, message_group_id, deduplication_id, body)
+          VALUES ('actions', ${sha256(`${plan.tenant_id}\n${restart}`)}, ${plan.id},
+                  ${tx.json({ ...message })})`;
+      }
+      const decidedPlan = toPlan({
         ...plan,
         decision: verdict,
         approver,
         decided_at: decided.decided_at,
         reason: reason ?? null,
       });
+      return { decidedPlan, queued: restart !== null };
     });
+    if (typeof outcome === 'string') return outcome;
+    if (outcome.queued) onQueued();
+    return outcome.decidedPlan;
+  };
 }

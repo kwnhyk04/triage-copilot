@@ -11,7 +11,7 @@ import {
   sameSecret,
 } from './app.ts';
 import type { GatewayConfig } from './config.ts';
-import type { Claim, Report } from './executions.ts';
+import type { ActionsOn, Claim, Report } from './executions.ts';
 import type { GetAlertContext } from './investigations.ts';
 
 export interface InternalDeps {
@@ -19,6 +19,7 @@ export interface InternalDeps {
   claim: Claim;
   report: Report;
   alertContext: GetAlertContext;
+  actionsOn: ActionsOn;
 }
 
 const claimBody = z.strictObject({ dry_run: z.boolean() });
@@ -38,6 +39,7 @@ export function buildInternalApp({
   claim,
   report,
   alertContext,
+  actionsOn,
 }: InternalDeps): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL, base: { service: 'gateway-internal' } },
@@ -67,6 +69,21 @@ export function buildInternalApp({
       const body = claimBody.safeParse(request.body);
       if (!id.success || !body.success) {
         return badRequest(reply, [...(id.error?.issues ?? []), ...(body.error?.issues ?? [])]);
+      }
+      // The operator's kill switch, asked before every claim, dry runs included; a result is still
+      // taken while it is off, so a claimed action's end is always recorded.
+      let on: boolean;
+      try {
+        on = await actionsOn();
+      } catch (error) {
+        request.log.warn({ err: error }, 'the actions switch could not be read');
+        reply.header('Retry-After', '30');
+        const detail =
+          'The agent did not say whether the actions switch is on; nothing is claimed.';
+        return problem(reply, 503, 'Service Unavailable', detail);
+      }
+      if (!on) {
+        return problem(reply, 409, 'Conflict', 'The actions switch is off; nothing is claimed.');
       }
       const claimed = await claim(id.data, body.data.dry_run);
       if (claimed === 'not_found') {

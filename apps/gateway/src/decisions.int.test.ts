@@ -14,6 +14,8 @@ describe('decision store against Postgres', () => {
   let db: ReturnType<typeof connectDb>;
   let app: FastifyInstance;
   let nudges = 0;
+  // LIVE_TENANTS: a test makes its tenant live by adding it here.
+  const apps: Record<string, 'freight-audit' | 'filing-lens'> = {};
   const unused = () => Promise.reject(new Error('unused by this test'));
 
   beforeAll(async () => {
@@ -23,9 +25,13 @@ describe('decision store against Postgres', () => {
       config: APP_CONFIG,
       ping: db.ping,
       updates: createUpdates(),
-      decide: createDecide(db.sql, () => {
-        nudges++;
-      }),
+      decide: createDecide(
+        db.sql,
+        () => {
+          nudges++;
+        },
+        apps,
+      ),
       findTenant: unused,
       intake: unused,
       listInvestigations: unused,
@@ -94,10 +100,13 @@ describe('decision store against Postgres', () => {
       queue: 'actions',
       message_group_id: sha256(`${tenantId}\ncheckout`),
     });
-    expect(parseMessage('action-approved.v1', message?.body)).toEqual({
-      schema_version: 1,
+    // A sim tenant's action names no app, so the executor never runs it.
+    expect(parseMessage('action-approved.v2', message?.body)).toEqual({
+      schema_version: 2,
       action_id: actionId,
       investigation_id: investigationId,
+      tenant_id: tenantId,
+      app: null,
       kind: 'rollback_deploy',
       target: 'checkout',
       parameters: { to_version: 'v1.7.3' },
@@ -105,6 +114,17 @@ describe('decision store against Postgres', () => {
       approved_at: first.json<{ decided_at: string }>().decided_at,
     });
     expect(nudges).toBe(nudged + 1);
+  });
+
+  it("names a live tenant's app in ActionApproved", async () => {
+    const { tenantId, actionId } = await propose();
+    apps[tenantId] = 'filing-lens';
+    expect((await decide(actionId, 'approve')).statusCode).toBe(200);
+    const [message] = await queued(actionId);
+    expect(parseMessage('action-approved.v2', message?.body)).toMatchObject({
+      tenant_id: tenantId,
+      app: 'filing-lens',
+    });
   });
 
   it('answers 409 to an approval after a rejection, and queues nothing', async () => {

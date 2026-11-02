@@ -2,6 +2,22 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-11-02: Fixed actions (agent 0014, gateway 0009, gateway API 0.9.0, agent API 0.5.0, ActionApproved v2)
+
+- Expand only, all of it.
+- Agent 0014, under `lock_timeout` 3 s: `agent.switches`' check also allows `actions`. No row is seeded, so the switch starts off. The downgrade deletes an `actions` row and narrows the check again.
+- Gateway 0009 (`drizzle/0009_plan_executions.sql`):
+  - `gateway.plan_decisions` gains the unique key `(plan_id, decision)`, beside its primary key on `plan_id`.
+  - A new table `gateway.plan_executions` holds the executor's claim on an approved restart plan. Its foreign key `(plan_id, decision)` points at that unique key, and two checks enforce approved only and finished matching state, as `executions` does for proposed actions.
+  - drizzle-kit wrote the foreign key before the unique key it needs, so the generated SQL was reordered by hand: the unique key comes first.
+- ActionApproved v2 is a new message: v1's fields, plus `tenant_id` and `app` (`freight-audit`, `filing-lens`, or null for a sim tenant).
+  - Consumers validate the new union `action-approved.schema.json`, which marks v1 deprecated.
+  - The gateway emits v2 only, for proposed actions (app from `LIVE_TENANTS`) and approved restart plans.
+  - The executor runs neither a v1 message nor a null app. A v1 message still in `actions.fifo` is refused and deleted.
+- Gateway API 0.9.0 changes only the internal claim route. It now names restart plans and adds two answers, 409 when the actions switch is off and 503 when the agent cannot say. The public routes are unchanged.
+- Agent API 0.5.0 adds `GET /internal/switches/{name}`, behind the service token.
+- Contract step, when no v1 ActionApproved is queued anywhere: drop v1 from the union.
+
 ## 2026-10-27: Live or simulated, cause and plan status in the list (gateway API 0.8.0; no schema change)
 
 - Expand only. `GET /v1/investigations` takes an optional `source` (`live` or `sim`; any other value gets 400). Without it the list spans every tenant as before, which the eval harness and the Python clients rely on.

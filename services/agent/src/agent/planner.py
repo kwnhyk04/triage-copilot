@@ -25,14 +25,12 @@ from agent.live import render
 from agent.model import PROMPT_OVERHEAD, ModelCall, PlanRequest, ToolSpec
 from py_clients.clients import ApiError
 from py_clients.generated.gateway import AlertContext
-from watch.catalog import CATALOGS, AppName, Catalog, Kind
+from watch.catalog import CATALOGS, RESTARTABLE, AppName, Catalog
 
 # The planner's whole prompt, system prompt and shape included, in UTF-8 bytes; a plan's worst case
 # is then 40,000 input tokens at Opus's $4 and 16,000 output at $20 per million: $0.48.
 PLAN_INPUT_BYTES = 40_000
 PLAN_TOOL = "submit_plan"
-# What a restart or a code fix may name; a database, queue, cache, storage or proxy never.
-RESTARTABLE: tuple[Kind, ...] = ("app", "worker")
 # The repo paths a code_fix may name, per app: source files under its own code folders, as TC's
 # records of each repo's layout show (docs/activity-log.md, 2026-10-25). P4.1 checks the patterns
 # against each repo before the coder runs.

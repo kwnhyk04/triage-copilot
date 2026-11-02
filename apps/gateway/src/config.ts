@@ -9,10 +9,12 @@ const CREDENTIALS = [
   'AGENT_SERVICE_TOKEN',
   'EXECUTOR_SERVICE_TOKEN',
 ] as const;
-// The agent's LIVE_TENANTS, {"<tenant uuid>": "freight-audit"}; the gateway needs the tenants only.
-const liveTenants = z.record(z.guid(), z.enum(['freight-audit', 'filing-lens']));
-// LIVE_TENANTS's JSON as the tenant uuids, or an issue naming the shape it must have.
-const liveTenantIds = (text: string, ctx: z.RefinementCtx) => {
+// The agent's LIVE_TENANTS, {"<tenant uuid>": "freight-audit"}: ActionApproved v2 names the app.
+const app = z.enum(['freight-audit', 'filing-lens']);
+export type App = z.infer<typeof app>;
+const liveTenants = z.record(z.guid(), app);
+// LIVE_TENANTS's JSON as each tenant's app, or an issue naming the shape it must have.
+const liveTenantApps = (text: string, ctx: z.RefinementCtx): Record<string, App> => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -20,15 +22,15 @@ const liveTenantIds = (text: string, ctx: z.RefinementCtx) => {
     parsed = undefined;
   }
   const tenants = liveTenants.safeParse(parsed);
-  if (tenants.success) return Object.keys(tenants.data);
+  if (tenants.success) return tenants.data;
   const message = 'must map tenant uuids to freight-audit or filing-lens, as JSON';
   ctx.addIssue({ code: 'custom', message });
   return z.NEVER;
 };
-/** LIVE_TENANTS as the gateway reads it: the uuids of the tenants whose alerts are real incidents. */
-export const liveTenantsSetting = z.string().default('{}').transform(liveTenantIds);
+/** LIVE_TENANTS as the gateway reads it: the tenants whose alerts are real incidents, with their apps. */
+export const liveTenantsSetting = z.string().default('{}').transform(liveTenantApps);
 /** LIVE_TENANTS with no default ({} while live is off): demo-save's guard against live data. */
-export const liveTenantsRequired = z.string().transform(liveTenantIds);
+export const liveTenantsRequired = z.string().transform(liveTenantApps);
 /** Minutes without a step (or a message without a receive) before an investigation counts as stuck. */
 export const stuckAfterMinutesSetting = z.coerce.number().int().positive().default(10);
 const proxyAddress = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);

@@ -1,6 +1,6 @@
 import type { components } from '@triage/ts-clients/gateway';
 
-import type { Claim, Execution, Report } from './executions.ts';
+import type { ActionsOn, Claim, Execution, Report } from './executions.ts';
 import { buildInternalApp } from './internal.ts';
 import type { GetAlertContext } from './investigations.ts';
 
@@ -50,6 +50,7 @@ describe('internal API', () => {
     claim: Claim = unused,
     report: Report = unused,
     alertContext: GetAlertContext = unused,
+    actionsOn: ActionsOn = () => Promise.resolve(true),
   ) =>
     buildInternalApp({
       config: {
@@ -60,7 +61,38 @@ describe('internal API', () => {
       claim,
       report,
       alertContext,
+      actionsOn,
     });
+
+  it('asks the actions switch before every claim, and claims nothing while it is off or unknown', async () => {
+    const claims: string[] = [];
+    const claim: Claim = (id) => {
+      claims.push(id);
+      return Promise.resolve({ created: true, execution: EXECUTION });
+    };
+    const cases: [ActionsOn, number, RegExp][] = [
+      [() => Promise.resolve(false), 409, /actions switch is off/],
+      [() => Promise.reject(new Error('agent down')), 503, /did not say/],
+      [() => Promise.resolve(true), 201, /./],
+    ];
+    for (const [actionsOn, status, detail] of cases) {
+      const app = start(claim, unused, unused, actionsOn);
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: claimUrl,
+          headers: executor,
+          payload: { dry_run: true },
+        });
+        expect(response.statusCode).toBe(status);
+        if (status !== 201) expect(response.json<{ detail: string }>().detail).toMatch(detail);
+      } finally {
+        await app.close();
+      }
+    }
+    // Only the claim made while the switch was on reached the store.
+    expect(claims).toEqual([ID]);
+  });
 
   it('takes the executor token only on its routes; the probe takes none', async () => {
     const app = start();
