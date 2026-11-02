@@ -286,6 +286,13 @@ From the approved design doc:
   - No `WATCH_FL_PROMETHEUS_URL`. Why: FL production's Prometheus publishes no port, the catalog's FL rules apply to a dev stack only, and an unreachable URL keeps watch unready.
   - The drill's report is found by the POST's `group_id`, not by its title. Why: FA's drill is also "TCDrill on api".
   - Gemini: the move planned on 2026-10-24 (the "Gemini" item above) was done on 2026-10-31: FA, FL and TC each have their own Google project (the user). The user compared the keys: FL's differs from TC's, in dev and in prod. FL's own `docs/deploy.md` step 28 still says its dev key shares TC's project quota.
+- 2026-11-02: P2.5's measuring pass, `make eval-plans` (`evals/harness/plans.py`), built and run with the user's OK (Opus spend up to about $50 approved, the estimate first). Decisions made while building it, each with its reason:
+  - It calls the planner's own pieces (`planner_text`, `Router.plan`, `parse_plan`, `plan_refusal`) rather than `Planner.plan`. Why: `Planner.plan` finds its catalog in `CATALOGS`, which holds FA and FL only, and drops a draft the check refuses, which the review needs. Cost: plans.py mirrors those few lines, so a change to `Planner.plan` must be copied there.
+  - The reports are P0's Claude-first pass of 2026-11-01, found by eval.py's own cache keys. Why: Haiku triages live alerts until 2026-11-10, so the planner will plan Haiku's reports.
+  - The catalog is each scenario's services, with kinds by name in `KINDS`; the external providers (card-network, shipping-api) are left out, and code fixes are judged against `services/**/*.py` under the app name `sim`, added to `SOURCES` when plans.py loads. Why: the scenario files hold no kinds, FA's and FL's catalogs list no model provider, and the labels, the answer key, must not build the planner's input.
+  - No snapshot. Why: the sim keeps none, and a made-up one would decide every restart. Cost: `plan_refusal` refuses any restart for that reason alone.
+  - No database and no model behind Opus: a `Limiter` with no spend check and `fallback_on_rate_limit` off. Why: the pass then touches nothing but Anthropic, and its most is each call's worst case added up ($6.03 here). Cost: neither database's caps count it; the Anthropic console's shared $50 does.
+  - A plan the model answered is kept in `evals/reports/plans/`; a call that failed before any output is not, so a rerun asks only for it.
 
 ## Preferences and Instructions
 
@@ -301,6 +308,12 @@ From the approved design doc:
 - 2026-10-15: Waits for a tenant slot used up SQS receives and could dead-letter work, and budget waits held every worker slot. Parking fixed both: the two-agent storm test shows no DLQ entry and every parked investigation running.
 
 ## Known Issues and Pitfalls
+
+- 2026-11-02: What P2.5's pass showed about the planner (Opus 5.5 at effort medium, the 15 dev reports; report `evals/reports/2026-11-02-dev-plans-04fbbe4f-claude-opus-5-5.md`):
+  - It proposed no restart, though memory-leak-1 and memory-leak-3 accept one, so `plan_refusal`'s restart rule has met no real model. Why: not confirmed; the sim gives no snapshot, and the prompt allows a restart only with the target's health or container shown failing and its dependencies shown healthy, which both plans cite.
+  - bad-deploy-2's code fix names `services/search/query_parser.py`, which it calls "a best guess", and the check kept it. Why: the sim has no repo or commits, and the check matches files against the source patterns only.
+  - Three plans' free-text steps name an action the labels forbid: bad-deploy-1's catalog rollback (conditional), and flag-offs "to rule it out" in memory-leak-1 and noisy-neighbor-1. Why: the check reads the kind, target and files, never the rationale.
+  - What we did: recorded them; nothing in the planner or the check changed (the user's scope was to measure). In phase 2 nothing runs from a plan, so a human reading the steps is the guard; P4.1 checks files against the repo before any coder runs.
 
 - 2026-11-02: watch's FL catalog dates from 2026-10-25 and has no `egress-proxy`, which FL added with its egress rollout.
   - Why it matters: watch neither checks that container nor reads its logs. The live prompt's `get_dependencies` links neither FL's api nor its sidecar to it, so a proxy outage looks like FL's api failing its Funnel check.

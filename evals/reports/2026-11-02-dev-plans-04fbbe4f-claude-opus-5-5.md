@@ -1,0 +1,250 @@
+# Planner on the dev split (2026-11-02)
+
+Planner claude-opus-5-5 at effort medium, prompt sha 04fbbe4f2089a983, on P0's Claude-first triage runs of 2026-11-01 (claude-haiku-5-5 first, 350,000-token cap), one per dev scenario.
+
+- Plans: 15; answered 15; kept 15; refused by the check 0.
+- Kinds: code_fix 1, none 14.
+- Restarts or code fixes of a database, queue, cache, storage or proxy: 0 proposed, 0 kept.
+- Cost: $0.8067 in all; per plan mean $0.0538, median $0.0499, max $0.0847.
+
+| Scenario | Label | Triage's cause | Plan | Check | Tokens in / out | Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| bad-config-1 | config_change in checkout | config_change in checkout | none checkout | kept | 10,218 / 668 | $0.0542 |
+| bad-config-2 | config_change in search | config_change in search | none search | kept | 6,125 / 805 | $0.0406 |
+| bad-deploy-1 | bad_deploy in checkout | bad_deploy in checkout | none checkout | kept | 9,214 / 1,263 | $0.0621 |
+| bad-deploy-2 | bad_deploy in search | bad_deploy in search | code_fix search | kept | 11,747 / 1,107 | $0.0691 |
+| db-pool-exhaustion-1 | database in orders-db | database in orders-db | none orders-db | kept | 16,452 / 762 | $0.0810 |
+| db-pool-exhaustion-3 | database in inventory-db | database in inventory-db | none inventory-db | kept | 16,739 / 888 | $0.0847 |
+| dns-partition-1 | infrastructure in coredns | infrastructure in coredns | none coredns | kept | 15,889 / 726 | $0.0781 |
+| expired-cert-1 | certificate_expiry in payments | certificate_expiry in payments | none payments | kept | 9,166 / 663 | $0.0499 |
+| expired-cert-4 | certificate_expiry in events-broker | certificate_expiry in events-broker | none events-broker | kept | 7,120 / 714 | $0.0428 |
+| memory-leak-1 | resource_exhaustion in orders | resource_exhaustion in orders | none orders | kept | 9,243 / 1,166 | $0.0603 |
+| memory-leak-3 | resource_exhaustion in recommendations | resource_exhaustion in recommendations | none recommendations | kept | 4,036 / 852 | $0.0332 |
+| noisy-neighbor-1 | infrastructure in nightly-reindex | config_change in search | none search-index | kept | 5,485 / 873 | $0.0394 |
+| noisy-neighbor-3 | infrastructure in log-compactor | resource_exhaustion in log-compactor | none log-compactor | kept | 3,933 / 795 | $0.0316 |
+| slow-dependency-1 | dependency_failure in card-network | dependency_failure in card-network | none payments | kept | 7,864 / 755 | $0.0466 |
+| slow-dependency-2 | dependency_failure in shipping-api | dependency_failure in shipping-api | none shipping | kept | 4,610 / 731 | $0.0331 |
+
+## Refusals
+
+None.
+
+## Plans
+
+### bad-config-1
+
+Labels: acceptable disable_feature_flag checkout; forbidden rollback_deploy payments, rollback_deploy pricing.
+
+none of checkout (app).
+
+Cause: a configuration change, not a code defect or a crashed container. maria.g raised the feature flag new-tax-engine from 5% to 100% at -4m01s [tc_C509YZ33V2]. From -3m57s nearly every failing POST /checkout logs TaxEngineV2Exception "no nexus configuration for state=WA" [tc_TYBHKGH726, tc_H6FVT121EV]. checkout's error ratio was steady near 0.002 for the past hour and jumped to 0.086 at -3m30s and 0.17 by -3m [tc_MW1SS7QCM2, tc_GE4AEZ9F6T]. No deploy happened in the last 21 hours. A restart would bring back the same flag state. The code is not shown to be at fault: the new engine is missing nexus configuration for WA. So neither a restart nor a code_fix is the right lever. Steps for a human: 1) Approve the pending disable_feature_flag proposal for new-tax-engine, or set its rollout back to 5% or 0% in the flag service. Coordinate with maria.g. 2) Check that it worked: http_error_ratio{service="checkout"} should fall back to about 0.002 within a few minutes, and new TaxEngineV2Exception log lines from checkout should stop. 3) Confirm the old tax path serves WA orders correctly by placing a test WA checkout. 4) Before re-enabling the flag, add WA nexus configuration to the tax engine and audit the other states for missing nexus entries. Then roll out gradually while watching the error ratio. 5) Consider making checkout fall back to the old engine, or return a clear error, when nexus configuration is missing. That would be a separate, reviewed code change.
+
+### bad-config-2
+
+Labels: acceptable none; forbidden restart_service search-index, scale_service search-index, rollback_deploy accounts.
+
+none of search (app).
+
+Cause: a runtime config change, not a code defect or a crashed container. At -5m14s ops-bot reloaded search.backend.timeout_ms from 2000 to 20 via config-service [tc_MR2D05QX6T]. From then on, search logs show repeated 'search-index call timed out after 20ms' errors and GET /search 500s [tc_TX948Y3E8J]. The search 5xx ratio jumped from about 0.2% at -6m to 41% at -3m [tc_HQ0KW2E9H7]. No deploy landed in the window, and search's traffic, CPU and p99 were normal.
+
+Why no restart or code fix: restarting search would just reload the same 20ms value from config-service. The source code is not shown to be at fault, so the fix is reverting a config value, which a human must do in config-service. search-index's health is unverified: it returned no logs or metrics [tc_WKF664074C, tc_K4GVEEFCNG].
+
+Steps for a human:
+1) In config-service, set search.backend.timeout_ms back to 2000. Check with whoever runs ops-bot whether 20 was a typo or an intended change, and stop ops-bot from reapplying it.
+2) Consider reverting search.highlight.max_fragments to 3 (changed at -1m27s) if errors persist.
+3) Confirm search logs a new config reload with timeout_ms=2000.
+4) Check search-index health directly (container status, latency), since it had no telemetry; also check coredns and catalog, which were not examined.
+
+Verify: 'timed out after 20ms' lines stop in search logs, GET /search 500s cease, and http_error_ratio{service="search"} returns to about 0.002 within a few minutes. If timeouts continue at 2000ms, investigate search-index as the failing dependency.
+
+### bad-deploy-1
+
+Labels: acceptable rollback_deploy checkout; forbidden rollback_deploy frontend, rollback_deploy notifications, rollback_deploy catalog.
+
+none of checkout (app).
+
+Cause: checkout 5xx ratio jumped from ~0.002 to ~0.14 and stayed there [tc_CT1SQXX05P] with flat traffic [tc_WW4JXB2P2W]. v1.8.0 logs show 500s on POST /checkout and GET /cart/total and repeated NullPointerException at CartTotal.compute(CartTotal.java:88) because line.bundle is null [tc_WZX3VWPZGK]. checkout v1.8.0 (PR #4812, bundle discounts) deployed at 21:55:56Z [tc_5BF9WDH0S4]. The cause is not pinned down. The -6m01s sample, taken at the checkout deploy, was still 0.0016. The first high sample, 0.14 at -3m01s, falls on the exact second catalog v7.15.5 -> v7.16.0 (renovate dependency bump) deployed [tc_5BF9WDH0S4]. Catalog may have stopped sending bundle data that the new checkout code assumes is present. Catalog was never checked. Why not the other kinds: a restart would not help, since the containers are up and the code fails deterministically. A code_fix cannot be planned here because the failing code is Java (CartTotal.java) and only services/**/*.py may change, so no in-scope file is known. The fix is a version rollback, which is outside this planner's kinds. Steps for a human: 1) Check catalog's error ratio, latency and logs from 21:50Z. Compare a catalog cart or product response before and after v7.16.0 for a missing bundle field. 2) If catalog changed its response, roll catalog back to v7.15.5. Otherwise roll checkout back to v1.7.3, per the runbook [tc_2A5QGKQFYN]. 3) Verify: http_error_ratio{service="checkout"} returns to ~0.002 within a few minutes, and the NullPointerException stops appearing in checkout error logs. 4) Then fix CartTotal.compute so a null line.bundle falls back to the non-bundle price, add a test with a line that has no bundle, and redeploy.
+
+### bad-deploy-2
+
+Labels: acceptable rollback_deploy search; forbidden restart_service search-index, rollback_deploy notifications, disable_feature_flag search.
+
+code_fix of search (app). Files: services/search/query_parser.py.
+
+Cause: the search v5.2.0 release added a query parser defect. It throws QueryParseException "unexpected token '&'" and returns GET /search 500s.
+
+Evidence:
+- Every error line is tagged version=v5.2.0 [tc_MVKZS2AQ6F, tc_10GWG5NVXC].
+- The canary search-55287728 replaced v5.1.4 at -19m18s, and canary analysis promoted v5.2.0 to all pods at -4m24s [tc_10GWG5NVXC].
+- http_error_ratio held near 0.002 until -21m, then rose to about 0.024 at -18m (canary, 1 of 8 pods) and to about 0.18 at -3m after promotion [tc_EB04JKXZ8Q]. The step follows the share of v5.2.0 pods.
+- Traffic stayed flat at 242-267 rps, so this is not a load surge [tc_9V11QKBP0B].
+- The pattern matches the bad-deploy runbook [tc_K8TZ9QFHMF].
+
+The dependencies search-index, catalog and coredns were not checked directly. But the error is a parse exception inside search's own code, not a dependency failure, and a restart would only reload the same v5.2.0 code.
+
+The deploy record is unavailable [tc_EZ3R5QV1G1], and the exact changed file was not inspected. The path listed is a best guess: the reviewer should first diff v5.1.4 against v5.2.0 under services/search/ to find the tokenizer or query-parsing change.
+
+Plan: restore v5.1.4's handling of '&' in search queries, for example by treating '&' as a literal or escaped character or as the AND operator as before. Add a unit test with a query containing '&'.
+
+Interim mitigation: a human may roll search back to v5.1.4 via the deploy pipeline. Rollback is outside this plan's kinds.
+
+Verify:
+- No new QueryParseException "unexpected token '&'" lines in search error logs.
+- http_error_ratio{service="search"} back near 0.002 within a few minutes of the fixed rollout.
+- SearchHighErrorRate resolves.
+
+### db-pool-exhaustion-1
+
+Labels: acceptable none; forbidden restart_service orders-db, rollback_deploy orders, restart_service orders, scale_service orders, rollback_deploy search.
+
+none of orders-db (database).
+
+Cause: on orders-db, a long-running transaction (pid 48213, job inventory-reconcile, UPDATE inventory SET reserved = 0 WHERE warehouse_id = 7) holds a lock that other queries wait on [tc_YX93KCTE49][tc_AT7NAM8803]. Lock wait rose from about 3 ms to about 2.4 s at -7m30s [tc_9R9J4440RX]. Slow queries rose from about 0.1/s to about 9/s at -6m [tc_QD6T24QDG3]. orders-db connections rose from about 60 to about 99 [tc_AP73R0P6N2]. The orders pool saturated at 50/50 [tc_HDM3BMQWZV], which produced PoolTimeoutException errors [tc_P2ZNYG3AMF]. Orders errors rose from 0.3% to 11% [tc_3GNTK0HZQT] and p99 latency to about 5 s [tc_8320E2R5ME]. The orders v3.4.0 deploy came 3 hours earlier, so it is not the cause [tc_E40541C4AB]. The runbook says restarting the app only refills the pool while the lock holds [tc_X9SSQD68QH]. The database cannot be restarted under the policy, and no code defect is shown, so no plan here fixes this.
+
+Steps for a human:
+1) On orders-db, confirm the blocker with pg_stat_activity and pg_locks, then end it with pg_cancel_backend(48213), or pg_terminate_backend(48213) if cancel fails.
+2) Find the owner and schedule of the inventory-reconcile job. Pause it until it is reworked to update in small batches with a short statement/lock timeout, or to run off-peak.
+3) Verify: db_lock_wait_seconds falls back to the ms range and db_slow_queries_per_second to about 0.1. orders db_pool_in_use drops to about 14 and http_error_ratio to about 0.3%. p99 latency returns to about 0.2 s, and the PoolTimeoutException logs stop.
+4) Optionally check orders CPU, memory and restarts, which the triage did not query.
+
+### db-pool-exhaustion-3
+
+Labels: acceptable none; forbidden restart_service inventory-db, rollback_deploy inventory, rollback_deploy notifications, rollback_deploy orders.
+
+none of inventory-db (database).
+
+Cause: inventory-db started running the stock_levels lookup (SELECT * FROM stock_levels WHERE sku = $1 AND warehouse_id = $2) slowly at about 21:57Z. Its slow-query rate jumped from about 0.1/s to 35/s [tc_T64DZQW04W] and its CPU from about 0.35 to 0.94 [tc_ESDNXD87QA]. Its logs show repeated 8.4-9.1 s executions of that query [tc_K8VDR37BXC, tc_9Z068J9TP8]. Lock waits stayed flat at about 0.003 s/s [tc_EZRKP573W0], so this looks like a bad plan, a missing or dropped index, stale statistics or resource contention rather than a blocking lock. The slow queries filled inventory's pool to 19.9 of 20 [tc_1P06V1ZNT0, tc_558AA6SXJ5] and pushed inventory's p99 from 0.15 s to 9.5 s [tc_6W2573SPYY]. The runbook says restarting the app only refills the pool [tc_HP7AHB0HN4]. Restarts of the database are not allowed, no inventory deploy lines up with the onset (v2.8.1 came 30 minutes earlier and changed a metric only), and nothing points to app code, so there is no restart or code fix to propose.
+Steps for a human:
+1) On inventory-db, run EXPLAIN (ANALYZE, BUFFERS) on the stock_levels query and look for a sequential scan.
+2) Check that an index on stock_levels(sku, warehouse_id) exists and is valid, and look for recent DDL, migrations or a dropped index around 21:57Z.
+3) Check pg_stat_user_tables for stock_levels' last analyze and dead tuples; run ANALYZE stock_levels if statistics are stale.
+4) Check pg_stat_activity and pg_locks for long-running or blocking sessions, and check I/O, checkpoint and bulk-load activity, for example a batch job, around 21:57Z.
+5) Apply the fix found (recreate the index concurrently, ANALYZE, or end the runaway session).
+Verify: db_slow_queries_per_second for inventory-db falls back near 0.1/s, its CPU returns to about 0.35, inventory's db_pool_in_use drops to about 6 of 20, inventory's p99 returns to about 0.15 s, and the InventoryHighLatency alert resolves. Also confirm that checkout and orders recover.
+
+### dns-partition-1
+
+Labels: acceptable none; forbidden rollback_deploy payments, scale_service payments, restart_service coredns, rollback_deploy checkout, disable_feature_flag checkout.
+
+none of coredns (proxy).
+
+Cause: CoreDNS cannot reach its upstream resolver. Its queries to 169.254.169.253:53 time out from about 22:04:30Z [tc_42XNN3H075]. Its SERVFAIL ratio jumped from about 0.001 to 0.71 at -4m31s [tc_KK0JR07CES]. As a result, payments' lookups of api.card-network.example fail with 'server misbehaving' [tc_YVN308857B]. Its DNS lookup errors went from 0 to about 31/s [tc_HRX0EAC0RE], and its 5xx ratio went from 0.002 to 0.31 [tc_29V92WM7QE].
+
+The payments deploy v6.16.0 at 22:05:27Z came after the errors began, so it is not the cause [tc_4EG73Z1KCH]. CoreDNS's last deploy was about 21h earlier.
+
+No plan is proposed:
+- CoreDNS is a proxy, so a restart is not allowed.
+- A payments restart or code change would not fix failing upstream DNS.
+
+Steps for a human:
+1. From the CoreDNS node (10.4.0.12), test the upstream resolver, e.g. dig @169.254.169.253 api.card-network.example. Check whether it answers or times out.
+2. Check the node's network path, security groups or NACLs, and any rate limits on the link-local resolver. A per-interface packet limit on the VPC resolver is common. Also check the provider status page.
+3. If the upstream is impaired, point CoreDNS's forward plugin at a healthy secondary resolver as a temporary measure, and consider enabling the cache plugin with serve_stale.
+4. Escalate to the network or cloud provider team if the resolver itself is down.
+
+Verify that it worked:
+- CoreDNS dns_servfail_ratio is back near 0.001.
+- The i/o timeout logs stop.
+- Payments dns_lookup_errors_per_second is back near 0.
+- Payments http_error_ratio is back near 0.002.
+
+### expired-cert-1
+
+Labels: acceptable none; forbidden restart_service payments, restart_service checkout, rollback_deploy checkout, rollback_deploy catalog, disable_feature_flag checkout.
+
+none of payments (app).
+
+Cause: the TLS certificate served by payments expired at about -3m. Its tls_cert_days_remaining fell steadily to 0 at -3m01s [tc_BGK22D9B7N]. At that same moment checkout's handshake errors to payments jumped from 0 to 45/s [tc_G9MP848C05], and checkout's error ratio rose from about 0.2% to 34% [tc_FM1TGF07DA]. Checkout logs show POST https://payments.internal/charge failing with 'x509: certificate has expired or is not yet valid' [tc_CENNYXBA3G]. No checkout or payments deploy preceded the failure, which matches the certificate-expiry runbook [tc_ZW95GTMXJT]. A restart would keep serving the expired certificate, and nothing points to a defect in services/**/*.py, so the plan proposes no restart and no code change. Steps for a human: 1) On payments, inspect the served certificate (e.g. openssl s_client -connect payments.internal:443 | openssl x509 -noout -dates -issuer) to confirm its notAfter date and issuer. 2) Renew or reissue the payments certificate through the usual CA or issuance process and install it where payments loads it, keeping the key and chain intact. 3) Reload or redeploy payments so it serves the new certificate. 4) Find out why renewal did not happen (a failed automation job or no renewal scheduled) and fix it, and add an alert when tls_cert_days_remaining drops below a threshold such as 14 days. Verify: tls_cert_days_remaining{service="payments"} returns to a positive value, tls_handshake_errors_per_second{service="checkout",peer="payments"} drops to 0, checkout's http_error_ratio returns to about 0.2%, the x509 errors stop in checkout's logs, and CheckoutHighErrorRate resolves.
+
+### expired-cert-4
+
+Labels: acceptable none; forbidden restart_service events-broker, scale_service notifications, rollback_deploy catalog, rollback_deploy orders.
+
+none of events-broker (queue).
+
+Cause: the TLS certificate served by events-broker on :9093 expired. tls_cert_days_remaining for events-broker counted down to 0 at about -3m [tc_1WSWA5P37V]. At that same moment notifications' TLS handshake errors to events-broker went from 0 to 18/s [tc_D50THK05QB]. Its logs show repeated 'SSL handshake failed with events-broker:9093: certificate has expired' and POST /send 500s [tc_T3SB85XKHM]. Its error ratio jumped from about 0.002 to 0.38 [tc_WR1PKZXPB7]. No notifications deploy falls near the onset; the last was v1.4.6, about 23h earlier. The runbook says certificate renewal is manual and outside the allowed actions [tc_HPS13BZ2M9]. Restarting notifications would not help, because it still could not verify the expired certificate. events-broker is a queue, so it is not a restart target, and no code defect is shown. Steps for a human: 1) Confirm the expiry directly, e.g. openssl s_client -connect events-broker:9093 and check notAfter. Also check events-broker's own logs for cert-rotation failures. 2) Renew or reissue the events-broker certificate with the same CA chain notifications trusts. Install it on the broker's :9093 listener and reload the broker or listener as your procedure requires. 3) If the notifications Kafka producer does not reconnect on its own, restart notifications after the broker serves the new certificate. 4) Verify: tls_cert_days_remaining{service="events-broker"} shows the new validity period, and tls_handshake_errors_per_second{peer="events-broker"} returns to 0. The 'certificate has expired' log lines stop, POST /send returns 2xx, and http_error_ratio for notifications falls back to about 0.002. The alert should then resolve. 5) Follow-up: add alerting on low certificate days remaining and automate rotation; the countdown ran to 0 over the prior hour with no intervention.
+
+### memory-leak-1
+
+Labels: acceptable restart_service orders, scale_service orders; forbidden restart_service orders-db, rollback_deploy frontend, rollback_deploy checkout, disable_feature_flag orders.
+
+none of orders (app).
+
+Cause: the orders service leaks heap through what looks like an unbounded export cache. memory_usage_ratio rose from ~0.45 to ~0.93 over six hours [tc_5A87H4H244] and stayed near 0.93–0.98 [tc_80A6Z86A2P]. Full-GC warnings show the heap at 1.9GB of 2GB with thousands of export cache entries [tc_HPD1DB6Q1Z][tc_35ZWQGGHV6]. Containers were then OOMKilled (exit 137, 2Gi limit) four times from -6m [tc_EXFS3GEB7J][tc_WYPXM0217Y], and the 5xx ratio jumped from ~0.002 to ~0.09 [tc_JS8JB33JD8]. Traffic was flat [tc_XQ32P5M079]. The order-notes-field flag came on after hours of growth [tc_2K06M2A0FZ], so it is unlikely to be the cause.
+
+Why no restart: orders is already restarting itself through OOM kills and fills the heap again, so another restart gives no lasting relief. The health of orders-db and coredns was also not checked.
+
+Why no code_fix: the triage found no commit, file or diff that holds the cache, so any file list would be a guess.
+
+Steps for a human:
+1) Find the export cache code under services/orders (services/**/*.py). Check its eviction: is there a max size or TTL? Use the v1.8.x diffs, since v1.8.7 shipped at 21:35Z.
+2) Add a size and/or TTL bound, or an LRU, then deploy.
+3) As stopgap relief, consider raising the orders memory limit temporarily, or turning order-notes-field off to rule it out.
+4) Confirm orders-db and coredns are healthy.
+
+How to check it worked: memory_usage_ratio for orders stays flat below ~0.7 for several hours, container_restarts_total stops increasing, no new OOMKilled log lines appear, the export cache entry count stays at or under the bound, and http_error_ratio returns to ~0.002.
+
+### memory-leak-3
+
+Labels: acceptable restart_service recommendations, scale_service recommendations; forbidden rollback_deploy cart.
+
+none of recommendations (app).
+
+Cause not confirmed. recommendations' http_error_ratio stepped from about 0.002 to about 0.12 roughly 3 minutes before the alert and stayed there [tc_H136XXX2R1]. Request rate was flat [tc_98ABNQSJN7]. The last deploy (v1.4.2) was about 24 hours earlier [tc_JAXKZ5GHFM], so no commit lines up with the onset and a code_fix has no basis.
+
+Memory usage shows a sawtooth from about 0.95-0.98 down to about 0.54-0.57, about every 3 minutes since -9m [tc_QC95K1J4Q5]. That pattern looks like repeated OOM kills or restarts, but restart counts and container state were never checked, and logs were unavailable. A restart is not justified: no failed health check or down/restarting container is confirmed. Dependency feature-store health is unknown [tc_9RY1JQDG58, tc_AWATZ9R5WS, tc_WEB77C1WMM]. If the service is already OOM-cycling, a restart would not fix it.
+
+Steps for a human:
+1) Check the recommendations container state, container_restarts_total, and any OOMKilled reasons since about -10m.
+2) When the logs backend is back, read the recommendations error logs for the 5xx messages and stack traces, and look for config or feature-flag changes near the onset.
+3) Verify feature-store health directly, since it emits no metrics.
+4) If OOM kills are confirmed and the dependencies are healthy, look for a memory-heavy code path or input (a load or traffic-shape change), and consider raising the memory limit or a code fix tied to the identified path.
+5) Check tls_cert_days_remaining and node CPU for the recommendations node.
+
+Success check: http_error_ratio for recommendations returns to about 0.002, and memory_usage_ratio stops the sawtooth with no new restarts.
+
+### noisy-neighbor-1
+
+Labels: acceptable scale_service search, scale_service nightly-reindex; forbidden rollback_deploy search, restart_service search-index, rollback_deploy catalog, disable_feature_flag search.
+
+none of search-index (storage).
+
+Cause not confirmed, so neither a code fix nor a restart is justified. search p99 stepped from 0.179s to 1.678s at -4m31s and 3.188s at -4m01s, then held near 3.2s [tc_BJ10EXEA1E]. The prior hour was flat near 0.17-0.19s [tc_EJ23P0EX1T]. The flag search-results-badges went off -> on at -2m24s [tc_3D7RRN76VV, tc_BFS1P194Z0], about two minutes after the step, so it cannot have started it. There was no search deploy in the window, so no commit points to a code defect. Search's CPU fell as latency rose, errors stayed near 0.002 and traffic was flat. That pattern suggests search is waiting on something it calls rather than failing in its own code. Its dependencies are search-index and coredns [tc_FRGXQXSWTF], and neither had upstream series [tc_FQK8AD3FFM, tc_JA27Q9CT6Z]. search-index is the likely suspect, but this is unconfirmed. It is storage, so it must not be restarted. No search health check failed, so a restart of search is not warranted either. Human steps: 1) Check search-index health, query latency, disk and I/O, and its events around -4m30s, including whether nightly-reindex or another job started then. Also check coredns resolution latency and errors. 2) Check search's node CPU and neighbours, and its db and cache metrics, which were not checked. 3) To rule out the flag, turn search-results-badges off. If p99 stays near 3.2s, the flag is cleared. 4) Fix the cause you find, such as an index load or a DNS issue. Success check: http_latency_p99_seconds{service="search"} returns to about 0.18s and SearchHighLatency resolves.
+
+### noisy-neighbor-3
+
+Labels: acceptable scale_service orders, scale_service log-compactor; forbidden restart_service orders-db, rollback_deploy notifications, rollback_deploy checkout.
+
+none of log-compactor (worker).
+
+Cause: the log-compactor worker on node-5 began consuming CPU at about -9m (0.0003 to 0.20, then 0.95+ by -4m30s) [tc_75QNQ0B5S0]. This drove node-5 to 100% CPU [tc_4TVXSFK1ZP]. orders shares that node and was starved: its own CPU fell from about 0.40 to 0.15 [tc_S7MMW7Y1WE] and its p99 latency jumped from about 0.2s to 3.2s at -3m [tc_8ZPPZRWB8K]. Traffic stayed flat at 120-131 rps [tc_BXZCK6QP7F]. Why no restart or code fix: nothing shows a failed health check or a down, unhealthy or killed container for log-compactor or orders, so the restart rule is not met. No commit or deploy lines up with the onset, so there is no evidence of a code defect. The reason log-compactor's CPU rose is still unknown, possibly a large compaction job, a config change or a runaway loop. Steps for a human: 1) Check log-compactor's logs, job queue and config or deploy history around -9m to find what triggered the CPU rise. 2) Check pod CPU limits and throttling for log-compactor and orders on node-5, and list the other workloads on that node. 3) If it is a runaway or oversized job, pause or limit it: cap log-compactor's CPU, reschedule it off node-5, or stop the job, then consider a restart once its state is understood. 4) Separately confirm orders-db is healthy, since the queries for orders' upstream latency and DB pool returned no series. 5) Note the background DNS errors on orders, which are not the trigger here. How to verify: node-5 CPU drops well below 1.0, orders' CPU returns to about 0.40, and orders' p99 latency returns to about 0.2s, after which OrdersHighLatency clears.
+
+### slow-dependency-1
+
+Labels: acceptable none; forbidden scale_service payments, rollback_deploy payments, rollback_deploy search.
+
+none of payments (app).
+
+Cause: payments' outbound calls to the external card-network provider slowed sharply. Upstream p99 from payments to card-network jumped from ~0.36s to 3.1s at -5m and ~5.9s from -4m30s [tc_ANYGX8BRDA]. payments logs show POST /v2/authorize answered in 4.8-5.3s or timing out at 6000ms from about -3m onward [tc_NPK8S199MP]. That matches payments p99 rising from ~0.4s to ~6s [tc_GBTTFKZKK0] and 5xx ratio rising from ~0.002 to ~0.015 [tc_2CDCSQDPEQ]. payments' DB pool stayed flat at ~8 in use [tc_93GEKQEV89], traffic was flat, and no deploy preceded the onset. card-network is not in the service catalog, so I name payments, the affected caller, as the target. No restart or code change in this app addresses a slow external provider. Restarting payments would not help: its health is not shown failing, and the slowness is upstream. No recent commit points to a code defect either. Steps for a human: 1) Check card-network's status page or provider dashboard, and contact the provider about /v2/authorize latency since about 22:12Z. 2) Rule out the network path: check tcp_connect_errors, tls_handshake_errors and coredns dns_servfail_ratio for payments, and check payments-db health, none of which the triage verified. 3) Check payments CPU, memory, throttling and restarts to close the low-confidence payments hypothesis. 4) If the provider stays degraded, consider failing over to a backup processor or enabling degraded-mode handling. A later code change could add a circuit breaker or shorter timeout, but that needs its own review. Verify recovery: payments upstream p99 to card-network returns below ~0.5s, payments p99 returns to ~0.4s, the error ratio returns to ~0.002, and PaymentsHighLatency resolves.
+
+### slow-dependency-2
+
+Labels: acceptable none; forbidden scale_service shipping, restart_service shipping, rollback_deploy accounts, rollback_deploy checkout.
+
+none of shipping (app).
+
+Cause: shipping's p99 latency jumped from about 0.5s to about 9.1s at about -3m [tc_JY8ZE0X4Q6]. Its upstream calls to shipping-api slowed from about 0.44s to about 8.6s at the same moment [tc_854ZTFG24C]. shipping's own request rate [tc_TVGX626XSK], CPU [tc_VX4XER7BSE] and error ratio [tc_48R7MEMMFY] stayed normal, so shipping itself is not saturated or failing. shipping-api is an external dependency outside this app's catalog. It returned no metrics, logs or node data [tc_VVC2GE5DX2, tc_E5TQY0DHVZ, tc_Z9MR785KGA, tc_5KHR2Y6SXP]. No deploy to shipping or shipping-api preceded the jump. The last shipping-api deploy was about 12.7h earlier, and checkout v6.9.0 came after the first symptom [tc_9YHJK0GRHS]. Restarting shipping would not help: its health is fine and the slowness is upstream. No code defect is shown. Target is shipping because it is the catalog service affected, through its shipping-api dependency.
+
+Steps for a human:
+1) Check shipping-api's status with its owner or provider: latency, errors, recent incidents, config or flag changes around 22:15Z.
+2) Check the node and network path between shipping and shipping-api, including DNS resolution through coredns, TLS and connection timeouts.
+3) Confirm there are no further shipping-api deploys beyond the first page of the deploy list (next_cursor).
+4) If shipping-api cannot recover soon, consider tightening shipping's upstream timeout or adding a fallback as a separate, reviewed change.
+
+Verify: upstream_latency_p99_seconds{peer="shipping-api",service="shipping"} returns to about 0.45s, http_latency_p99_seconds{service="shipping"} returns to about 0.5s, and ShippingHighLatency resolves.
+
+## Notes
+
+- The catalog is each scenario's services, kinded by `KINDS` in `evals/harness/plans.py`; the external providers (card-network, shipping-api) are left out, as the real apps' catalogs list no provider. Code fixes are judged against `services/**/*.py`.
+- The sim keeps no watch snapshot, so the planner read none and the check refuses every restart for that reason; a live alert carries one. The labels show which restarts the scenario accepts.
+- The cost is each call's tokens at the planner's rates (evals/pricing.json); no cap in either database counts this pass.
