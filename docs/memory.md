@@ -302,6 +302,7 @@ From the approved design doc:
   - `RESTARTABLE` moved from `agent.planner` to `watch.catalog`, so the planner's check and the executor share one rule.
   - The restart runs in an empty temporary directory, with no `COMPOSE_*` variable passed on. Why: compose would otherwise read a compose file or `.env` it finds there. `docker compose -p freightaudit ps -a` from an empty directory listed FA's dev containers (Compose v5.6.1), so a project is found by its name alone. `restart` from an empty directory is not yet seen on a real container.
   - FreightAudit's dev stack runs no app or worker container (its api and worker run on the host), so P3.3's real restart cannot target FA dev as written; the user chooses the target.
+- 2026-11-02: P3.3's real restart is not run, and production restarts stay off (the user's decision). Why: FA's dev stack has no app or worker container to restart, and the user keeps the executor away from production. What we did: only the dry-run drill ran (docs/activity-log.md); production deploys no executor, and the `actions` switch stays off.
 
 ## Preferences and Instructions
 
