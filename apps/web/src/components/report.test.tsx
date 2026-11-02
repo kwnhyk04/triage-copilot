@@ -16,34 +16,69 @@ const decide = () => Promise.resolve();
 const shown = (investigation: Investigation, props: Partial<ReportProps> = {}) =>
   renderToStaticMarkup(<Report investigation={investigation} now={NOW} {...props} />);
 const count = (html: string, text: string) => html.split(text).length - 1;
+// Where each text first shows, so a test can say they come in this order.
+const order = (html: string, texts: string[]) => {
+  const at = texts.map((text) => html.indexOf(text));
+  expect(texts.filter((_, i) => (at[i] ?? -1) < 0)).toEqual([]);
+  expect([...at].sort((a, b) => a - b)).toEqual(at);
+};
 
 describe('Report', () => {
-  it('leads with the verdict tag, then the cause and its evidence as the tool returned it', () => {
+  it('leads with the title, the verdict, status and plan badges, and when it opened', () => {
     const html = shown(WORKER_OUT_OF_MEMORY);
-    for (const text of [
-      'Real incident',
+    order(html, [
       '<h1>ContainerDown on worker</h1>',
-      'Report ready, opened 09:52 UTC',
-      'resource exhaustion in worker',
+      '<span class="badge bad">Real incident</span>',
+      '<span class="badge ok">Report ready</span>',
+      '<span class="badge warn">Decision needed</span>',
+      'Opened 09:52 UTC',
+    ]);
+  });
+
+  it('reads in order: verdict and cause, evidence, steps, models that served, missing evidence', () => {
+    order(shown(WORKER_OUT_OF_MEMORY), [
+      '>Verdict and cause<',
+      '>Evidence<',
+      '>Steps<',
+      '>Models that served<',
+      '>Missing evidence<',
+    ]);
+  });
+
+  it('gives the top cause with its confidence, then the other causes considered', () => {
+    order(shown(WORKER_OUT_OF_MEMORY), [
+      'Resource exhaustion in worker',
       '80%',
       'The worker runs out of memory on large invoices and is killed with code 137.',
-      'worker    exited (137) 2 minutes ago, restarting',
-      // Evidence is labeled with its tool and id.
+      'Other causes considered',
+      'A queue outage could stop the worker, but redis answers its health check.',
+    ]);
+  });
+
+  it('shows the evidence as the tool returned it, labeled with its tool and id', () => {
+    const html = shown(WORKER_OUT_OF_MEMORY);
+    for (const text of [
       'read_snapshot',
       'tc_01JB2SNAP01',
+      'worker    exited (137) 2 minutes ago, restarting',
+      'No result kept',
       'get_dependencies failed: it timed out.',
     ]) {
       expect([text, html.includes(text)]).toEqual([text, true]);
     }
-    expect(html).toContain('class="evidence"');
-    expect(html).toContain('No result kept');
+    expect(html).toContain('<pre class="excerpt">');
   });
 
-  it('lists the models asked and what answered when one missed', () => {
+  it('lists the models that served, their counts as figures, and what answered when one missed', () => {
     const html = shown(WORKER_OUT_OF_MEMORY);
     for (const text of ['gemini-3.5-flash-lite', 'claude-opus-5-5', 'Plan', 'Log summaries']) {
       expect(html).toContain(text);
     }
+    // On a phone each model is a card, its counts named by their labels.
+    expect(html).toContain(
+      '<td class="figure" data-card="aside"><span class="card-label">Missed</span>' +
+        '<span class="figure-block">1</span></td>',
+    );
     expect(html).toContain(
       'Triage: gemini-3.5-flash-lite answered; claude-haiku-5-5 missed 1 request',
     );
@@ -57,23 +92,36 @@ describe('Report', () => {
     expect(html).toContain('(request 4827)');
   });
 
-  it('puts a pending plan first, with Approve and Reject, which only record a decision', () => {
+  it('puts the plan after the verdict and cause, with Approve plan and Reject plan', () => {
     const html = shown(WORKER_OUT_OF_MEMORY, { decide });
-    expect(html.indexOf('Decision needed')).toBeLessThan(html.indexOf('>Cause<'));
+    order(html, ['id="verdict"', 'id="plan"', 'id="evidence"']);
     for (const text of [
       'Restart worker',
       'A restart frees its memory',
       'name="reason"',
-      '>Approve plan</button>',
-      '>Reject plan</button>',
-      'nothing runs from a plan yet',
+      'Approving only records the decision unless the actions switch is on. ' +
+        'With it on, the executor restarts worker once.',
     ]) {
       expect([text, html.includes(text)]).toEqual([text, true]);
     }
+    // Approve fills with the accent; Reject is outlined in red. React orders the attributes.
+    const button = (value: string, look: string, text: string) =>
+      new RegExp(
+        `<button (?=[^>]*type="submit")(?=[^>]*name="verdict")(?=[^>]*value="${value}")` +
+          `(?=[^>]*class="button ${look}")[^>]*>${text}</button>`,
+      );
+    expect(html).toMatch(button('approve', 'primary', 'Approve plan'));
+    expect(html).toMatch(button('reject', 'danger', 'Reject plan'));
     // The approver is the signed-in operator, never a name typed in.
     expect(html).not.toContain('name="approver"');
     // Without a way to decide, the plan stays read-only.
     expect(shown(WORKER_OUT_OF_MEMORY)).not.toContain('<form');
+  });
+
+  it('says that approving a code fix runs nothing', () => {
+    expect(shown(ANSWERS_AFTER_RENAME, { decide })).toContain(
+      'Approving only records the decision: nothing runs from this kind of plan.',
+    );
   });
 
   it("disables the demo's plan buttons and gives them no action", () => {
@@ -89,6 +137,7 @@ describe('Report', () => {
       'Code fix in api',
       'services/api/settings.py',
       'Approved at 25 Oct, 14:20 UTC by operator',
+      '<span class="badge ok">Approved</span>',
     ]) {
       expect(html).toContain(text);
     }
@@ -134,7 +183,7 @@ describe('Report', () => {
       ],
     };
     const html = shown(run, { decide });
-    expect(html).toContain('Simulated');
+    expect(html).toContain('<span class="badge">Simulated</span>');
     expect(html).not.toContain('Real incident');
     expect(html).toContain('Rollback deploy on checkout');
     expect(html).toContain('Errors began two minutes after v1.8.0.');
@@ -154,6 +203,7 @@ describe('Report', () => {
     expect(html).toContain('Running, 5 steps so far, last at 09:54:10 UTC');
     expect(html).toContain('>Pause updates</button>');
     expect(html).toContain('data-every="3"');
+    expect(html).toContain('<span class="badge info busy">Running</span>');
     // A settled report, or a page that never refreshes, such as the demo's, has neither.
     expect(shown(WORKER_OUT_OF_MEMORY, { refresh: true })).not.toContain('role="status"');
     expect(shown(running)).not.toContain('role="status"');
@@ -163,7 +213,7 @@ describe('Report', () => {
     const html = shown(WORKER_OUT_OF_MEMORY);
     for (const text of [
       'get_dependencies',
-      'timeout',
+      '<span class="badge warn">Timed out</span>',
       '10,000 ms',
       '12 ms',
       'What the worker needs.',

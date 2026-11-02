@@ -4,7 +4,6 @@ import Link from 'next/link';
 export default function Landing() {
   return (
     <main id="main" className="page narrow landing">
-      <p className="brand">Triage Copilot</p>
       <h1>Is this alert a real incident?</h1>
       <p className="lede">
         Triage Copilot reads the logs, metrics and recent changes behind an alert. It says whether
@@ -13,12 +12,12 @@ export default function Landing() {
       </p>
       <ul className="actions" role="list">
         <li>
-          <Link className="button" href="/login">
+          <Link className="button primary large" href="/login">
             Sign in
           </Link>
         </li>
         <li>
-          <Link className="button quiet" href="/demo">
+          <Link className="button large" href="/demo">
             Open the demo
           </Link>
         </li>

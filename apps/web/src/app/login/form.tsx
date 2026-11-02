@@ -29,11 +29,11 @@ export function SignInForm({ next, maxLength }: { next: string; maxLength: numbe
         aria-describedby={state.error === undefined ? undefined : 'sign-in-error'}
       />
       {state.error !== undefined && (
-        <p id="sign-in-error" className="error" role="alert">
+        <p id="sign-in-error" className="form-error" role="alert">
           {MESSAGES[state.error]}
         </p>
       )}
-      <button type="submit" className="primary" disabled={pending}>
+      <button type="submit" className="button primary" disabled={pending}>
         {pending ? 'Signing in' : 'Sign in'}
       </button>
     </form>

@@ -1,11 +1,11 @@
-import { InvestigationList, SourceTabs, TABS } from '../../../components/investigation-list.tsx';
+import { InvestigationList } from '../../../components/investigation-list.tsx';
 import { readInvestigations } from '../../../lib/data.ts';
 import type { Source } from '../../../lib/investigations.ts';
-import { requestTime } from '../../../lib/report.ts';
+import { requestTime, TABS } from '../../../lib/report.ts';
 
 export const metadata = { title: 'Investigations: Triage Copilot' };
 
-/** Live incidents (the default) or eval runs, newest first, 25 a page. */
+/** Live incidents (the default) or eval runs, newest first, 25 a page; the header links both. */
 export default async function Investigations({
   searchParams,
 }: {
@@ -18,7 +18,6 @@ export default async function Investigations({
   return (
     <main id="main" className="page">
       <h1>{TABS[source]}</h1>
-      <SourceTabs source={source} listPath="/investigations" />
       <InvestigationList
         items={page.items}
         source={source}

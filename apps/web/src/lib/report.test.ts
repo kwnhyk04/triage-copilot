@@ -1,13 +1,17 @@
 import { ONE_CLIENT_RETRYING, WORKER_OUT_OF_MEMORY } from '../demo/live-samples.ts';
 import {
   ago,
-  band,
-  causeBrief,
+  causeName,
   fallbackNotes,
+  percent,
+  PLAN_STATES,
+  planNote,
   progressLine,
   STATUSES,
+  statusBadge,
   stillChanging,
   utcTime,
+  verdictBadge,
 } from './report.ts';
 
 describe('fallbackNotes', () => {
@@ -46,20 +50,67 @@ describe('labels', () => {
     });
   });
 
-  it("gives each tag its band: the verdict, a simulated incident's, or one still open", () => {
+  it('gives each verdict one badge, red only for a real incident', () => {
     const live = { ...WORKER_OUT_OF_MEMORY, verdict: null };
-    expect(band(WORKER_OUT_OF_MEMORY)).toEqual({ kind: 'real', label: 'Real incident' });
-    expect(band(ONE_CLIENT_RETRYING)).toEqual({ kind: 'not-real', label: 'Not a real incident' });
-    expect(band({ ...live, source: 'sim' })).toEqual({ kind: 'simulated', label: 'Simulated' });
+    expect(verdictBadge(WORKER_OUT_OF_MEMORY)).toEqual({ label: 'Real incident', tone: 'bad' });
+    expect(verdictBadge(ONE_CLIENT_RETRYING)).toEqual({
+      label: 'Not a real incident',
+      tone: 'neutral',
+    });
+    expect(verdictBadge({ ...live, source: 'sim' })).toEqual({
+      label: 'Simulated',
+      tone: 'neutral',
+    });
     for (const status of ['queued', 'running'] as const) {
-      expect(band({ ...live, status })).toEqual({ kind: 'open', label: 'Investigating' });
+      expect(verdictBadge({ ...live, status })).toEqual({
+        label: 'Investigating',
+        tone: 'info',
+        busy: true,
+      });
     }
-    expect(band({ ...live, status: 'resolved' })).toEqual({ kind: 'none', label: 'No verdict' });
+    expect(verdictBadge({ ...live, status: 'resolved' })).toEqual({
+      label: 'No verdict',
+      tone: 'neutral',
+    });
   });
 
-  it('says the top cause in brief', () => {
-    expect(causeBrief(WORKER_OUT_OF_MEMORY.cause)).toBe('Resource exhaustion in worker, 80%');
-    expect(causeBrief(null)).toBeUndefined();
+  it('colours each status and plan state, with a pulsing dot while running', () => {
+    const statuses = Object.keys(STATUSES) as (keyof typeof STATUSES)[];
+    expect(statuses.map(statusBadge)).toEqual([
+      { label: 'Queued', tone: 'neutral' },
+      { label: 'Running', tone: 'info', busy: true },
+      { label: 'Needs approval', tone: 'warn' },
+      { label: 'Report ready', tone: 'ok' },
+      { label: 'Failed', tone: 'fail' },
+      { label: 'Cancelled', tone: 'neutral' },
+    ]);
+    expect(PLAN_STATES).toEqual({
+      pending: { label: 'Decision needed', tone: 'warn' },
+      approved: { label: 'Approved', tone: 'ok' },
+      rejected: { label: 'Rejected', tone: 'neutral' },
+    });
+  });
+
+  it('says what approving does: a restart runs once while the actions switch is on', () => {
+    expect(planNote({ kind: 'restart_service', target: 'worker' })).toBe(
+      'Approving only records the decision unless the actions switch is on. ' +
+        'With it on, the executor restarts worker once.',
+    );
+    for (const kind of ['code_fix', 'none'] as const) {
+      expect(planNote({ kind, target: 'api' })).toBe(
+        'Approving only records the decision: nothing runs from this kind of plan.',
+      );
+    }
+  });
+
+  it('names the top cause and its confidence', () => {
+    const top = { root_cause_class: 'resource_exhaustion', service: 'worker' } as const;
+    expect(causeName(top)).toBe('Resource exhaustion in worker');
+    expect([0.8, 0.756, 1].map((confidence) => percent(confidence))).toEqual([
+      '80%',
+      '76%',
+      '100%',
+    ]);
   });
 
   it('shows a time in UTC, with the day when it is not today, and its age', () => {

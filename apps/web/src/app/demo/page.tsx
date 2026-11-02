@@ -1,7 +1,7 @@
-import { InvestigationList, SourceTabs, TABS } from '../../components/investigation-list.tsx';
+import { InvestigationList } from '../../components/investigation-list.tsx';
 import { demoPage, ILLUSTRATIVE } from '../../demo/index.ts';
 import type { Source } from '../../lib/investigations.ts';
-import { requestTime } from '../../lib/report.ts';
+import { requestTime, TABS } from '../../lib/report.ts';
 
 export const metadata = { title: 'Demo: Triage Copilot' };
 
@@ -17,13 +17,12 @@ export default async function DemoList({
   return (
     <main id="main" className="page">
       {offline === '1' && (
-        <p className="empty" role="status">
+        <p className="notice" role="status">
           The live system is not answering. It runs on a PC that may be off, so these are the saved
           samples.
         </p>
       )}
       <h1>{TABS[source]}</h1>
-      <SourceTabs source={source} listPath="/demo" />
       <InvestigationList
         items={page.items}
         source={source}

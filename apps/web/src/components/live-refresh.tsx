@@ -24,7 +24,7 @@ export function LiveRefresh({ seconds, status }: { seconds: number; status: stri
       <p role="status">{status}</p>
       <button
         type="button"
-        className="button quiet"
+        className="button small"
         onClick={() => {
           setPaused(!paused);
         }}

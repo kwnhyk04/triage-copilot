@@ -85,13 +85,23 @@ describe('proxy', () => {
     expect(nonceOf(proxy(request('/login')))).not.toBe(nonceOf(first));
   });
 
-  it('runs on every path but static files', () => {
+  it('runs on every path but static files and the icons, which sign-in shows too', () => {
     const matches = (url: string) => unstable_doesMiddlewareMatch({ config, url });
-    expect([REPORT, '/', '/demo', '/logout'].map(matches)).toEqual([true, true, true, true]);
-    expect(['/_next/static/chunks/a.js', '/_next/image', '/favicon.ico'].map(matches)).toEqual([
-      false,
-      false,
-      false,
+    expect([REPORT, '/', '/demo', '/logout', '/icons'].map(matches)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
     ]);
+    expect(
+      [
+        '/_next/static/chunks/a.js',
+        '/_next/image',
+        '/favicon.ico',
+        '/icon.svg',
+        '/apple-icon.png',
+      ].map(matches),
+    ).toEqual([false, false, false, false, false]);
   });
 });

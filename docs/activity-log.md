@@ -19,6 +19,29 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-03: Web UI pass so TC matches FreightAudit and FilingLens (header, logo, list tables, badges, report order)
+
+- What happened: the user asked for a light UI pass of the web so it matches FA's and FL's apps, planned first. It was built after their go with four answers: Atkinson Hyperlegible stays; one amber for the logo at 3:1 or more on white and dark; the plan note worded by the plan's kind; the CSP stays, with the column widths in `globals.css`. Built in main's working tree, not committed.
+- Why: the user's request (docs/todo.md).
+- What we did, in order:
+  1. Read FA's `components/ui.tsx`, `app/globals.css`, `lib/theme.ts`, `components/logo.tsx`, `components/client.tsx`, `app/icon.svg` and the icon names in `components/icons.tsx`, read-only. FL's app was not read, since only FA's files were named. TC's four icons (system, light, dark, menu) are drawn new, not copied from FA's Tabler set.
+  2. Tests first, each run red before the code (6 suites and 22 tests failed). Unit tests: `lib/theme.test.ts`, `components/header.test.tsx`, the list and report tests rewritten, the badges and the note in `lib/report.test.ts`, and the icons in `proxy.test.ts`'s matcher test. Browser tests: the icons load without a session; the header's Sign out works; a chosen theme survives a reload and System forgets it; the phone menu and the one-button theme work.
+  3. The code: `lib/theme.ts` (the `tc-theme` cookie), `components/{header,client,logo,icons,ui}.tsx`, and the badge, note and cause helpers in `lib/report.ts`. The list and report were rewritten. The root layout reads the theme cookie and renders the header; `(app)/layout.tsx` is deleted; the pages lost their tabs. The proxy's matcher skips the two icons. `globals.css` was rewritten from FA's tokens and components.
+  4. The logo, redrawn from `_tmp/logos/triage-copilot-logo.png`: one path whose part above the baseline is clipped to amber, in `docs/brand/triage-copilot-mark-{light,dark,mono}.svg`. `app/icon.svg` uses a 6-unit stroke for 16 px. `app/apple-icon.png` is a 180 px dark tile, rendered once with `pnpm exec playwright screenshot` from a scratch SVG. The favicon was checked rasterized at 16 and 32 px.
+  5. Screenshots: a temporary Playwright config and spec under `apps/web/test-results/screens/` (ignored by git), on the browser tests' servers, signed in, the theme set by the `tc-theme` cookie. They wrote 42 PNGs to `H:\Projects\projects\_tmp\tc-ui`. Pages: the report with a pending plan, Live incidents, Eval runs, the demo reached offline, and a demo report. Each at 1280, 1440, 1920 and 390 px in light and dark, plus the open phone menu. The temporary files were deleted after.
+  - Small events, each with what we did:
+    - 4 unit tests failed after the code on attribute order alone. Why: React writes a form's `action` before `method` and a radio's `checked` before `value`, and `next/link` puts `aria-current` before `href`. What we did: the tests take that order, and match the plan buttons with lookaheads.
+    - `tsc` failed on `.next/types/validator.ts`, which still named the deleted `(app)/layout.tsx`. What we did: `pnpm --filter @triage/web build` wrote it again.
+    - ESLint's `react-hooks/immutability` refused the theme switch writing `document.cookie` and `data-theme` inside the component. What we did: the writes moved to a module function, `applyTheme`.
+    - Prettier wanted three lines wrapped in two of my files. What we did: wrapped them by hand.
+    - The first amber, `#c4820b`, measured 2.99:1 on the light canvas. What we did: `#bf7e0a` replaced it everywhere (3.16:1 there).
+    - axe failed in light (desktop and phone) on the demo report's illustrative label: `--text-3` on the canvas is under 4.5:1. What we did: the label uses `--text-2`.
+    - On a 390 px phone the models table broke names mid-word. What we did: it became cards there, the model first (`order: -1`) and its counts labelled.
+    - `make lint` failed on `.impeccable/hook.cache.json`. Why: the design hook writes this cache at the repo root and in `apps/web` after edits. `.git/info/exclude` hides both from git, but `prettier --check .` reads them. What we did: deleted both before `make lint`.
+- Files: `apps/web/src/app/{layout.tsx,page.tsx,globals.css,icon.svg,apple-icon.png,not-found.tsx}`, `apps/web/src/app/(app)/{error.tsx,investigations/page.tsx,investigations/[id]/page.tsx}`, `apps/web/src/app/(app)/layout.tsx` (deleted), `apps/web/src/app/demo/{layout.tsx,page.tsx,investigations/[id]/page.tsx}`, `apps/web/src/app/login/{page.tsx,form.tsx}`, `apps/web/src/components/{header,client,logo,icons,ui,investigation-list,report,live-refresh}.tsx`, `apps/web/src/lib/{theme,report}.ts`, `apps/web/src/proxy.ts`, their tests, `apps/web/e2e/{auth,demo}.spec.ts`, `docs/brand/*.svg`, README, docs.
+- Validation: `make lint` exit 0; `make typecheck` exit 0 (5 TypeScript tasks; pyright 0 errors); `make test` exit 0 (ts-clients 55, ts-config 3, gateway 80, web 101; pytest 693 passed, 154 deselected); `make test-e2e` exit 0 (19 passed, axe included). `make test-int` was not run: it was not asked, and no backend code changed. Production was not touched.
+- Outstanding: nothing is committed. While the design hook's cache files exist, `make lint` fails on them.
+
 ### 2026-11-02: P3.3's dry-run drill on the dev stack; the real restart not run
 
 - What happened: the user asked to run P3.3's dry-run drill, steps 1 to 7 of the Phase 3 entry below, one step at a time. Their bounds: never `EXECUTOR_DRY_RUN=false` and never a real restart. Afterwards, return dev to how it was, and skip step 8. P3.3's real restart was not run: FA's dev stack has no app or worker container, and production restarts stay off by decision (the user).

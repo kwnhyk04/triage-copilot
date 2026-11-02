@@ -2,8 +2,19 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import type { Investigation, Source } from '../lib/investigations.ts';
-import { ago, band, causeBrief, STATUSES, stillChanging } from '../lib/report.ts';
+import {
+  ago,
+  causeName,
+  percent,
+  PLAN_STATES,
+  statusBadge,
+  stillChanging,
+  TABS,
+  utcTime,
+  verdictBadge,
+} from '../lib/report.ts';
 import { LiveRefresh } from './live-refresh.tsx';
+import { Badge } from './ui.tsx';
 
 // The list refreshes every 10 s while one of its items may still change.
 const REFRESH_SECONDS = 10;
@@ -32,38 +43,13 @@ const EMPTY: Record<Source, ReactNode> = {
     </>
   ),
 };
-export const TABS: Record<Source, string> = { live: 'Live incidents', sim: 'Eval runs' };
-
-/** The tag's band, the punched hole and its first words, with a chip while a plan waits. */
-export function TagBand({ item }: { item: Summary }) {
-  return (
-    <div className="band">
-      <span className="hole" aria-hidden="true" />
-      <span className="band-label">{band(item).label}</span>
-      {item.plan_status === 'pending' && <span className="chip">Decision needed</span>}
-    </div>
-  );
-}
-
-/** The two tabs, Live incidents and Eval runs, of the list at `listPath`. */
-export function SourceTabs({ source, listPath }: { source: Source; listPath: string }) {
-  return (
-    <nav className="tabs" aria-label="Investigations">
-      <ul role="list">
-        {(Object.keys(TABS) as Source[]).map((tab) => (
-          <li key={tab}>
-            <Link
-              href={`${listPath}?source=${tab}`}
-              aria-current={tab === source ? 'page' : undefined}
-            >
-              {TABS[tab]}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
+// Each list's columns in order; globals.css gives each its base width and an equal share of the
+// spare width. Eval runs have no verdict and no plan, so they leave both out.
+const COLUMNS: Record<Source, string[]> = {
+  live: ['Incident', 'Verdict', 'Cause', 'Confidence', 'Plan', 'Status', 'Opened'],
+  sim: ['Run', 'Cause', 'Confidence', 'Status', 'Opened'],
+};
+const NONE = <span className="faint">None</span>;
 
 export interface ListProps {
   items: readonly Summary[];
@@ -80,7 +66,11 @@ export interface ListProps {
   refresh?: boolean;
 }
 
-/** Investigations as triage tags, newest first, with a link to the older ones. */
+/**
+ * Investigations as a table, newest first, with a link to the older ones. Below 720 px each row is
+ * a card, its cells placed by data-card: the incident and verdict, then the status, plan and age,
+ * then the cause with its confidence.
+ */
 export function InvestigationList({
   items,
   source,
@@ -92,6 +82,7 @@ export function InvestigationList({
   refresh,
 }: ListProps) {
   const changing = refresh === true ? items.filter((item) => stillChanging(item, now)).length : 0;
+  const live = source === 'live';
   return (
     <>
       {changing > 0 && (
@@ -103,37 +94,92 @@ export function InvestigationList({
       {items.length === 0 ? (
         <p className="empty">{EMPTY[source]}</p>
       ) : (
-        <ul className="tags" role="list">
-          {items.map((item) => {
-            const brief = causeBrief(item.cause);
-            return (
-              <li
-                key={item.id}
-                className="tag"
-                data-kind={band(item).kind}
-                data-running={item.status === 'running' ? '' : undefined}
-              >
-                <TagBand item={item} />
-                <div className="tag-body">
-                  <h2 className="tag-title">
+        <div
+          className="table-wrap list card-list"
+          role="region"
+          aria-label={TABS[source]}
+          tabIndex={0}
+        >
+          <table className={`list-table cards fixed ${live ? 'incidents' : 'runs'}`}>
+            <caption className="visually-hidden">{TABS[source]}, newest first</caption>
+            <colgroup>
+              {COLUMNS[source].map((column) => (
+                <col key={column} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {COLUMNS[source].map((column) => (
+                  <th
+                    key={column}
+                    scope="col"
+                    className={column === 'Confidence' ? 'center' : undefined}
+                  >
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td data-card="title">
                     <Link href={`${basePath}/${item.id}`}>{item.title}</Link>
-                  </h2>
-                  {brief !== undefined && <p className="tag-cause">{brief}</p>}
-                  <p className="tag-status">
-                    {STATUSES[item.status]}, opened {ago(item.created_at, now)}
-                  </p>
-                  {illustrative?.has(item.id) && (
-                    <p className="illustrative">{ILLUSTRATIVE_LABEL}</p>
+                    {illustrative?.has(item.id) === true && (
+                      <span className="illustrative">{ILLUSTRATIVE_LABEL}</span>
+                    )}
+                  </td>
+                  {live && (
+                    <td data-card="aside">
+                      <Badge state={verdictBadge(item)} />
+                    </td>
                   )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  <td data-card={item.cause === null ? 'hide' : 'wide'}>
+                    {item.cause === null ? (
+                      NONE
+                    ) : (
+                      <>
+                        {causeName(item.cause)}
+                        <span className="phone-only">{`, ${percent(item.cause.confidence)}`}</span>
+                      </>
+                    )}
+                  </td>
+                  <td className="figure" data-card="hide">
+                    {item.cause === null ? (
+                      NONE
+                    ) : (
+                      <span className="figure-block">{percent(item.cause.confidence)}</span>
+                    )}
+                  </td>
+                  {live && (
+                    <td data-card={item.plan_status === null ? 'hide' : 'aside'}>
+                      {item.plan_status === null ? (
+                        NONE
+                      ) : (
+                        <Badge state={PLAN_STATES[item.plan_status]} />
+                      )}
+                    </td>
+                  )}
+                  <td data-card={live ? 'meta' : 'aside'}>
+                    <Badge state={statusBadge(item.status)} />
+                  </td>
+                  <td data-card="meta">
+                    <time dateTime={item.created_at} title={utcTime(item.created_at, now)}>
+                      {ago(item.created_at, now)}
+                    </time>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {nextCursor !== null && (
-        <p className="older">
-          <Link href={`${listPath}?source=${source}&cursor=${encodeURIComponent(nextCursor)}`}>
+        <p className="pager">
+          <Link
+            className="button"
+            href={`${listPath}?source=${source}&cursor=${encodeURIComponent(nextCursor)}`}
+          >
             Older
           </Link>
         </p>
