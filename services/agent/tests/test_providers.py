@@ -49,6 +49,7 @@ from agent.providers import (
     GeminiProvider,
     OpenAICompatibleProvider,
     make_provider,
+    plan_limits,
 )
 from agent.settings import Provider as ProviderName
 from agent.settings import Role
@@ -504,6 +505,17 @@ def test_claude_plans_in_one_streamed_structured_answer_with_no_tools() -> None:
         assert absent not in body
     # Its own timeout, longer than a triage turn's.
     assert request.extensions["timeout"]["read"] == PLAN_TIMEOUT == 300.0
+
+
+def test_more_effort_gets_more_output_room_and_time_and_medium_keeps_its_own() -> None:
+    assert [plan_limits(e) for e in (None, "low", "medium", "high", "xhigh", "max")] == [
+        (16_000, 300.0),
+        (16_000, 300.0),
+        (16_000, 300.0),
+        (32_000, 600.0),
+        (64_000, 900.0),
+        (64_000, 900.0),
+    ]
 
 
 def test_a_refused_or_cut_off_plan_is_never_retried_and_keeps_its_usage() -> None:

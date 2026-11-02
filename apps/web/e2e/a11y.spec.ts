@@ -2,6 +2,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 
 import { ANSWERS_AFTER_RENAME, EVAL_RUNS, WORKER_OUT_OF_MEMORY } from '../src/demo/index.ts';
+import { E2E } from './shared.ts';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 // A session skips the landing and sign-in, so those two are checked after the cookies are cleared.
@@ -15,6 +16,8 @@ const SIGNED_IN = [
   '/investigations?source=sim',
   `/investigations/${WORKER_OUT_OF_MEMORY.id}`,
   `/investigations/${ANSWERS_AFTER_RENAME.id}`,
+  // Still planning on the first visit, then with its plan.
+  `/investigations/${E2E.planningId}`,
   '/no-such-page',
 ];
 const SIZES = { desktop: { width: 1280, height: 800 }, phone: { width: 390, height: 844 } };

@@ -160,7 +160,7 @@ eval:
 # stopped, so the same command goes on where it stopped.
 eval-plans: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
 eval-plans:
-	uv run python evals/harness/plans.py $(if $(ESTIMATE),--estimate)
+	uv run python evals/harness/plans.py $(if $(ESTIMATE),--estimate) $(if $(MAX_USD),--max-usd $(MAX_USD))
 
 # Every scenario set passes the validator, and a released set never changes: a file of a
 # v<N> set that exists at SCENARIOS_BASE (default HEAD; CI passes the target branch) must be

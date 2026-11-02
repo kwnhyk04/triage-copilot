@@ -110,12 +110,22 @@ describe('InvestigationList', () => {
     const running = { ...WORKER_OUT_OF_MEMORY, status: 'running' as const };
     const html = shown({ items: [running, ...LIVE_SAMPLES.slice(1)], refresh: true });
     expect(html).toContain('role="status"');
-    expect(html).toContain('1 investigation is still running');
+    expect(html).toContain('1 investigation is still running or planning');
     expect(html).toContain('>Pause updates</button>');
     expect(html).toContain('data-every="10"');
     expect(html).toContain('<span class="badge info busy">Running</span>');
     // Settled items, or a list that never refreshes, show neither.
     expect(shown({ refresh: true })).not.toContain('role="status"');
     expect(shown({ items: [running] })).not.toContain('role="status"');
+  });
+
+  it('shows a real verdict waiting for its plan as planning, while the list refreshes', () => {
+    const waiting = { ...WORKER_OUT_OF_MEMORY, updated_at: '2026-10-26T10:00:00.000Z' };
+    const items = [{ ...waiting, plan_status: null }];
+    const html = shown({ items, refresh: true });
+    expect(html).toContain('<td data-card="aside"><span class="badge info busy">Planning</span>');
+    expect(html).toContain('1 investigation is still running or planning');
+    // A list that never refreshes, such as the demo's, never says a plan is coming.
+    expect(shown({ items })).not.toContain('Planning');
   });
 });

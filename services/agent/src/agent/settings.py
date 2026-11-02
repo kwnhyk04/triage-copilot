@@ -124,10 +124,11 @@ class Settings(EnvSettings):
     llm_claude_monthly_usd: Annotated[float, Field(ge=0)] = 15.0
     # The plan for a real incident's fix asks Claude first, while ANTHROPIC_API_KEY is set and
     # before LLM_CLAUDE_UNTIL, then the free chain. A Claude plan runs only if today's plans (UTC)
-    # plus its worst case stay within LLM_PLANNER_DAILY_USD.
+    # plus its worst case stay within LLM_PLANNER_DAILY_USD. Max fixed both plans medium got wrong
+    # on the dev split (2026-11-03); $3.50 fits three of its plans a day.
     llm_planner_model: str = "claude-opus-5-5"
-    llm_planner_effort: Effort = "medium"
-    llm_planner_daily_usd: Annotated[float, Field(ge=0)] = 1.00
+    llm_planner_effort: Effort = "max"
+    llm_planner_daily_usd: Annotated[float, Field(ge=0)] = 3.50
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None

@@ -86,6 +86,19 @@ def test_the_check_refuses_restarts_without_a_snapshot_and_any_change_to_storage
     assert total["kinds"] == {"restart_service": 2, "code_fix": 1} and total["kept"] == 1
 
 
+def test_the_spend_limit_holds_the_next_plan_s_worst_case() -> None:
+    assert plans.fits(None, 99.0, 99.0)
+    assert plans.fits(8.0, 6.0, 2.0)
+    assert not plans.fits(8.0, 6.5, 1.6)
+
+
+def test_a_report_names_its_effort_so_two_passes_of_a_day_stay_apart() -> None:
+    names = {plans.report_name("2026-11-03", "claude-opus-5-5", e) for e in ("high", "max")}
+    assert len(names) == 2
+    assert all(name.startswith("2026-11-03-dev-plans-") for name in names)
+    assert any(name.endswith("-claude-opus-5-5-max") for name in names)
+
+
 def test_a_call_that_failed_before_any_output_is_not_kept() -> None:
     row = planned("memory-leak-1", "none", "orders")
     row["calls"][0] |= {"outcome": "error", "usage": {"output": 0}}

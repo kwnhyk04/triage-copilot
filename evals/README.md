@@ -107,11 +107,12 @@ In CI, `.github/workflows/eval.yml` runs the ci subset on Mondays at 18:00 UTC (
 
 Only `make eval` and `make smoke` get `SIM_ADMIN_URL`. Defaults: `SPLIT=dev`, `SUBSET=full`, `RUNS` 1 for the ci subset and 3 otherwise.
 
-The planner (P2.5) has its own pass, `make eval-plans`, which needs no stack: it plans each dev scenario's cached Claude-first run of P0 (2026-11-01) with the planner's Claude (`claude-opus-5-5` at effort medium), one call a plan with no model behind it, and runs the agent's check on each answer. Its catalog is the scenario's services with the kinds in `KINDS` (`harness/plans.py`), the external providers left out; the sim keeps no watch snapshot, so the check refuses every restart. `ESTIMATE=1` prints the most the pass can cost and a likely range, and calls nothing. Answered plans are kept in `reports/plans/` (git-ignored), so a stopped pass (exit 2) goes on where it stopped; the finished pass writes `reports/<date>-dev-plans-<planner sha, first 8>-<model>.json` and `.md`. Exit 1 means the check kept a restart or code fix of a database, queue, cache, storage or proxy. Nothing is scored against the labels; the report shows them beside each plan for a human to read.
+The planner (P2.5) has its own pass, `make eval-plans`, which needs no stack: it plans each dev scenario's cached Claude-first run of P0 (2026-11-01) with the planner's Claude (`claude-opus-5-5` at the effort `LLM_PLANNER_EFFORT` sets: max by default since 2026-11-03, medium before), one call a plan with no model behind it, and runs the agent's check on each answer. A max pass costs about $6 for the 15 plans, so estimate first and set `MAX_USD`. Its catalog is the scenario's services with the kinds in `KINDS` (`harness/plans.py`), the external providers left out; the sim keeps no watch snapshot, so the check refuses every restart. `ESTIMATE=1` prints the most the pass can cost and a likely range, and calls nothing. Answered plans are kept in `reports/plans/` (git-ignored), so a stopped pass (exit 2) goes on where it stopped; `MAX_USD=n` stops the pass (exit 2) before a plan could take it past n dollars. The finished pass writes `reports/<date>-dev-plans-<planner sha, first 8>-<model>-<effort>.json` and `.md` (the 2026-11-02 medium report predates the effort in the name). Exit 1 means the check kept a restart or code fix of a database, queue, cache, storage or proxy. Nothing is scored against the labels; the report shows them beside each plan for a human to read.
 
 ```sh
 make eval-plans ESTIMATE=1
-make eval-plans
+make eval-plans MAX_USD=7
+make eval-plans LLM_PLANNER_EFFORT=medium
 ```
 
 ## Runs and scores

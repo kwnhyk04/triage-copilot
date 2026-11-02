@@ -5,6 +5,7 @@ import {
   fallbackNotes,
   percent,
   PLAN_STATES,
+  planning,
   planNote,
   progressLine,
   STATUSES,
@@ -141,14 +142,20 @@ describe('refreshing', () => {
     expect(stillChanging({ ...settled, status: 'queued', created_at: at(15) }, now)).toBe(false);
   });
 
-  it('waits 6 minutes after a real verdict for its plan, and no longer', () => {
+  it('is planning for 10 minutes after a real verdict, until its plan comes, and no longer', () => {
     const verdict = { ...settled, plan_status: null };
-    expect(stillChanging({ ...verdict, updated_at: at(5) }, now)).toBe(true);
-    expect(stillChanging({ ...verdict, updated_at: at(6) }, now)).toBe(false);
-    // A plan arrived: one without a proposal has no status, and the report knows it came.
-    expect(stillChanging({ ...verdict, updated_at: at(1) }, now, true)).toBe(false);
-    expect(stillChanging({ ...settled, updated_at: at(1) }, now)).toBe(false);
-    expect(stillChanging({ ...verdict, verdict: 'not_real', updated_at: at(1) }, now)).toBe(false);
+    const cases: [Parameters<typeof stillChanging>[0], boolean | undefined, boolean][] = [
+      [{ ...verdict, updated_at: at(9) }, undefined, true],
+      [{ ...verdict, updated_at: at(10) }, undefined, false],
+      // A plan arrived: one without a proposal has no status, and the report knows it came.
+      [{ ...verdict, updated_at: at(1) }, true, false],
+      [{ ...settled, updated_at: at(1) }, undefined, false],
+      [{ ...verdict, verdict: 'not_real', updated_at: at(1) }, undefined, false],
+    ];
+    for (const [item, arrived, expected] of cases) {
+      expect(planning(item, now, arrived)).toBe(expected);
+      expect(stillChanging(item, now, arrived)).toBe(expected);
+    }
   });
 
   it('says how far a running investigation has got', () => {
@@ -160,7 +167,7 @@ describe('refreshing', () => {
     );
     expect(progressLine({ ...running, status: 'queued', steps: [] })).toBe('Queued, no steps yet');
     expect(progressLine({ ...WORKER_OUT_OF_MEMORY, plan: null })).toBe(
-      'Report ready, waiting for the plan',
+      'Report ready, still planning',
     );
   });
 });

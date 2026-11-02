@@ -154,6 +154,23 @@ describe('Report', () => {
     expect(shown(ONE_CLIENT_RETRYING)).toContain('No plan was made');
   });
 
+  it('shows a real verdict still planning for 10 minutes, then that no plan was made', () => {
+    const waiting: Investigation = { ...WORKER_OUT_OF_MEMORY, plan: null, plan_status: null };
+    // Its report landed 4.5 minutes before NOW.
+    const recent = { ...waiting, updated_at: '2026-10-26T10:00:00.000Z' };
+    const html = shown(recent, { refresh: true });
+    expect(count(html, '<span class="badge info busy">Planning</span>')).toBe(2);
+    order(html, ['Report ready, still planning', '>Plan<', 'Still planning a fix.']);
+    expect(html).toContain('A plan can take up to 10 minutes');
+    expect(html).not.toContain('No plan was made');
+    expect(html).not.toContain('Approve plan');
+    // 10 minutes 20 seconds after its report, or on a page that never refreshes, it says so.
+    for (const late of [shown(waiting, { refresh: true }), shown(recent)]) {
+      expect(late).not.toContain('Planning');
+      expect(late).toContain('No plan was made');
+    }
+  });
+
   it('marks an illustrative sample', () => {
     const label = 'Illustrative sample, not a real incident';
     expect(shown(WORKER_OUT_OF_MEMORY, { illustrative: true })).toContain(label);

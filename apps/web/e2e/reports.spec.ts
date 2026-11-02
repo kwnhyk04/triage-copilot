@@ -92,6 +92,22 @@ test('follows a running investigation without a reload, pauses, and stops at the
   expect((await state(request)).reads).toBe(landed);
 });
 
+test('shows a real incident still planning, then its plan as soon as it lands', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto(`/investigations/${E2E.planningId}`);
+  const waiting = page.getByText('Still planning a fix.', { exact: false });
+  await expect(page.getByRole('status')).toContainText('Report ready, still planning');
+  await expect(waiting).toBeVisible();
+  await expect(page.getByText('No plan was made')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Approve plan' })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(waiting).toHaveCount(0);
+  await expect(page.getByRole('status')).toHaveCount(0);
+});
+
 test('sends a reader to the demo when the gateway does not answer', async ({ page }) => {
   await page.goto(`${E2E.isolatedUrl}/investigations`);
   await expect(page).toHaveURL(`${E2E.isolatedUrl}/demo?offline=1`);

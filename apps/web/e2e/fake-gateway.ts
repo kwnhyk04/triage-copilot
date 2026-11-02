@@ -1,6 +1,7 @@
 // A stand-in gateway for the browser tests: node:http on 127.0.0.1 with no dependency. It serves the
-// demo's samples, plus one investigation that gains a step on each read until its report lands,
-// takes the same keys as the real one, and records plan decisions. /__e2e/* lets the tests reset
+// demo's samples, plus one investigation that gains a step on each read until its report lands
+// and one real incident whose plan lands on its third read. It takes the same keys as the real
+// one and records plan decisions. /__e2e/* lets the tests reset
 // and read its state; it is never part of the real gateway.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
@@ -10,8 +11,12 @@ import { E2E } from './shared.ts';
 
 type Plan = NonNullable<Investigation['plan']>;
 const RUNNING_STEPS = 4;
+const PLANNING_READS = 2;
 let requests = 0;
 let reads = 0;
+let planningReads = 0;
+// The planning incident's report lands at the start, so the web's 10-minute wait has begun.
+let planningSince = new Date().toISOString();
 let decisions: { plan_id: string; verdict: string; approver: string; reason?: string }[] = [];
 let decided = new Map<
   string,
@@ -47,6 +52,22 @@ function running(count: number): Investigation {
   };
 }
 
+/** The real incident after `count` reads: its report is in, and its plan lands on read 3. */
+function planning(count: number): Investigation {
+  const landed = count > PLANNING_READS;
+  const plan = { ...WORKER_OUT_OF_MEMORY.plan, id: 'c0ffee00-0000-4000-8000-000000000004' };
+  return {
+    ...WORKER_OUT_OF_MEMORY,
+    id: E2E.planningId,
+    group_id: 'c0ffee00-0000-4000-8000-000000000005',
+    title: 'ReadinessCheckFailed on api',
+    created_at: planningSince,
+    updated_at: planningSince,
+    plan_status: landed ? 'pending' : null,
+    plan: landed ? plan : null,
+  };
+}
+
 /** An investigation with any recorded decision on its plan. */
 function withDecision(investigation: Investigation): Investigation {
   const decision = investigation.plan && decided.get(investigation.plan.id);
@@ -58,7 +79,8 @@ function withDecision(investigation: Investigation): Investigation {
   };
 }
 
-const all = () => [running(reads), ...LIVE_SAMPLES, ...EVAL_RUNS].map(withDecision);
+const all = () =>
+  [running(reads), planning(planningReads), ...LIVE_SAMPLES, ...EVAL_RUNS].map(withDecision);
 const send = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 const body = async (request: IncomingMessage) => {
@@ -73,6 +95,8 @@ createServer((request, response) => {
     if (url.pathname === '/healthz') return send(response, 200, { status: 'ok' });
     if (url.pathname === '/__e2e/reset' && request.method === 'POST') {
       reads = 0;
+      planningReads = 0;
+      planningSince = new Date().toISOString();
       decisions = [];
       decided = new Map();
       return send(response, 200, {});
@@ -115,6 +139,7 @@ createServer((request, response) => {
     }
     const id = /^\/v1\/investigations\/([^/]+)$/.exec(url.pathname)?.[1];
     if (id === E2E.runningId) reads++;
+    if (id === E2E.planningId) planningReads++;
     const investigation = all().find((item) => item.id === id);
     return investigation
       ? send(response, 200, investigation)
