@@ -19,6 +19,23 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-02: P3.3's dry-run drill on the dev stack; the real restart not run
+
+- What happened: the user asked to run P3.3's dry-run drill, steps 1 to 7 of the Phase 3 entry below, one step at a time. Their bounds: never `EXECUTOR_DRY_RUN=false` and never a real restart. Afterwards, return dev to how it was, and skip step 8. P3.3's real restart was not run: FA's dev stack has no app or worker container, and production restarts stay off by decision (the user).
+- Why: P3.3 in docs/todo.md.
+- What we did, in order:
+  1. Read only: this project's dev ports (4200, 4201, 4210, 4220, 3200, 5434, 4566, 8476) were free. The running `make.exe` processes were listed: only `make dev-watch` (PID 40380), which was left alone. `.env`'s modify time was noted.
+  2. `make migrate`, which runs `make infra-up` first: the dev database is at agent 0014 and gateway 0009.
+  3. The drill's tenant, alert group and pending `restart_service` plan of FA's `worker`, inserted by `psql` in `triagecopilot-postgres-1`. The plan was `d485775f-461c-45c9-8c53-e9431e2aef6b` and the tenant `0f4a939a-b437-4d04-99e9-f6fba75c0b05`.
+  4. Step 3 changed: `.env` was not edited. `LIVE_TENANTS` went on the command line, `make dev-ts 'LIVE_TENANTS={"<tenant>":"freight-audit"}'`, which overrides `.env` for that process. Why: editing `.env` would mean reading a file of secrets, and there was then nothing to remove from it afterwards. Its modify time was the same at the end.
+  5. `make dev-agent AGENT_RELOAD=`, then `make switch NAME=actions STATE=on`, then `make dev-executor EXECUTOR_STACK=prod EXECUTOR_DRY_RUN=true`. The dry run was set explicitly, though `.env` leaves it unset (default true). All three `/readyz` answered 200.
+  6. Approved through `POST /v1/plans/<id>/approve`, from a make recipe so the approver key was never printed: status `approved`, by `operator`.
+  7. The record in `gateway.plan_executions`: `state` `succeeded`, `dry_run` true, `detail` `dry run: docker compose -p freightaudit-prod restart worker`, claimed 15:48:01.889 and finished 15:48:01.906 UTC. The outbox row was sent. `freightaudit-prod-worker-1` still read "Up 46 hours", so nothing was restarted.
+  8. Cleanup: `make switch NAME=actions STATE=off`. The three `make.exe` trees I started (dev-executor 9500, dev-agent 42952, dev-ts 25764) were stopped with `taskkill /T /F`, each only after checking its command line named its target. Their background tasks then ended with exit 1, as a kill does.
+  9. The drill's rows were deleted in one transaction: one each from `plan_executions`, `plan_decisions`, `plans`, `alert_groups` and `tenants`, with none left. `agent.switches` keeps an `actions` row, set off, which reads the same as no row. Then `make infra-down`, which keeps the volumes.
+  - Why this was the best option: the drill ran the whole path (approval, outbox, queue, switch, claim, record) with nothing able to act, and dev ended as it began apart from the two new migrations.
+- Outstanding: none for P3.3. Nothing is committed.
+
 ### 2026-11-02: Phase 3, P3.1 and P3.2 (ActionApproved v2, the executor's consumer and restart effector) on branch p3-actions
 
 - What happened: the user asked for P3.1 and P3.2 in one PR, tests first, approved that day. Their requirements:
