@@ -5,9 +5,6 @@ import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 
-import { Header } from '../components/header.tsx';
-import { loadWebConfig } from '../lib/config.ts';
-import { SESSION_COOKIE, validSession } from '../lib/session.ts';
 import { parseTheme, THEME_COOKIE } from '../lib/theme.ts';
 
 // Committed files, served from this origin; the build fetches nothing (docs/memory.md, fonts).
@@ -31,13 +28,15 @@ export const metadata = {
 };
 export const viewport = { colorScheme: 'light dark' };
 
+/**
+ * The document around every page. The header is not here: a layout keeps its first render across
+ * client-side navigation, so each page renders the header (SiteHeader) with its own session check.
+ */
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // Every page renders per request, so each gets the proxy's fresh CSP nonce.
   await connection();
-  const jar = await cookies();
   // The theme cookie picks the colours on the server (data-theme); without one the device does.
-  const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
-  const signedIn = validSession(jar.get(SESSION_COOKIE)?.value, loadWebConfig().SESSION_SECRET);
+  const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
   return (
     <html
       lang="en"
@@ -48,7 +47,6 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <a className="skip" href="#main">
           Skip to content
         </a>
-        <Header signedIn={signedIn} theme={theme} />
         {children}
       </body>
     </html>

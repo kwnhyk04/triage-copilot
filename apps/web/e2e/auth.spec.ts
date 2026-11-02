@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 
 import { WORKER_OUT_OF_MEMORY } from '../src/demo/index.ts';
+import { SESSION_COOKIE, signSession } from '../src/lib/session.ts';
 import { E2E } from './shared.ts';
 
 const REPORT = `/investigations/${WORKER_OUT_OF_MEMORY.id}`;
@@ -89,6 +90,92 @@ test('signs out with 303, Clear-Site-Data and no cookie left', async ({ page }) 
   );
   await page.goto('/investigations');
   await expect(page).toHaveURL(/\/login\?next=/);
+});
+
+// The servers' session secret, which playwright.config.ts hands its workers, so a test can make a
+// session the server signed that has expired.
+const SECRET = process.env.E2E_SESSION_SECRET ?? '';
+const expired = () => signSession(SECRET, Date.now() - 9 * 60 * 60 * 1000);
+// Host-only, as the server sets it: a domain without a leading dot, as a saved session restores.
+const session = (value: string) => ({
+  name: SESSION_COOKIE,
+  value,
+  domain: '127.0.0.1',
+  path: '/',
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Lax' as const,
+});
+// The site's header, the page's banner landmark; a closed phone menu hides its copies.
+const bar = (page: Page) => page.getByRole('banner');
+
+test.describe('signed in', () => {
+  test.use({ storageState: E2E.session });
+
+  test('goes from the logo to Live incidents, never to the sign-in form', async ({ page }) => {
+    await page.goto(REPORT);
+    await expect(bar(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await bar(page).getByRole('link', { name: 'Triage Copilot' }).click();
+    await expect(page).toHaveURL(`${E2E.webUrl}/investigations`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Live incidents');
+    await expect(page.getByLabel('Password')).toHaveCount(0);
+  });
+
+  test('skips the landing and sign-in, to a safe next page or Live incidents', async ({ page }) => {
+    for (const [path, landed] of [
+      ['/', '/investigations'],
+      ['/login', '/investigations'],
+      [`/login?next=${encodeURIComponent(REPORT)}`, REPORT],
+      ['/login?next=//evil.example/x', '/investigations'],
+    ] as const) {
+      await page.goto(path);
+      const url = new URL(page.url());
+      expect([path, url.pathname + url.search]).toEqual([path, landed]);
+      await expect(page.getByLabel('Password')).toHaveCount(0);
+    }
+  });
+});
+
+test('shows the sign-in form, and Sign in in the header, only when signed out', async ({
+  page,
+}) => {
+  await page.goto('/login');
+  await expect(page.getByLabel('Password')).toBeVisible();
+  await expect(bar(page).getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(bar(page).getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+  await bar(page).getByRole('link', { name: 'Triage Copilot' }).click();
+  await expect(page).toHaveURL(`${E2E.webUrl}/`);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'Is this alert a real incident?',
+  );
+});
+
+test('treats an expired session as signed out: Sign in in the header, and the form', async ({
+  page,
+  context,
+}) => {
+  await context.addCookies([session(expired())]);
+  for (const path of ['/', '/demo', '/login']) {
+    await page.goto(path);
+    expect([path, new URL(page.url()).pathname]).toEqual([path, path]);
+    await expect(bar(page).getByRole('link', { name: 'Sign in' })).toBeVisible();
+    await expect(bar(page).getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+  }
+  await expect(page.getByLabel('Password')).toBeVisible();
+});
+
+test('says Sign in on the next page once the session has expired, without a reload', async ({
+  page,
+  context,
+}) => {
+  await context.addCookies([session(signSession(SECRET))]);
+  await page.goto('/demo');
+  await expect(bar(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await context.addCookies([session(expired())]);
+  await bar(page).getByRole('link', { name: 'Eval runs' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Eval runs');
+  await expect(bar(page).getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(bar(page).getByRole('button', { name: 'Sign out' })).toHaveCount(0);
 });
 
 test('sends a POST without a session to sign-in before any action runs', async ({ request }) => {

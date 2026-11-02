@@ -1,3 +1,4 @@
+import { SiteHeader } from '../../../components/header.tsx';
 import { InvestigationList } from '../../../components/investigation-list.tsx';
 import { readInvestigations } from '../../../lib/data.ts';
 import type { Source } from '../../../lib/investigations.ts';
@@ -16,16 +17,19 @@ export default async function Investigations({
   const page = await readInvestigations(source, typeof cursor === 'string' ? cursor : undefined);
   const now = requestTime();
   return (
-    <main id="main" className="page">
-      <h1>{TABS[source]}</h1>
-      <InvestigationList
-        items={page.items}
-        source={source}
-        nextCursor={page.next_cursor}
-        basePath="/investigations"
-        now={now}
-        refresh
-      />
-    </main>
+    <>
+      <SiteHeader />
+      <main id="main" className="page">
+        <h1>{TABS[source]}</h1>
+        <InvestigationList
+          items={page.items}
+          source={source}
+          nextCursor={page.next_cursor}
+          basePath="/investigations"
+          now={now}
+          refresh
+        />
+      </main>
+    </>
   );
 }

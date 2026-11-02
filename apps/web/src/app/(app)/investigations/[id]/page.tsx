@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { SiteHeader } from '../../../../components/header.tsx';
 import { Report } from '../../../../components/report.tsx';
 import { readInvestigation } from '../../../../lib/data.ts';
 import { requestTime, TABS } from '../../../../lib/report.ts';
@@ -15,18 +16,21 @@ export default async function InvestigationReport({ params }: { params: Promise<
   if (investigation === undefined) notFound();
   const now = requestTime();
   return (
-    <main id="main" className="page">
-      <p className="crumbs">
-        <Link href={`/investigations?source=${investigation.source}`}>
-          {TABS[investigation.source]}
-        </Link>
-      </p>
-      <Report
-        investigation={investigation}
-        now={now}
-        decide={decidePlanAction.bind(null, investigation.id)}
-        refresh
-      />
-    </main>
+    <>
+      <SiteHeader />
+      <main id="main" className="page">
+        <p className="crumbs">
+          <Link href={`/investigations?source=${investigation.source}`}>
+            {TABS[investigation.source]}
+          </Link>
+        </p>
+        <Report
+          investigation={investigation}
+          now={now}
+          decide={decidePlanAction.bind(null, investigation.id)}
+          refresh
+        />
+      </main>
+    </>
   );
 }

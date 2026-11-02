@@ -314,6 +314,12 @@ From the approved design doc:
   - The list pages lost their tabs, since the header's two links replace them. Eval runs show no verdict or plan column, since every run would read "Simulated" with no plan.
   - The proxy skips `/icon.svg` and `/apple-icon.png`, so the sign-in page shows the icons before a session exists.
   - A sim proposal keeps its plain "Status:" line. Why: a "Decision needed" badge would be wrong for a proposal that stays read-only.
+- 2026-11-03, later: One session check, `src/lib/auth.ts`, after the user's bug report: signed in, the header said Sign out while `/` offered sign-in. `sessionValid(token)` serves the proxy, and `signedIn()` serves the data layer, the header and the pages. Decisions, each with its reason:
+  - A signed-in visit to `/` or `/login` goes on to a safe `next`, else Live incidents (`HOME` in `lib/guards.ts`). Why: the user's expectation that the sign-in form shows only when signed out.
+  - Each page renders the header (`SiteHeader`), and the root layout no longer does. Correction to the entry above, which put it in the root layout. Why: a layout renders once and keeps its output across client-side navigation, so its Sign out outlived an expired session. The browser test that expires the cookie between pages failed before the fix.
+  - The demo banner moved from `app/demo/layout.tsx`, now deleted, into the two demo pages (`components/demo-banner.tsx`), so it stays under the header.
+  - `(app)/error.tsx` draws a bar with the logo only. Why: the page's header fails with the page, and the error page, a client component, cannot run the session check.
+  - The browser tests sign an expired session with the servers' secret, which `playwright.config.ts` now hands its workers as `E2E_SESSION_SECRET`. It is still made at load and never committed.
 
 ## Preferences and Instructions
 
@@ -479,6 +485,8 @@ From the approved design doc:
 None yet.
 
 ## Lessons Learned
+
+- 2026-11-03: In the App Router a layout renders once and keeps its output across client-side navigation; only the page segments that change render again. Anything that depends on the request at hand, such as the session, belongs in the page's render, or it goes stale (docs/activity-log.md, 2026-11-03, the session bug).
 
 - 2026-10-14: ElasticMQ 1.7.1 probe (`services/agent/tests/test_elasticmq_int.py`, run by `make test-int`), all six checks passed:
   - FIFO: messages in one MessageGroupId arrive in order, and the group is held while a message is in flight; other groups keep flowing.

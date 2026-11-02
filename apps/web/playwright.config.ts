@@ -8,9 +8,10 @@ import { E2E } from './e2e/shared.ts';
 import { hashPassword } from './src/lib/password.ts';
 
 // Made at load, so no hash or secret is committed. Workers load this file again; only the main
-// process's values reach the servers.
+// process's values reach the servers. The session secret also reaches the workers, through the
+// environment they inherit, so a test can sign a session that has expired.
 const hash = await hashPassword(E2E.password);
-const secret = randomBytes(32).toString('base64url');
+const secret = (process.env.E2E_SESSION_SECRET ??= randomBytes(32).toString('base64url'));
 const inherited = Object.fromEntries(
   Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
 );

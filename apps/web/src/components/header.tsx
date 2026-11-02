@@ -1,13 +1,25 @@
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 
-import type { Theme } from '../lib/theme.ts';
+import { signedIn } from '../lib/auth.ts';
+import { parseTheme, type Theme, THEME_COOKIE } from '../lib/theme.ts';
 import { Menu, NavLinks, ThemeSwitch } from './client.tsx';
 import { LogoMark } from './logo.tsx';
 
 /**
- * Every page's bar: the mark and name, the two lists, the theme, and Sign in or Sign out. On a
- * phone the lists and the sign-in fold into the menu. The proxy and lib/data.ts guard the pages;
- * signedIn only picks the button.
+ * The bar for the page being rendered, from the request's own session check and theme cookie.
+ * Every page renders it, so the bar and the page read the same request. A layout would keep its
+ * first bar across client-side navigation, and its Sign out could outlive the session.
+ */
+export async function SiteHeader() {
+  const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
+  return <Header signedIn={await signedIn()} theme={theme} />;
+}
+
+/**
+ * The bar: the mark and name, the two lists, the theme, and Sign in or Sign out. On a phone the
+ * lists and the sign-in fold into the menu. The proxy and lib/data.ts guard the pages; signedIn
+ * only picks the button.
  */
 export function Header({ signedIn, theme }: { signedIn: boolean; theme: Theme }) {
   const account = signedIn ? (
