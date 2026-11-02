@@ -304,6 +304,17 @@ From the approved design doc:
   - FreightAudit's dev stack runs no app or worker container (its api and worker run on the host), so P3.3's real restart cannot target FA dev as written; the user chooses the target.
 - 2026-11-02: P3.3's real restart is not run, and production restarts stay off (the user's decision). Why: FA's dev stack has no app or worker container to restart, and the user keeps the executor away from production. What we did: only the dry-run drill ran (docs/activity-log.md); production deploys no executor, and the `actions` switch stays off.
 
+- 2026-11-03: The web takes FreightAudit's look (the user's request; FA's `components/ui.tsx`, `components/logo.tsx`, `components/client.tsx`, `lib/theme.ts`, `app/globals.css` and `app/icon.svg` were read read-only). It replaces the triage-tag design of 2026-10-27, which stays written above. Decisions, the user's or made while building, each with its reason:
+  - Atkinson Hyperlegible stays (the user). Why: TC's committed fonts were chosen for legibility, and the match does not need FA's IBM Plex.
+  - One amber for the logo's peak in both themes, `#bf7e0a` (the user: 3:1 or more on white and on dark). It measures 3.38:1 on white, 3.16:1 on the light canvas, 5.05:1 on the dark surface and 5.45:1 on the dark canvas. The first pick, `#c4820b`, measured 2.99:1 on the light canvas.
+  - The note in a plan says what approving does, by the plan's kind (the user approved the wording). A restart: "Approving only records the decision unless the actions switch is on. With it on, the executor restarts <target> once." A code fix or none: "Approving only records the decision: nothing runs from this kind of plan." Why: only an approved restart plan queues ActionApproved v2.
+  - The CSP stays as it is, so the column widths live in `globals.css` (the user). Why: FA sets them with inline `style` attributes, which TC's nonce CSP refuses in production. Each table names its columns' bases there (`--base` per column, `--bases`, `--columns`). Each column is its base plus an equal share of the wrapper's 100cqw less every base.
+  - The theme is the `tc-theme` cookie: a year, Lax, and not HttpOnly, so the switch can write it. The root layout reads it into `data-theme`, so nothing flashes on load, and System is no cookie. The dark colours are written twice, for the device's scheme and for a chosen Dark, and `lib/theme.test.ts` fails when they differ.
+  - The header sits in the root layout, so every page has it. `(app)/layout.tsx`, whose only job was the old header, is deleted. Sign in or Sign out follows a valid session cookie; the proxy and `lib/data.ts` still guard the pages.
+  - The list pages lost their tabs, since the header's two links replace them. Eval runs show no verdict or plan column, since every run would read "Simulated" with no plan.
+  - The proxy skips `/icon.svg` and `/apple-icon.png`, so the sign-in page shows the icons before a session exists.
+  - A sim proposal keeps its plain "Status:" line. Why: a "Decision needed" badge would be wrong for a proposal that stays read-only.
+
 ## Preferences and Instructions
 
 - 2026-10-14: The three portfolio projects run in parallel Claude Code sessions on one PC, sharing Docker. Each project has its own port range and compose project name; never prune or remove another project's Docker resources (user setup).
@@ -326,6 +337,7 @@ From the approved design doc:
   - What we did: recorded them; nothing in the planner or the check changed (the user's scope was to measure). In phase 2 nothing runs from a plan, so a human reading the steps is the guard; P4.1 checks files against the repo before any coder runs.
 
 - 2026-11-02: watch's FL catalog dates from 2026-10-25 and has no `egress-proxy`, which FL added with its egress rollout.
+- 2026-11-03: `make lint` fails while the design hook's cache files exist (`.impeccable/hook.cache.json` at the repo root and in `apps/web`). Why: the hook writes them after edits, and `.git/info/exclude` hides them from git but not from `prettier --check .`. What we did: deleted both before `make lint`; a clean checkout, as in CI, has neither.
   - Why it matters: watch neither checks that container nor reads its logs. The live prompt's `get_dependencies` links neither FL's api nor its sidecar to it, so a proxy outage looks like FL's api failing its Funnel check.
   - What we did: nothing yet; it is a follow-up (docs/todo.md, watch follow-ups). The five FL log signals also date from 2026-10-25. They were not checked against FL's code, which was not read; the last 24 h of the api's logs confirm only the format (`level`, `event`).
 - 2026-11-01: squid drops a client's `Authorization` header on its way to an `originserver` cache_peer unless the peer has `login=PASS`, `PASSTHRU` or `PROXYPASS`. The egress proxy's gateway peer had none, so the P1.12 drill's alert got 401 "Send a valid tenant webhook token." though the token's SHA-256 matched `gateway.tenants` (the user's finding).

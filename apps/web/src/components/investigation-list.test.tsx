@@ -19,26 +19,72 @@ const shown = (props: Partial<ListProps> = {}) =>
     />,
   );
 const count = (html: string, text: string) => html.split(text).length - 1;
+const headers = (html: string) =>
+  [...html.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1]);
+const run = { ...WORKER_OUT_OF_MEMORY, source: 'sim' as const, verdict: null, plan_status: null };
 
 describe('InvestigationList', () => {
-  it('draws each investigation as a tag: verdict, title, cause, status and age', () => {
+  it('lists live incidents as a table: incident, verdict, cause, confidence, plan, status, age', () => {
     const html = shown();
+    expect(headers(html)).toEqual([
+      'Incident',
+      'Verdict',
+      'Cause',
+      'Confidence',
+      'Plan',
+      'Status',
+      'Opened',
+    ]);
+    expect(html).toContain(
+      '<caption class="visually-hidden">Live incidents, newest first</caption>',
+    );
     for (const text of [
-      'Real incident',
-      'Not a real incident',
       'ContainerDown on worker',
-      'Resource exhaustion in worker, 80%',
-      'Report ready, opened 12 min ago',
       'AnswersFailing on api',
       'ErrorBurst on api',
+      'Resource exhaustion in worker',
+      '12 min ago',
     ]) {
       expect([text, html.includes(text)]).toEqual([text, true]);
     }
-    // Only the pending plan needs a decision.
-    expect(count(html, 'Decision needed')).toBe(1);
   });
 
-  it('links each tag to its report under the base path, and older items to the next page', () => {
+  it('shows the verdict, plan and status as badges, red only for a real incident', () => {
+    const html = shown();
+    expect(count(html, '<span class="badge bad">Real incident</span>')).toBe(2);
+    expect(html).toContain('<span class="badge">Not a real incident</span>');
+    // Only the pending plan needs a decision.
+    expect(count(html, 'Decision needed')).toBe(1);
+    expect(html).toContain('<span class="badge warn">Decision needed</span>');
+    expect(html).toContain('<span class="badge ok">Approved</span>');
+    expect(count(html, '<span class="badge ok">Report ready</span>')).toBe(3);
+  });
+
+  it('fixes the columns and centres the confidence as a block whose digits line up', () => {
+    const html = shown();
+    expect(html).toContain('<table class="list-table cards fixed incidents">');
+    expect(count(html, '<col/>')).toBe(7);
+    expect(html).toContain(
+      '<td class="figure" data-card="hide"><span class="figure-block">80%</span>',
+    );
+  });
+
+  it('turns each row into a card on a phone, the confidence joining the cause', () => {
+    const html = shown();
+    for (const role of ['title', 'aside', 'meta', 'wide', 'hide']) {
+      expect([role, html.includes(`data-card="${role}"`)]).toEqual([role, true]);
+    }
+    expect(html).toContain('<span class="phone-only">, 80%</span>');
+  });
+
+  it('lists eval runs without the verdict and plan columns, which they never fill', () => {
+    const html = shown({ items: [run], source: 'sim' });
+    expect(headers(html)).toEqual(['Run', 'Cause', 'Confidence', 'Status', 'Opened']);
+    expect(html).toContain('<table class="list-table cards fixed runs">');
+    expect(html).not.toContain('Real incident');
+  });
+
+  it('links each row to its report under the base path, and older items to the next page', () => {
     const html = shown({ nextCursor: 'abc=', basePath: '/demo/investigations', listPath: '/demo' });
     expect(html).toContain(`href="/demo/investigations/${WORKER_OUT_OF_MEMORY.id}"`);
     expect(html).toContain('href="/demo?source=live&amp;cursor=abc%3D"');
@@ -51,6 +97,7 @@ describe('InvestigationList', () => {
     const sim = shown({ items: [], source: 'sim' });
     expect(sim).toContain('No eval runs here.');
     expect(sim).toContain('<a href="/demo?source=sim">');
+    expect(sim).not.toContain('<table');
   });
 
   it('labels the illustrative samples it is told of', () => {
@@ -66,20 +113,9 @@ describe('InvestigationList', () => {
     expect(html).toContain('1 investigation is still running');
     expect(html).toContain('>Pause updates</button>');
     expect(html).toContain('data-every="10"');
+    expect(html).toContain('<span class="badge info busy">Running</span>');
     // Settled items, or a list that never refreshes, show neither.
     expect(shown({ refresh: true })).not.toContain('role="status"');
     expect(shown({ items: [running] })).not.toContain('role="status"');
-  });
-
-  it('shows an eval run without a verdict as simulated', () => {
-    const run = {
-      ...WORKER_OUT_OF_MEMORY,
-      source: 'sim' as const,
-      verdict: null,
-      plan_status: null,
-    };
-    const html = shown({ items: [run], source: 'sim' });
-    expect(html).toContain('Simulated');
-    expect(html).not.toContain('Real incident');
   });
 });

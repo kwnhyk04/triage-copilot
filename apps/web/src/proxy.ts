@@ -47,6 +47,7 @@ export function proxy(request: NextRequest): NextResponse {
   return response;
 }
 
+// The tab and home-screen icons skip it, so the sign-in page shows them before a session exists.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png).*)'],
 };

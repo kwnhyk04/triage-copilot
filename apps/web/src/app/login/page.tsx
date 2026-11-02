@@ -17,18 +17,17 @@ export default async function SignIn({
   const { LOGIN_PASSWORD_HASH, SESSION_SECRET } = loadWebConfig();
   return (
     <main id="main" className="page narrow">
-      <p className="brand">
-        <Link href="/">Triage Copilot</Link>
-      </p>
-      <h1>Sign in</h1>
-      {LOGIN_PASSWORD_HASH === undefined || SESSION_SECRET === undefined ? (
-        <p>
-          Sign-in is off: this server has no LOGIN_PASSWORD_HASH and SESSION_SECRET. The README says
-          how to make them.
-        </p>
-      ) : (
-        <SignInForm next={safeNext(next)} maxLength={PASSWORD_LENGTH.max} />
-      )}
+      <section className="panel sign-in">
+        <h1>Sign in</h1>
+        {LOGIN_PASSWORD_HASH === undefined || SESSION_SECRET === undefined ? (
+          <p>
+            Sign-in is off: this server has no LOGIN_PASSWORD_HASH and SESSION_SECRET. The README
+            says how to make them.
+          </p>
+        ) : (
+          <SignInForm next={safeNext(next)} maxLength={PASSWORD_LENGTH.max} />
+        )}
+      </section>
       <p>
         No password? <Link href="/demo">Open the demo</Link> to read saved reports.
       </p>

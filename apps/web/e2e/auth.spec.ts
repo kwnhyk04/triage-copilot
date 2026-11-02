@@ -35,18 +35,32 @@ test('sends every protected page to sign-in, and keeps the landing, demo and pro
   }
   expect((await request.get('/healthz')).status()).toBe(200);
   expect((await request.get('/readyz')).status()).toBe(200);
+  // The tab and home-screen icons load before anyone signs in.
+  for (const [path, type] of [
+    ['/icon.svg', 'image/svg+xml'],
+    ['/apple-icon.png', 'image/png'],
+  ] as const) {
+    const answer = await request.get(path, { maxRedirects: 0 });
+    expect([path, answer.status(), answer.headers()['content-type']]).toEqual([path, 200, type]);
+  }
 });
 
-test('says a wrong password is wrong, then returns to the page asked for', async ({ page }) => {
+test('says a wrong password is wrong, returns to the page asked for, and signs out from the header', async ({
+  page,
+}) => {
   await page.goto(REPORT);
   await signIn(page, 'not the password');
   await expect(message(page)).toHaveText('Wrong password.');
   await signIn(page);
   await expect(page).toHaveURL(`${E2E.webUrl}${REPORT}`);
-  const [cookie] = (await page.context().cookies()).filter(
-    (c) => c.name === '__Host-triage_session',
-  );
+  const sessions = async () =>
+    (await page.context().cookies()).filter((c) => c.name === '__Host-triage_session');
+  const [cookie] = await sessions();
   expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
+  // Sign out takes no extra sign-in attempt, so the limiter's count stays as it was.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page).toHaveURL(`${E2E.webUrl}/login`);
+  expect(await sessions()).toEqual([]);
 });
 
 test('stops the 6th attempt within 15 minutes', async ({ page }) => {

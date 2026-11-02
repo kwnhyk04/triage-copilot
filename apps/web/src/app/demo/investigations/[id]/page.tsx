@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { TABS } from '../../../../components/investigation-list.tsx';
 import { Report } from '../../../../components/report.tsx';
 import { demoInvestigation, ILLUSTRATIVE } from '../../../../demo/index.ts';
-import { requestTime } from '../../../../lib/report.ts';
+import { requestTime, TABS } from '../../../../lib/report.ts';
 
 export const metadata = { title: 'Demo report: Triage Copilot' };
 
@@ -15,7 +14,7 @@ export default async function DemoReport({ params }: { params: Promise<{ id: str
   if (investigation === undefined) notFound();
   return (
     <main id="main" className="page">
-      <p className="back">
+      <p className="crumbs">
         <Link href={`/demo?source=${investigation.source}`}>{TABS[investigation.source]}</Link>
       </p>
       <Report

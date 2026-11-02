@@ -1,43 +1,100 @@
-/* Triage tags: each investigation is an ER triage tag, a card with a colored band and a punched
-   hole. The band's colors mean the verdict and appear nowhere else; the chrome stays quiet.
-   Light and dark follow the system setting. Every text pair meets WCAG AA. */
+/* Triage Copilot in the look FreightAudit and FilingLens share: neutral surfaces, one ink-blue
+   accent, and colour only for state, always beside its word. The colours are FA's, whose text
+   pairs FA checked for contrast; the logo's amber is TC's own (docs/memory.md, 2026-11-03). */
 :root {
-  color-scheme: light dark;
-  --wall: #e8ecf0;
+  color-scheme: light;
+  --canvas: #f6f7f9;
   --surface: #ffffff;
-  --ink: #18202b;
-  --quiet: #4a5566;
-  --line: #c5cdd6;
-  --real: #b3261e;
-  --not-real: #1e7a46;
-  --simulated: #5b6675;
-  --running: #1b5fc1;
-  --link: #1b5fc1;
-  --amber: #f4b400;
-  --amber-text: #7a5200;
-  --on-amber: #18202b;
-  --on-band: #ffffff;
-  --shadow: 0 1px 2px rgb(24 32 43 / 0.12), 0 4px 12px rgb(24 32 43 / 0.08);
+  --sunken: #f1f3f5;
+  --rule: #e3e6ea;
+  --rule-strong: #cfd4da;
+  --text: #16191d;
+  --text-2: #5b636e;
+  --text-3: #6b737d;
+  --accent: #2b4c7e;
+  --accent-hover: #213c65;
+  --accent-tint: #e8eef7;
+  --on-accent: #ffffff;
+  /* The logo's flagged peak, one amber in both themes: 3.4:1 on white, 3.2:1 on the canvas,
+     5.1:1 on the dark surface and 5.5:1 on the dark canvas. */
+  --brand: #bf7e0a;
+  --ok: #1e6b3a;
+  --ok-tint: #e7f4ec;
+  --warn: #8a4b00;
+  --warn-tint: #fdf1dc;
+  --bad: #b42318;
+  --bad-tint: #fcebea;
+  /* Text on a solid --bad fill (the Failed pill). */
+  --on-bad: #ffffff;
+  --neutral-tint: #eef0f3;
+  --focus: 0 0 0 3px rgb(43 76 126 / 35%);
+  --menu-shadow: 0 8px 32px rgb(22 25 29 / 18%);
+  --radius: 6px;
+  /* Containers that hold a list, such as the tables and their phone cards. */
+  --radius-lg: 10px;
   --sans: var(--font-sans), system-ui, sans-serif;
   --mono: var(--font-mono), ui-monospace, monospace;
+  /* Hover and press: a colour change only, quick enough never to lag the pointer. */
+  --dur-1: 120ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* The bar and the page share one width and gutter, so their edges line up. */
+  --content: 1600px;
+  --gutter: 28px;
 }
-
+/* Dark: the device's scheme, unless the reader chose Light, or Dark whatever the device says
+   (data-theme, set on the server from the tc-theme cookie). The two blocks hold the same values;
+   lib/theme.test.ts fails when they differ. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --wall: #11161c;
-    --surface: #1a212a;
-    --ink: #e6ebf1;
-    --quiet: #a7b1be;
-    --line: #33404e;
-    --real: #f2766b;
-    --not-real: #4cc38a;
-    --simulated: #8e99a8;
-    --running: #7ab0ff;
-    --link: #7ab0ff;
-    --amber-text: #f4b400;
-    --on-band: #11161c;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.35);
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --canvas: #121417;
+    --surface: #191c20;
+    --sunken: #15181b;
+    --rule: #2a2f36;
+    --rule-strong: #3a414a;
+    --text: #e6e8eb;
+    --text-2: #a3abb5;
+    --text-3: #8b939d;
+    --accent: #8fb0e6;
+    --accent-hover: #a9c3ee;
+    --accent-tint: #1e2a3d;
+    --on-accent: #0f1726;
+    --ok: #7bd39b;
+    --ok-tint: #13281c;
+    --warn: #f2b866;
+    --warn-tint: #2e2210;
+    --bad: #f59a8e;
+    --bad-tint: #331614;
+    --on-bad: #121417;
+    --neutral-tint: #22272d;
+    --focus: 0 0 0 3px rgb(143 176 230 / 40%);
+    --menu-shadow: 0 8px 32px rgb(0 0 0 / 50%);
   }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #121417;
+  --surface: #191c20;
+  --sunken: #15181b;
+  --rule: #2a2f36;
+  --rule-strong: #3a414a;
+  --text: #e6e8eb;
+  --text-2: #a3abb5;
+  --text-3: #8b939d;
+  --accent: #8fb0e6;
+  --accent-hover: #a9c3ee;
+  --accent-tint: #1e2a3d;
+  --on-accent: #0f1726;
+  --ok: #7bd39b;
+  --ok-tint: #13281c;
+  --warn: #f2b866;
+  --warn-tint: #2e2210;
+  --bad: #f59a8e;
+  --bad-tint: #331614;
+  --on-bad: #121417;
+  --neutral-tint: #22272d;
+  --focus: 0 0 0 3px rgb(143 176 230 / 40%);
+  --menu-shadow: 0 8px 32px rgb(0 0 0 / 50%);
 }
 
 *,
@@ -45,20 +102,21 @@
 *::after {
   box-sizing: border-box;
 }
-
+html,
 body {
   margin: 0;
-  background: var(--wall);
-  color: var(--ink);
-  font-family: var(--sans);
-  font-size: 1rem;
-  line-height: 1.5;
-  /* Ids, versions and log lines wrap instead of pushing the page sideways. */
+  background: var(--canvas);
+  color: var(--text);
+  font: 400 14px/20px var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+/* Ids, versions and log lines wrap instead of pushing the page sideways. */
+body {
   overflow-wrap: anywhere;
 }
-
 h1,
 h2,
+h3,
 p,
 ul,
 ol,
@@ -66,514 +124,943 @@ figure,
 pre {
   margin: 0;
 }
-
 h1 {
-  font-size: 1.75rem;
-  line-height: 1.2;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
 }
-
 h2 {
-  font-size: 1.125rem;
-  line-height: 1.3;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
 }
-
+h3 {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+/* Links in running text keep their underline; the bar, buttons and table rows drop it. */
 a {
-  color: var(--link);
+  color: var(--accent);
   text-underline-offset: 0.15em;
 }
-
-a:hover {
-  text-decoration-thickness: 2px;
-}
-
 :focus-visible {
-  outline: 3px solid var(--link);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: 4px;
 }
-
 code,
 pre {
   font-family: var(--mono);
-  font-size: 0.875rem;
+  font-size: 12.5px;
+}
+.muted {
+  color: var(--text-2);
+}
+.faint {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.phone-only {
+  display: none;
 }
 
-label {
-  font-weight: 700;
-}
-
+/* Hidden until a keyboard reaches it: the first stop on every page jumps past the bar. */
 .skip {
   position: absolute;
-  top: -4rem;
-  left: 1rem;
-  z-index: 10;
-  padding: 0.5rem 1rem;
-  background: var(--surface);
-  color: var(--ink);
+  left: 12px;
+  top: -48px;
+  z-index: 30;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 500;
 }
-
 .skip:focus {
-  top: 1rem;
+  top: 12px;
 }
 
-/* Layout: one column, two from 64rem. */
+/* The bar: the mark and name, the two lists, then the theme and Sign in or Sign out. It stays on
+   top while the page scrolls. */
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+}
+.top-bar,
+.page,
+.demo-banner p {
+  max-width: var(--content);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-height: 56px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.logo-mark {
+  display: block;
+  flex: none;
+  color: var(--text);
+}
+.top-nav {
+  display: flex;
+  gap: 4px;
+}
+.top-nav a,
+.menu-panel nav a {
+  border-radius: var(--radius);
+  color: var(--text-2);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.top-nav a {
+  padding: 6px 10px;
+}
+.top-nav a:hover,
+.menu-panel nav a:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+.top-nav a[aria-current='page'],
+.menu-panel nav a[aria-current='page'] {
+  background: var(--accent-tint);
+  color: var(--text);
+  font-weight: 500;
+}
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+/* The theme switch: three icon radios in one segmented control, each radio named. */
+.theme-switch {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.theme-switch label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.theme-switch label + label {
+  border-left: 1px solid var(--rule-strong);
+}
+.theme-switch label:first-of-type {
+  border-radius: 5px 0 0 5px;
+}
+.theme-switch label:last-of-type {
+  border-radius: 0 5px 5px 0;
+}
+.theme-switch label:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+.theme-switch label:has(:checked) {
+  background: var(--accent-tint);
+  color: var(--text);
+}
+.theme-switch label:has(:focus-visible) {
+  z-index: 1;
+  box-shadow: var(--focus);
+}
+/* Each radio covers its whole segment, unseen, so a tap anywhere on it picks it. */
+.theme-switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+/* On a phone, one button steps System, Light and Dark in place of the three. */
+.theme-cycle,
+.menu summary {
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.theme-cycle {
+  display: none;
+}
+.theme-cycle:hover,
+.menu summary:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+/* The phone menu: a disclosure whose panel drops under the bar. */
+.menu {
+  display: none;
+  position: relative;
+}
+.menu summary {
+  display: grid;
+  list-style: none;
+}
+.menu summary::-webkit-details-marker {
+  display: none;
+}
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: min(280px, calc(100vw - 32px));
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--menu-shadow);
+}
+.menu-panel nav {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.menu-panel nav a {
+  padding: 10px 12px;
+  color: var(--text);
+}
+.menu-panel form {
+  display: grid;
+}
+.menu-panel .button {
+  height: 44px;
+}
+
+/* The demo's note under the bar, and the offline and partial-report notices. */
+.demo-banner {
+  background: var(--warn-tint);
+  color: var(--warn);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 25%, transparent);
+}
+.demo-banner p {
+  padding-block: 10px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.notice {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+  color: var(--warn);
+  font-weight: 500;
+}
+
+/* Pages: one column at the bar's width; sign-in and the landing keep a short measure. */
 .page {
   display: grid;
   align-content: start;
-  gap: 1.25rem;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 1.5rem 1rem 4rem;
+  gap: 16px;
+  padding-block: 20px 48px;
 }
-
-.narrow {
-  max-width: 36rem;
+.page.narrow {
+  max-width: calc(36rem + 2 * var(--gutter));
 }
-
 .page p,
 .page li {
-  max-width: 70ch;
+  max-width: 80ch;
 }
-
-.site-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 0.75rem 1rem 0;
-}
-
-.brand,
-.brand a {
-  color: var(--ink);
-  font-weight: 700;
-  text-decoration: none;
-}
-
 .landing {
-  padding-top: 3rem;
+  padding-top: 56px;
+  gap: 20px;
 }
-
-.lede,
-.summary {
-  font-size: 1.125rem;
+.landing h1 {
+  font-size: 32px;
+  line-height: 40px;
+  letter-spacing: -0.01em;
 }
-
-.quiet,
-.note,
-.tag-status {
-  color: var(--quiet);
+.lede {
+  font-size: 15px;
+  line-height: 22px;
 }
-
-.note {
-  font-size: 0.875rem;
+.landing .lede {
+  font-size: 17px;
+  line-height: 26px;
 }
-
-.actions,
-.buttons {
+.actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 12px;
   padding: 0;
   list-style: none;
 }
-
 .stack {
   display: grid;
-  gap: 0.5rem;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+.crumbs {
+  font-size: 13px;
+}
+.empty {
+  padding: 32px 24px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text-2);
+  text-align: center;
 }
 
-/* Controls: outlined, with Approve and Reject the only filled buttons. */
-button,
+/* Controls: outlined buttons, with the primary one filled in the accent. */
 .button {
   display: inline-flex;
   align-items: center;
-  min-height: 2.75rem;
-  padding: 0.5rem 1rem;
-  border: 2px solid var(--ink);
-  border-radius: 0.375rem;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 500 13px/1 var(--sans);
   text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
-
-.button.quiet {
-  border-color: var(--quiet);
-  color: var(--ink);
+.button:hover {
+  background: var(--sunken);
 }
-
-button:disabled {
-  cursor: not-allowed;
+.button:active {
+  transform: translateY(0.5px);
+}
+.button:disabled {
   opacity: 0.55;
+  cursor: not-allowed;
 }
-
-.approve,
-.reject {
-  background: var(--ink);
-  color: var(--surface);
-  font-weight: 700;
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
-
+.button.primary:hover {
+  background: var(--accent-hover);
+}
+.button.danger {
+  color: var(--bad);
+}
+.button.small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.button.large {
+  height: 44px;
+  padding: 0 18px;
+  font-size: 15px;
+}
+input,
+textarea {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 14px/20px var(--sans);
+}
 input[type='password'],
 textarea {
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.5rem;
-  border: 2px solid var(--quiet);
-  border-radius: 0.375rem;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
 }
-
 textarea {
   resize: vertical;
 }
-
-.error {
-  padding-left: 0.5rem;
-  border-left: 0.25rem solid var(--ink);
-  font-weight: 700;
+label {
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.form-error {
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.empty {
-  padding: 1rem;
-  border-radius: 0.5rem;
-  background: var(--surface);
-}
-
-.tabs ul {
-  display: flex;
-  gap: 0.25rem;
-  padding: 0;
-  border-bottom: 1px solid var(--quiet);
-  list-style: none;
-}
-
-.tabs a {
-  display: block;
-  margin-bottom: -1px;
-  padding: 0.5rem 0.875rem;
-  border-bottom: 3px solid transparent;
-  color: var(--quiet);
-  text-decoration: none;
-}
-
-.tabs a[aria-current='page'] {
-  border-bottom-color: var(--ink);
-  color: var(--ink);
-  font-weight: 700;
-}
-
-/* The triage tag, the one bold element. */
-.tags {
-  display: grid;
-  gap: 1rem;
-  padding: 0;
-  list-style: none;
-}
-
-.tag {
-  --band: var(--simulated);
-  overflow: hidden;
-  border-radius: 0.5rem;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.tag[data-kind='real'] {
-  --band: var(--real);
-}
-
-.tag[data-kind='not-real'] {
-  --band: var(--not-real);
-}
-
-.tag[data-kind='open'] {
-  --band: var(--running);
-}
-
-.band {
-  display: flex;
-  flex-wrap: wrap;
+/* Status: a tinted pill with its word and a dot, never colour alone. */
+.badge {
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem 0.75rem;
-  padding: 0.5rem 1rem;
-  background: var(--band);
-  color: var(--on-band);
-  font-weight: 700;
-}
-
-.hole {
-  flex: none;
-  width: 0.875rem;
-  height: 0.875rem;
-  border-radius: 50%;
-  background: var(--wall);
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
-}
-
-.chip {
-  margin-left: auto;
-  padding: 0.125rem 0.625rem;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
-  background: var(--amber);
-  color: var(--on-amber);
-  font-size: 0.875rem;
+  background: var(--neutral-tint);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
 }
-
-.tag-body {
-  display: grid;
-  gap: 0.375rem;
-  padding: 0.875rem 1rem 1rem;
+.badge::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
-
-.tag-title a {
-  color: var(--ink);
+.badge.info {
+  background: var(--accent-tint);
+  color: var(--accent);
 }
-
-.tag-cause {
-  font-weight: 700;
+.badge.ok {
+  background: var(--ok-tint);
+  color: var(--ok);
 }
-
-.illustrative {
-  justify-self: start;
-  padding: 0.125rem 0.5rem;
-  border: 1px dashed var(--quiet);
-  border-radius: 0.25rem;
-  color: var(--quiet);
-  font-size: 0.875rem;
+.badge.warn {
+  background: var(--warn-tint);
+  color: var(--warn);
 }
-
-/* The one motion: a running tag's hole pulses, never its text. */
+.badge.bad {
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+/* Failed: the one solid pill. */
+.badge.fail {
+  background: var(--bad);
+  color: var(--on-bad);
+}
+.badge.busy::before {
+  animation: pulse 1.4s ease-in-out infinite;
+}
 @keyframes pulse {
   50% {
-    opacity: 0.4;
-    transform: scale(0.6);
+    opacity: 0.3;
   }
 }
-
-.tag[data-running] .hole {
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tag[data-running] .hole {
-    animation: none;
-  }
-}
-
-/* The report. On a phone: tag, decision, cause, timeline, models, fallback notes. */
-.report,
-.report-body,
-.decide-col,
-.main-col {
-  display: grid;
-  gap: 1.25rem;
-  min-width: 0;
-}
-
-.panel,
-.main-col > section {
-  display: grid;
-  gap: 0.625rem;
-  min-width: 0;
-  padding: 1rem;
-  border-radius: 0.5rem;
-  background: var(--surface);
-}
-
-.decision {
-  border-top: 0.375rem solid var(--amber);
-}
-
-.decision h2 {
-  color: var(--amber-text);
-}
-
-.plan-what,
-.decided {
-  font-weight: 700;
-}
-
-.plan-what {
-  font-size: 1.125rem;
-}
-
-.files {
-  display: grid;
-  gap: 0.25rem;
-  padding: 0;
-  list-style: none;
-}
-
-.decide {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.hypotheses {
-  display: grid;
-  gap: 1rem;
-  padding-left: 1.25rem;
-}
-
-.hypotheses > li,
-.evidence-item {
-  display: grid;
-  gap: 0.375rem;
-}
-
-.evidence-item figcaption {
-  color: var(--quiet);
-  font-size: 0.875rem;
-}
-
-/* Evidence reads like the tool's own output, wrapped: no sideways scroll boxes. */
-pre.evidence {
-  padding: 0.75rem;
-  border-radius: 0.375rem;
-  background: var(--wall);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.more summary {
-  color: var(--link);
-  cursor: pointer;
-}
-
-.more[open] summary {
-  margin-bottom: 0.25rem;
-}
-
-.timeline {
-  display: grid;
-  gap: 0.75rem;
-  padding: 0;
-  list-style: none;
-}
-
-.timeline > li {
-  display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
-  gap: 0.5rem;
-}
-
-.seq {
-  color: var(--quiet);
-  font-family: var(--mono);
-  text-align: right;
-}
-
-.step-head {
+.badges {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 0.5rem;
+  gap: 6px;
 }
 
-.outcome[data-outcome='error'],
-.outcome[data-outcome='timeout'] {
-  font-weight: 700;
-}
-
+/* The live line: what is still running, and Pause. */
 .live {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 1rem;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
 }
 
-.models {
+/* Tables: compact rows and a plain header; a wrapper scrolls sideways when the table is wider. */
+.table-wrap {
+  position: relative;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 13px;
 }
-
-.models th,
-.models td {
-  padding: 0.375rem 0.75rem 0.375rem 0;
-  border-bottom: 1px solid var(--line);
+th {
+  position: sticky;
+  top: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunken);
+  color: var(--text-2);
+  font-weight: 500;
   text-align: left;
+  white-space: nowrap;
+}
+td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--rule);
   vertical-align: top;
 }
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* The lists: a rounded container, roomier rows that tint on hover. Its width is the 100cqw that
+   the column rules below share out. */
+.table-wrap.list {
+  container-type: inline-size;
+  border-radius: var(--radius-lg);
+}
+.list-table {
+  font-size: 14px;
+}
+.list-table th {
+  height: 40px;
+  padding: 0 12px;
+  background: var(--surface);
+  color: var(--text);
+  vertical-align: middle;
+}
+.list-table td {
+  padding: 12px;
+  vertical-align: middle;
+}
+.list-table tbody tr {
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.list-table tbody tr:hover {
+  background: var(--sunken);
+}
+.list-table td a {
+  font-weight: 500;
+  text-decoration: none;
+}
+.list-table td a:hover {
+  text-decoration: underline;
+}
+/* --text-2, not --text-3: the report's label sits on the canvas, where --text-3 is under 4.5:1. */
+.illustrative {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 16px;
+}
+p.illustrative {
+  justify-self: start;
+  margin: 0;
+  padding: 1px 8px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 999px;
+}
+.pager {
+  display: flex;
+  justify-content: flex-end;
+}
+/* Set column widths: each column's base fits its content on one line, and every column gets an
+   equal share of what is left of the wrapper's width (100cqw). Long text wraps inside its column;
+   figures stay on one line. Inline styles would carry these per table, but the CSP refuses them,
+   so each table's bases are written here. Below a table's bases the wrapper scrolls. */
+@media (min-width: 721px) {
+  .list-table.fixed {
+    table-layout: fixed;
+    min-width: var(--bases);
+  }
+  .list-table.fixed col {
+    width: calc(var(--base) + max(0px, (100cqw - var(--bases)) / var(--columns)));
+  }
+  .list-table.fixed th,
+  .list-table.fixed time {
+    white-space: normal;
+  }
+  .list-table.fixed td {
+    overflow-wrap: anywhere;
+  }
+  /* A long state wraps inside its pill rather than past its column. */
+  .list-table.fixed .badge {
+    height: auto;
+    min-height: 22px;
+    white-space: normal;
+  }
+  .incidents {
+    --bases: 76rem;
+    --columns: 7;
+  }
+  .incidents col:nth-child(1) {
+    --base: 14.5rem;
+  }
+  .incidents col:nth-child(2) {
+    --base: 11.5rem;
+  }
+  .incidents col:nth-child(3) {
+    --base: 15.5rem;
+  }
+  .incidents col:nth-child(4) {
+    --base: 7.5rem;
+  }
+  .incidents col:nth-child(5) {
+    --base: 10rem;
+  }
+  .incidents col:nth-child(6) {
+    --base: 9.5rem;
+  }
+  .incidents col:nth-child(7) {
+    --base: 7.5rem;
+  }
+  .runs {
+    --bases: 60rem;
+    --columns: 5;
+  }
+  .runs col:nth-child(1) {
+    --base: 18rem;
+  }
+  .runs col:nth-child(2) {
+    --base: 17.5rem;
+  }
+  .runs col:nth-child(3) {
+    --base: 7.5rem;
+  }
+  .runs col:nth-child(4) {
+    --base: 9.5rem;
+  }
+  .runs col:nth-child(5) {
+    --base: 7.5rem;
+  }
+  .models {
+    --bases: 37rem;
+    --columns: 4;
+  }
+  .models col:nth-child(1) {
+    --base: 9rem;
+  }
+  .models col:nth-child(2) {
+    --base: 15rem;
+  }
+  .models col:nth-child(3) {
+    --base: 7rem;
+  }
+  .models col:nth-child(4) {
+    --base: 6rem;
+  }
+  /* Counts and percentages sit centred as one block, as wide as the column's widest figure in ch
+     plus half a ch, the digits right-aligned in it, so they line up under their header. */
+  .list-table th.center,
+  .list-table td.figure {
+    text-align: center;
+  }
+  .list-table .figure-block {
+    display: inline-block;
+    min-width: 3.5ch;
+    font-variant-numeric: tabular-nums lining-nums;
+    text-align: right;
+  }
+  .incidents .figure-block,
+  .runs .figure-block {
+    min-width: 5ch;
+  }
+}
+/* A card's labels: the column headers say it on a wider screen. */
+.card-label {
+  display: none;
+}
 
-/* On a phone the models table stacks into rows; the roles in the markup keep it a table. */
-@media (max-width: 40rem) {
-  .models thead {
+/* The report: its head, then the verdict and cause, the evidence, the steps, the models and the
+   missing evidence; the plan follows the verdict on a phone and sits beside the rest from 1024 px. */
+.report,
+.report-body,
+.report-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.report-body {
+  align-items: start;
+}
+.report-head {
+  display: grid;
+  gap: 8px;
+}
+.report-head h1 {
+  font-size: 22px;
+  line-height: 28px;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* A plan waiting for a person carries the amber rule of everything that needs attention. */
+.plan.pending {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.plan-what {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.plan-note {
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--sunken);
+}
+.files,
+.others {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+.cause {
+  display: grid;
+  gap: 4px;
+}
+.cause strong {
+  font-size: 15px;
+}
+.decide {
+  display: grid;
+  gap: 8px;
+}
+.decide .buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.decide .button {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+.decided {
+  font-weight: 600;
+}
+.evidence-group,
+.evidence-item {
+  display: grid;
+  gap: 6px;
+}
+.evidence-group + .evidence-group {
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+.evidence-item figcaption {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+/* Evidence reads like the tool's own output, wrapped: no sideways scroll boxes. */
+pre.excerpt {
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.more summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+.more[open] summary {
+  margin-bottom: 6px;
+}
+.timeline {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+.timeline > li {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 8px;
+}
+.seq {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  text-align: right;
+}
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-weight: 500;
+}
+@media (min-width: 1024px) {
+  .report-body.with-side {
+    grid-template-columns: minmax(0, 1fr) 22rem;
+    grid-template-rows: repeat(4, auto) 1fr;
+  }
+  .report-body.with-side > * {
+    grid-column: 1;
+  }
+  .report-body.with-side > .report-side {
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+}
+
+.sign-in {
+  gap: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge.busy::before {
+    animation: none;
+  }
+  .button,
+  .list-table tbody tr,
+  .theme-switch label,
+  .top-nav a,
+  .menu-panel nav a {
+    transition: none;
+  }
+}
+
+/* Phone: a 16 px gutter, the lists and sign-in in the menu, one theme button, and each list row a
+   card laid out by its cells' data-card: title and meta stack on the left, aside sits on the
+   right, wide takes the last line, hide leaves the card. The whole card opens its report. */
+@media (max-width: 720px) {
+  :root {
+    --gutter: 16px;
+  }
+  .top-bar {
+    gap: 12px;
+  }
+  .top-nav,
+  .theme-switch,
+  .account {
+    display: none;
+  }
+  .theme-cycle {
+    display: grid;
+  }
+  .top-actions {
+    gap: 4px;
+  }
+  .menu {
+    display: block;
+  }
+  .phone-only {
+    display: inline;
+  }
+  .table-wrap.card-list {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .cards,
+  .cards tbody {
+    display: block;
+  }
+  .cards thead,
+  .cards caption {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
-    white-space: nowrap;
   }
-
-  .models,
-  .models tbody,
-  .models tr,
-  .models td {
+  .cards tbody tr {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-auto-flow: row dense;
+    gap: 6px 12px;
+    margin-bottom: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+  }
+  .cards tbody td,
+  .cards tbody tr:last-child td {
     display: block;
-  }
-
-  .models tr {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .models td {
-    padding: 0.125rem 0;
+    padding: 0;
     border: 0;
   }
-
-  .models td::before {
-    color: var(--quiet);
-    content: attr(data-label) ': ';
+  .cards td[data-card='title'],
+  .cards td[data-card='meta'] {
+    grid-column: 1;
   }
-}
-
-.demo-banner {
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.demo-banner > div {
-  display: grid;
-  gap: 0.25rem;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 0.75rem 1rem;
-}
-
-@media (min-width: 64rem) {
-  body {
-    font-size: 1.0625rem;
+  /* The title leads the card even where its column comes later, as the model does. */
+  .cards td[data-card='title'] {
+    order: -1;
   }
-
-  .landing h1 {
-    font-size: 2.5rem;
+  .cards td.figure .card-label {
+    display: inline;
+    margin-right: 6px;
   }
-
-  .tags {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .cards td[data-card='aside'] {
+    grid-column: 2;
+    justify-self: end;
   }
-
-  .report-body {
-    grid-template-areas: 'main decide';
-    grid-template-columns: minmax(0, 1fr) 22rem;
-    align-items: start;
+  .cards td[data-card='wide'] {
+    order: 1;
+    grid-column: 1 / -1;
+    color: var(--text-2);
   }
-
-  .decide-col {
-    position: sticky;
-    top: 1rem;
-    grid-area: decide;
+  .cards td[data-card='hide'],
+  .cards tbody tr:last-child td[data-card='hide'] {
+    display: none;
   }
-
-  .main-col {
-    grid-area: main;
+  .cards td[data-card='title'] a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-lg);
+  }
+  .card-label {
+    display: block;
+    color: var(--text-3);
+    font-size: 13px;
+  }
+  input,
+  textarea {
+    font-size: 16px;
   }
 }

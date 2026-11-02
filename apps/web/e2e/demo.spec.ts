@@ -24,3 +24,38 @@ test('serves the saved reports without the gateway or a session', async ({ page,
   await expect(page.getByText(LABEL)).toHaveCount(0);
   expect(await requests()).toBe(before);
 });
+
+test('keeps a chosen theme in its cookie, renders it on the server, and System forgets it', async ({
+  page,
+}) => {
+  const html = page.locator('html');
+  const cookie = async () =>
+    (await page.context().cookies()).find((c) => c.name === 'tc-theme')?.value;
+  await page.goto('/demo');
+  await expect(html).not.toHaveAttribute('data-theme');
+  await page.getByRole('radio', { name: 'Dark' }).check();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  expect(await cookie()).toBe('dark');
+  await page.reload();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('radio', { name: 'Dark' })).toBeChecked();
+  await page.getByRole('radio', { name: 'System' }).check();
+  await expect(html).not.toHaveAttribute('data-theme');
+  expect(await cookie()).toBeUndefined();
+});
+
+test('folds the links into a menu on a phone, and steps the theme with one button', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/demo');
+  const evalRuns = page.getByRole('link', { name: 'Eval runs' });
+  await expect(evalRuns).toBeHidden();
+  await page.getByLabel('Menu').click();
+  await evalRuns.click();
+  await expect(page).toHaveURL(`${E2E.webUrl}/demo?source=sim`);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Eval runs');
+  await expect(evalRuns).toBeHidden();
+  await page.getByRole('button', { name: 'Theme: System. Switch to Light' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});

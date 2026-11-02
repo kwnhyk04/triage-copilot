@@ -1,19 +1,25 @@
 import type { Investigation } from '../lib/investigations.ts';
 import {
   ACTION_KINDS,
-  band,
   cause,
+  causeName,
   fallbackNotes,
+  OUTCOMES,
   PARTS,
+  percent,
   PLAN_KINDS,
+  PLAN_STATES,
+  planNote,
   progressLine,
-  STATUSES,
+  statusBadge,
   STEP_KINDS,
   stillChanging,
   utcTime,
+  verdictBadge,
 } from '../lib/report.ts';
-import { ILLUSTRATIVE_LABEL, TagBand } from './investigation-list.tsx';
+import { ILLUSTRATIVE_LABEL } from './investigation-list.tsx';
 import { LiveRefresh } from './live-refresh.tsx';
+import { Badge } from './ui.tsx';
 
 // The report refreshes every 3 s while it may still change.
 const REFRESH_SECONDS = 3;
@@ -29,13 +35,13 @@ const ms = (duration: number) => `${duration.toLocaleString('en-US')} ms`;
 /** A tool result as the tool returned it: mono, wrapped, never cut silently. */
 function Excerpt({ text }: { text: string }) {
   const lines = text.split('\n');
-  if (lines.length <= FOLD_LINES) return <pre className="evidence">{text}</pre>;
+  if (lines.length <= FOLD_LINES) return <pre className="excerpt">{text}</pre>;
   return (
     <>
-      <pre className="evidence">{lines.slice(0, FOLD_LINES).join('\n')}</pre>
+      <pre className="excerpt">{lines.slice(0, FOLD_LINES).join('\n')}</pre>
       <details className="more">
         <summary>Show all {lines.length} lines</summary>
-        <pre className="evidence">{lines.slice(FOLD_LINES).join('\n')}</pre>
+        <pre className="excerpt">{lines.slice(FOLD_LINES).join('\n')}</pre>
       </details>
     </>
   );
@@ -46,15 +52,15 @@ function Decide({ plan, decide, demo }: { plan: Plan; decide?: DecidePlan; demo?
   if (demo === true) {
     return (
       <div className="decide">
-        <p className="buttons">
-          <button type="button" className="approve" disabled>
+        <div className="buttons">
+          <button type="button" className="button primary" disabled>
             Approve plan
           </button>
-          <button type="button" className="reject" disabled>
+          <button type="button" className="button danger" disabled>
             Reject plan
           </button>
-        </p>
-        <p className="note">The demo records no decision.</p>
+        </div>
+        <p className="faint">The demo records no decision.</p>
       </div>
     );
   }
@@ -63,48 +69,47 @@ function Decide({ plan, decide, demo }: { plan: Plan; decide?: DecidePlan; demo?
     <form action={decide.bind(null, plan.id)} className="decide">
       <label htmlFor="reason">Reason (optional)</label>
       <textarea id="reason" name="reason" maxLength={2000} rows={2} />
-      <p className="buttons">
-        <button type="submit" name="verdict" value="approve" className="approve">
+      <div className="buttons">
+        <button type="submit" name="verdict" value="approve" className="button primary">
           Approve plan
         </button>
-        <button type="submit" name="verdict" value="reject" className="reject">
+        <button type="submit" name="verdict" value="reject" className="button danger">
           Reject plan
         </button>
-      </p>
+      </div>
     </form>
   );
 }
 
-/** A real incident's plan: what it would do, and the decision on it or the way to make one. */
+/** A real incident's plan: what it would do, what approving does, and the decision or its form. */
 function PlanPanel({
   plan,
   decide,
   demo,
   now,
 }: {
-  plan: Investigation['plan'];
+  plan: Plan;
   decide?: DecidePlan | undefined;
   demo?: boolean | undefined;
   now: number;
 }) {
-  if (plan?.proposal == null) {
+  const { proposal } = plan;
+  if (proposal == null) {
     return (
       <section className="panel" aria-labelledby="plan">
         <h2 id="plan">Plan</h2>
-        <p>
-          {plan === null
-            ? 'No plan was made: plans are only for real incidents, while the planner is on.'
-            : `No plan: ${plan.problem ?? 'no reason was recorded'}`}
-        </p>
+        <p>{`No plan: ${plan.problem ?? 'no reason was recorded'}`}</p>
       </section>
     );
   }
-  const { proposal } = plan;
   const pending = plan.status === 'pending';
   const decided = plan.status === 'approved' ? 'Approved' : 'Rejected';
   return (
-    <section className={pending ? 'panel decision' : 'panel'} aria-labelledby="plan">
-      <h2 id="plan">{pending ? 'Decision needed' : 'Plan'}</h2>
+    <section className={pending ? 'panel plan pending' : 'panel plan'} aria-labelledby="plan">
+      <div className="panel-head">
+        <h2 id="plan">Plan</h2>
+        <Badge state={PLAN_STATES[plan.status]} />
+      </div>
       <p className="plan-what">
         {PLAN_KINDS[proposal.kind]} {proposal.target}
       </p>
@@ -118,6 +123,7 @@ function PlanPanel({
           ))}
         </ul>
       )}
+      <p className="plan-note">{planNote(proposal)}</p>
       {pending ? (
         <Decide
           plan={plan}
@@ -131,7 +137,6 @@ function PlanPanel({
           {plan.decision_reason === null ? '.' : `: ${plan.decision_reason}`}
         </p>
       )}
-      <p className="note">A decision is only recorded: nothing runs from a plan yet.</p>
     </section>
   );
 }
@@ -150,205 +155,238 @@ export interface ReportProps {
 }
 
 /**
- * One investigation: the verdict tag, then the decision, the cause and its evidence, the steps,
- * the models asked and their misses. In that order on a phone; the decision sits beside the rest
- * on a wide screen.
+ * One investigation: its title and badges, then the verdict and cause, the evidence, the steps,
+ * the models that served and the missing evidence. The plan follows the verdict on a phone and
+ * sits beside the rest on a wide screen.
  */
 export function Report({ investigation, now, decide, demo, illustrative, refresh }: ReportProps) {
-  const { hypotheses, models, steps, proposed_actions: actions } = investigation;
+  const { hypotheses, models, steps, plan, proposed_actions: actions } = investigation;
+  const [top, ...others] = hypotheses;
+  const cited = hypotheses.filter((hypothesis) => hypothesis.evidence.length > 0);
   const notes = fallbackNotes(models);
-  const live =
-    refresh === true && stillChanging(investigation, now, investigation.plan !== null) ? (
-      <LiveRefresh seconds={REFRESH_SECONDS} status={progressLine(investigation)} />
-    ) : undefined;
   const tools = new Map(
     steps.flatMap((step) => (step.tool_call ? [[step.tool_call.id, step.tool_call.name]] : [])),
   );
+  const side = plan !== null || actions.length > 0;
   return (
     <article className="report">
-      <header
-        className="tag"
-        data-kind={band(investigation).kind}
-        data-running={investigation.status === 'running' ? '' : undefined}
-      >
-        <TagBand item={investigation} />
-        <div className="tag-body">
-          <h1>{investigation.title}</h1>
-          <p className="tag-status">
-            {STATUSES[investigation.status]}, opened {utcTime(investigation.created_at, now)}
-          </p>
-          {illustrative === true && <p className="illustrative">{ILLUSTRATIVE_LABEL}</p>}
-          <p className="summary">{investigation.summary ?? 'No report yet.'}</p>
-          {investigation.partial && (
-            <p>Partial report: the agent stopped at a limit and wrote this report itself.</p>
+      <header className="report-head">
+        <h1>{investigation.title}</h1>
+        <p className="badges">
+          <Badge state={verdictBadge(investigation)} />
+          <Badge state={statusBadge(investigation.status)} />
+          {investigation.plan_status !== null && (
+            <Badge state={PLAN_STATES[investigation.plan_status]} />
           )}
-          <p className="quiet">
-            {investigation.tokens_used.toLocaleString('en-US')} model tokens in its kept steps.
-          </p>
-        </div>
+        </p>
+        <p className="meta">
+          <span>Opened {utcTime(investigation.created_at, now)}</span>
+          <span>
+            {investigation.tokens_used.toLocaleString('en-US')} model tokens in its kept steps
+          </span>
+        </p>
+        {illustrative === true && <p className="illustrative">{ILLUSTRATIVE_LABEL}</p>}
+        {refresh === true && stillChanging(investigation, now, plan !== null) && (
+          <LiveRefresh seconds={REFRESH_SECONDS} status={progressLine(investigation)} />
+        )}
       </header>
 
-      <div className="report-body">
-        <div className="decide-col">
-          <PlanPanel plan={investigation.plan} decide={decide} demo={demo} now={now} />
-          {actions.length > 0 && (
-            <section className="panel" aria-labelledby="proposed">
-              <h2 id="proposed">Proposed actions</h2>
-              <ul className="stack" role="list">
-                {actions.map((action) => (
-                  <li key={action.id}>
-                    <p className="plan-what">
-                      {ACTION_KINDS[action.kind]} on {action.target}
-                    </p>
-                    <p>{action.rationale}</p>
-                    <p className="quiet">Status: {action.status}</p>
-                  </li>
-                ))}
-              </ul>
-              <p className="note">Proposals from simulated incidents stay read-only.</p>
-            </section>
+      <div className={side ? 'report-body with-side' : 'report-body'}>
+        <section className="panel" aria-labelledby="verdict">
+          <h2 id="verdict">Verdict and cause</h2>
+          <p className="lede">{investigation.summary ?? 'No report yet.'}</p>
+          {investigation.partial && (
+            <p className="notice">
+              Partial report: the agent stopped at a limit and wrote this report itself.
+            </p>
           )}
-        </div>
-
-        <div className="main-col">
-          <section aria-labelledby="cause">
-            <h2 id="cause">Cause</h2>
-            {hypotheses.length === 0 ? (
-              <p>None reported.</p>
-            ) : (
-              <ol className="hypotheses">
-                {hypotheses.map((hypothesis) => (
+          {top === undefined ? (
+            <p>No cause reported.</p>
+          ) : (
+            <div className="cause">
+              <p>
+                <strong>{causeName(top)}</strong>{' '}
+                <span className="muted">{percent(top.confidence)} confidence</span>
+              </p>
+              <p>{top.summary}</p>
+            </div>
+          )}
+          {others.length > 0 && (
+            <>
+              <h3>Other causes considered</h3>
+              <ul className="others" role="list">
+                {others.map((hypothesis) => (
                   <li key={hypothesis.rank}>
-                    <p className="hypothesis">
-                      <strong>{cause(hypothesis)}</strong>, confidence{' '}
-                      {Math.round(hypothesis.confidence * 100)}%
+                    <p>
+                      <strong>{causeName(hypothesis)}</strong>{' '}
+                      <span className="muted">{percent(hypothesis.confidence)} confidence</span>
                     </p>
                     <p>{hypothesis.summary}</p>
-                    {hypothesis.evidence.map((evidence, i) => (
-                      <figure
-                        key={`${String(i)}-${evidence.tool_call_id}`}
-                        className="evidence-item"
-                      >
-                        <figcaption>
-                          <code>{tools.get(evidence.tool_call_id) ?? 'tool'}</code> result{' '}
-                          <code>{evidence.tool_call_id}</code>
-                        </figcaption>
-                        {evidence.excerpt === '' ? (
-                          <p className="quiet">
-                            No result kept: the call never returned, or its steps were purged after
-                            30 days.
-                          </p>
-                        ) : (
-                          <Excerpt text={evidence.excerpt} />
-                        )}
-                      </figure>
-                    ))}
                   </li>
-                ))}
-              </ol>
-            )}
-          </section>
-
-          {investigation.missing_evidence.length > 0 && (
-            <section aria-labelledby="missing">
-              <h2 id="missing">Missing evidence</h2>
-              <ul>
-                {investigation.missing_evidence.map((missing) => (
-                  <li key={missing}>{missing}</li>
                 ))}
               </ul>
-            </section>
+            </>
           )}
+          {plan === null && (
+            <p className="faint">
+              No plan was made: plans are only for real incidents, while the planner is on.
+            </p>
+          )}
+        </section>
 
-          <section aria-labelledby="timeline">
-            <h2 id="timeline">Timeline</h2>
-            {live}
-            {steps.length === 0 ? (
-              <p>No steps yet.</p>
-            ) : (
-              <ol className="timeline" role="list">
-                {steps.map((step) => (
-                  <li key={step.seq}>
-                    <span className="seq">{step.seq}</span>
-                    <div>
-                      <p className="step-head">
-                        <span>{STEP_KINDS[step.kind]}</span>
-                        {step.tool_call !== null && (
-                          <>
-                            {' '}
-                            <code>{step.tool_call.name}</code>{' '}
-                            <span className="outcome" data-outcome={step.tool_call.status}>
-                              {step.tool_call.status}
-                            </span>{' '}
-                            <span className="quiet">{ms(step.tool_call.duration_ms)}</span>
-                          </>
-                        )}
+        {side && (
+          <div className="report-side">
+            {plan !== null && <PlanPanel plan={plan} decide={decide} demo={demo} now={now} />}
+            {actions.length > 0 && (
+              <section className="panel" aria-labelledby="proposed">
+                <h2 id="proposed">Proposed actions</h2>
+                <ul className="stack" role="list">
+                  {actions.map((action) => (
+                    <li key={action.id}>
+                      <p className="plan-what">
+                        {ACTION_KINDS[action.kind]} on {action.target}
                       </p>
-                      <p>{step.summary}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
+                      <p>{action.rationale}</p>
+                      <p className="muted">Status: {action.status}</p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="faint">Proposals from simulated incidents stay read-only.</p>
+              </section>
             )}
-          </section>
+          </div>
+        )}
 
-          <section aria-labelledby="models">
-            <h2 id="models">Models</h2>
-            {models.length === 0 ? (
-              <p>None listed: the report is older than the model list, or not written yet.</p>
-            ) : (
-              <table className="models" role="table">
+        <section className="panel" aria-labelledby="evidence">
+          <h2 id="evidence">Evidence</h2>
+          {cited.length === 0 ? (
+            <p>None cited.</p>
+          ) : (
+            cited.map((hypothesis) => (
+              <div key={hypothesis.rank} className="evidence-group">
+                {cited.length > 1 && <h3>For {cause(hypothesis)}</h3>}
+                {hypothesis.evidence.map((evidence, i) => (
+                  <figure key={`${String(i)}-${evidence.tool_call_id}`} className="evidence-item">
+                    <figcaption>
+                      <code>{tools.get(evidence.tool_call_id) ?? 'tool'}</code> result{' '}
+                      <code>{evidence.tool_call_id}</code>
+                    </figcaption>
+                    {evidence.excerpt === '' ? (
+                      <p className="muted">
+                        No result kept: the call never returned, or its steps were purged after 30
+                        days.
+                      </p>
+                    ) : (
+                      <Excerpt text={evidence.excerpt} />
+                    )}
+                  </figure>
+                ))}
+              </div>
+            ))
+          )}
+        </section>
+
+        <section className="panel" aria-labelledby="steps">
+          <h2 id="steps">Steps</h2>
+          {steps.length === 0 ? (
+            <p>No steps yet.</p>
+          ) : (
+            <ol className="timeline" role="list">
+              {steps.map((step) => (
+                <li key={step.seq}>
+                  <span className="seq">{step.seq}</span>
+                  <div>
+                    <p className="step-head">
+                      <span>{STEP_KINDS[step.kind]}</span>
+                      {step.tool_call !== null && (
+                        <>
+                          <code>{step.tool_call.name}</code>
+                          <Badge state={OUTCOMES[step.tool_call.status]} />
+                          <span className="muted">{ms(step.tool_call.duration_ms)}</span>
+                        </>
+                      )}
+                    </p>
+                    <p>{step.summary}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section className="panel" aria-labelledby="models">
+          <h2 id="models">Models that served</h2>
+          {models.length === 0 ? (
+            <p>None listed: the report is older than the model list, or not written yet.</p>
+          ) : (
+            <div
+              className="table-wrap list card-list"
+              role="region"
+              aria-labelledby="models"
+              tabIndex={0}
+            >
+              <table className="list-table cards fixed models">
+                <colgroup>
+                  <col />
+                  <col />
+                  <col />
+                  <col />
+                </colgroup>
                 <thead>
-                  <tr role="row">
-                    <th scope="col" role="columnheader">
-                      Part
-                    </th>
-                    <th scope="col" role="columnheader">
-                      Model
-                    </th>
-                    <th scope="col" role="columnheader">
+                  <tr>
+                    <th scope="col">Part</th>
+                    <th scope="col">Model</th>
+                    <th scope="col" className="center">
                       Answered
                     </th>
-                    <th scope="col" role="columnheader">
+                    <th scope="col" className="center">
                       Missed
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {models.map((model) => (
-                    <tr key={`${model.part}-${model.provider}-${model.model}`} role="row">
-                      <td role="cell" data-label="Part">
-                        {PARTS[model.part]}
+                    <tr key={`${model.part}-${model.provider}-${model.model}`}>
+                      <td data-card="meta">{PARTS[model.part]}</td>
+                      <td data-card="title">
+                        <code>{model.model}</code> <span className="muted">({model.provider})</span>
                       </td>
-                      <td role="cell" data-label="Model">
-                        <code>{model.model}</code> ({model.provider})
+                      <td className="figure" data-card="aside">
+                        <span className="card-label">Answered</span>
+                        <span className="figure-block">{model.calls}</span>
                       </td>
-                      <td role="cell" data-label="Answered">
-                        {model.calls}
-                      </td>
-                      <td role="cell" data-label="Missed">
-                        {model.failed}
+                      <td className="figure" data-card="aside">
+                        <span className="card-label">Missed</span>
+                        <span className="figure-block">{model.failed}</span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
-          </section>
+            </div>
+          )}
+          <h3>Fallback notes</h3>
+          {notes.length === 0 ? (
+            <p>None: every model asked answered each request.</p>
+          ) : (
+            <ul>
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-          <section aria-labelledby="fallbacks">
-            <h2 id="fallbacks">Fallback notes</h2>
-            {notes.length === 0 ? (
-              <p>None: every model asked answered each request.</p>
-            ) : (
-              <ul>
-                {notes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-            )}
+        {investigation.missing_evidence.length > 0 && (
+          <section className="panel" aria-labelledby="missing">
+            <h2 id="missing">Missing evidence</h2>
+            <ul>
+              {investigation.missing_evidence.map((missing) => (
+                <li key={missing}>{missing}</li>
+              ))}
+            </ul>
           </section>
-        </div>
+        )}
       </div>
     </article>
   );

@@ -39,21 +39,70 @@ export const STEP_KINDS: Record<Schemas['StepKind'], string> = {
 };
 const MONTHS = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
 
-/** A tag's band: its color (kind) and first words. */
-export interface Band {
-  kind: 'real' | 'not-real' | 'simulated' | 'open' | 'none';
+/** The two lists, as the header and the pages name them. */
+export const TABS: Record<Schemas['InvestigationSource'], string> = {
+  live: 'Live incidents',
+  sim: 'Eval runs',
+};
+
+/** A badge's colour, always beside its word: tinted pills, and one solid one for Failed. */
+export type Tone = 'neutral' | 'info' | 'ok' | 'warn' | 'bad' | 'fail';
+/** A badge: its word, its tone, and a pulsing dot while work goes on. */
+export interface BadgeState {
   label: string;
+  tone: Tone;
+  busy?: true;
 }
 
-/** The band: the verdict, a simulated incident's (which has none), or an open investigation's. */
-export function band({ verdict, source, status }: Pick<Summary, 'verdict' | 'source' | 'status'>) {
-  if (verdict === 'real') return { kind: 'real', label: VERDICTS.real } satisfies Band;
-  if (verdict === 'not_real') return { kind: 'not-real', label: VERDICTS.not_real } satisfies Band;
-  if (source === 'sim') return { kind: 'simulated', label: 'Simulated' } satisfies Band;
+/** The verdict as a badge, red only for a real incident; a simulated incident has none. */
+export function verdictBadge({
+  verdict,
+  source,
+  status,
+}: Pick<Summary, 'verdict' | 'source' | 'status'>): BadgeState {
+  if (verdict === 'real') return { label: VERDICTS.real, tone: 'bad' };
+  if (verdict === 'not_real') return { label: VERDICTS.not_real, tone: 'neutral' };
+  if (source === 'sim') return { label: 'Simulated', tone: 'neutral' };
   return status === 'queued' || status === 'running'
-    ? ({ kind: 'open', label: 'Investigating' } satisfies Band)
-    : ({ kind: 'none', label: 'No verdict' } satisfies Band);
+    ? { label: 'Investigating', tone: 'info', busy: true }
+    : { label: 'No verdict', tone: 'neutral' };
 }
+
+const STATUS_TONES: Record<Schemas['InvestigationStatus'], Tone> = {
+  queued: 'neutral',
+  running: 'info',
+  awaiting_approval: 'warn',
+  resolved: 'ok',
+  failed: 'fail',
+  cancelled: 'neutral',
+};
+
+/** A status as a badge, its dot pulsing while the agent runs. */
+export const statusBadge = (status: Schemas['InvestigationStatus']): BadgeState =>
+  status === 'running'
+    ? { label: STATUSES[status], tone: STATUS_TONES[status], busy: true }
+    : { label: STATUSES[status], tone: STATUS_TONES[status] };
+
+/** A plan's state as a badge, amber while it waits for a person. */
+export const PLAN_STATES: Record<Schemas['ActionStatus'], BadgeState> = {
+  pending: { label: 'Decision needed', tone: 'warn' },
+  approved: { label: 'Approved', tone: 'ok' },
+  rejected: { label: 'Rejected', tone: 'neutral' },
+};
+
+/** A step's tool outcome as a badge; a call that answered stays quiet. */
+export const OUTCOMES: Record<Schemas['ToolCallStatus'], BadgeState> = {
+  ok: { label: 'OK', tone: 'neutral' },
+  error: { label: 'Error', tone: 'bad' },
+  timeout: { label: 'Timed out', tone: 'warn' },
+};
+
+/** What approving does: only an approved restart runs, once, while the actions switch is on. */
+export const planNote = ({ kind, target }: Pick<Schemas['PlanProposal'], 'kind' | 'target'>) =>
+  kind === 'restart_service'
+    ? 'Approving only records the decision unless the actions switch is on. ' +
+      `With it on, the executor restarts ${target} once.`
+    : 'Approving only records the decision: nothing runs from this kind of plan.';
 
 /** A hypothesis's root cause class and the service it names, such as "database in postgres". */
 export const cause = ({
@@ -62,12 +111,14 @@ export const cause = ({
 }: Pick<Schemas['Hypothesis'], 'root_cause_class' | 'service'>) =>
   `${root_cause_class.replaceAll('_', ' ')} in ${service}`;
 
-/** The top cause in brief, such as "Resource exhaustion in worker, 80%". */
-export function causeBrief(top: Summary['cause']): string | undefined {
-  if (top === null) return undefined;
+/** A cause as a reader says it, such as "Resource exhaustion in worker". */
+export function causeName(top: Pick<Schemas['Hypothesis'], 'root_cause_class' | 'service'>) {
   const text = cause(top);
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)}, ${String(Math.round(top.confidence * 100))}%`;
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
+
+/** A confidence as a whole percentage, such as "80%". */
+export const percent = (confidence: number) => `${String(Math.round(confidence * 100))}%`;
 
 /**
  * The time a server page is read at, for its ages. A server component renders once per request, so
