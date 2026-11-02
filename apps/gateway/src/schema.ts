@@ -1,5 +1,6 @@
 import type {
   ActionApprovedV1,
+  ActionApprovedV2,
   InvestigationRequestedV2,
   PlanRecordedV1,
   ReportRecordedV2,
@@ -292,16 +293,51 @@ export const plans = gateway.table(
   ],
 );
 
-// One human decision per plan; the primary key refuses a second. Nothing runs from it in phase 2.
-export const planDecisions = gateway.table('plan_decisions', {
-  planId: uuid('plan_id')
-    .primaryKey()
-    .references(() => plans.id),
-  approver: text('approver').notNull(),
-  decision: decision('decision').notNull(),
-  reason: text('reason'),
-  decidedAt: timestamptz('decided_at').notNull().defaultNow(),
-});
+// One human decision per plan; the primary key refuses a second. An approved restart runs once
+// the executor claims it (phase 3).
+export const planDecisions = gateway.table(
+  'plan_decisions',
+  {
+    planId: uuid('plan_id')
+      .primaryKey()
+      .references(() => plans.id),
+    approver: text('approver').notNull(),
+    decision: decision('decision').notNull(),
+    reason: text('reason'),
+    decidedAt: timestamptz('decided_at').notNull().defaultNow(),
+  },
+  // The target of plan_executions' foreign key, which accepts approved decisions only.
+  (t) => [unique('plan_decisions_plan_id_decision_key').on(t.planId, t.decision)],
+);
+
+// The executor's claim on an approved restart plan, keyed by the plan id, which ActionApproved v2
+// carries as its action id; as executions does for proposed actions, the foreign key and the check
+// let no row exist without an approval whose decision is approved.
+export const planExecutions = gateway.table(
+  'plan_executions',
+  {
+    planId: uuid('plan_id').primaryKey(),
+    decision: decision('decision').notNull().default('approved'),
+    state: executionState('state').notNull().default('claimed'),
+    dryRun: boolean('dry_run').notNull(),
+    // What the executor reported: a dry run's command, or why the restart failed.
+    detail: text('detail'),
+    claimedAt: timestamptz('claimed_at').notNull().defaultNow(),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (t) => [
+    foreignKey({
+      name: 'plan_executions_decision_fk',
+      columns: [t.planId, t.decision],
+      foreignColumns: [planDecisions.planId, planDecisions.decision],
+    }),
+    check('plan_executions_approved_only', sql`${t.decision} = 'approved'`),
+    check(
+      'plan_executions_finished_matches_state',
+      sql`(${t.finishedAt} is null) = (${t.state} = 'claimed')`,
+    ),
+  ],
+);
 
 // Messages committed together with the rows that caused them. The relay (src/outbox.ts) sends
 // each to SQS and deletes it; a row that keeps failing gets failed_at until `pnpm outbox:replay`.
@@ -312,7 +348,9 @@ export const outbox = gateway.table(
     queue: outboxQueue('queue').notNull().default('investigations'),
     messageGroupId: text('message_group_id').notNull(),
     deduplicationId: text('deduplication_id').notNull(),
-    body: jsonb('body').$type<InvestigationRequestedV2 | ActionApprovedV1>().notNull(),
+    body: jsonb('body')
+      .$type<InvestigationRequestedV2 | ActionApprovedV1 | ActionApprovedV2>()
+      .notNull(),
     attempts: integer('attempts').notNull().default(0),
     nextAttemptAt: timestamptz('next_attempt_at').notNull().defaultNow(),
     lastError: text('last_error'),

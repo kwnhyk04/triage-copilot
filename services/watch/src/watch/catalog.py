@@ -12,6 +12,8 @@ Stack = Literal["prod", "dev"]
 STACKS: tuple[Stack, ...] = ("prod", "dev")
 # A database, queue, cache, storage or proxy is never restarted (P2.3); apps and workers may be.
 Kind = Literal["app", "worker", "database", "queue", "cache", "storage", "proxy"]
+# What a plan may restart or change, and the executor restart (P3.2).
+RESTARTABLE: tuple[Kind, ...] = ("app", "worker")
 Severity = Literal["critical", "warning", "info"]
 
 

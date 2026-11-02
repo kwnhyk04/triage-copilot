@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot agent
-  version: 0.4.0
+  version: 0.5.0
   description: >-
     Internal API of the agent service. Only other backend services call it, with the service
     token. Errors are RFC 9457 Problem Details (application/problem+json).
@@ -103,6 +103,30 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /internal/switches/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/SwitchName'
+    get:
+      operationId: getSwitch
+      summary: One kill switch as the operator last set it, or its default.
+      description: >-
+        The gateway asks for `actions` before every claim of the executor, and claims nothing
+        while it is off or this route does not answer.
+      responses:
+        '200':
+          description: The switch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Switch'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
   securitySchemes:
     serviceToken:
@@ -191,6 +215,23 @@ components:
         What a parked investigation waits for. tenant_cap: a slot under its tenant's cap of
         investigations running at once. budget: model calls, which are off or out of today's
         token budget.
+    SwitchName:
+      type: string
+      enum: [live, claude, planner, actions]
+      description: >-
+        The operator's kill switches (make switch): live lets live tenants' investigations run,
+        claude lets any Claude model be called, planner lets a real incident get a plan, and
+        actions lets the executor claim an approved action.
+    Switch:
+      type: object
+      additionalProperties: false
+      required: [name, 'on']
+      properties:
+        name:
+          $ref: '#/components/schemas/SwitchName'
+        'on':
+          type: boolean
+          description: Whether the switch is on; one never set is at its default (only claude is on).
     InvestigationState:
       type: object
       required:

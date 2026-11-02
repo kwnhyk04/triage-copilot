@@ -4,6 +4,7 @@ import type { components as GatewayComponents } from './generated/gateway.ts';
 import type * as GraphQL from './generated/graphql.ts';
 import {
   type ActionApprovedV1,
+  type ActionApprovedV2,
   type ActionProposedV1,
   type Messages,
   type PlanRecordedV1,
@@ -42,6 +43,7 @@ type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const enumsAgree: [
   Equal<Rest['ActionKind'], ActionProposedV1['kind']>,
   Equal<Rest['ActionKind'], ActionApprovedV1['kind']>,
+  Equal<Rest['ActionKind'], ActionApprovedV2['kind']>,
   Equal<Uppercase<Rest['ActionKind']>, GraphQL.ActionKind>,
   Equal<Uppercase<Rest['ActionStatus']>, GraphQL.ActionStatus>,
   Equal<Rest['StepKind'], StepRecordedV1['kind']>,
@@ -72,6 +74,7 @@ const enumsAgree: [
     Pick<Rest['Hypothesis'], 'root_cause_class' | 'service' | 'confidence'> | null
   >,
 ] = [
+  true,
   true,
   true,
   true,
@@ -164,7 +167,28 @@ describe('message contracts', () => {
     );
   });
 
-  it.each(['action-proposed.v1', 'action-approved.v1'] as const)(
+  it('accepts ActionApproved v1 and v2, marks v1 deprecated, and needs a v2 tenant and app', () => {
+    for (const name of ['action-approved.v1', 'action-approved.v2'] as const) {
+      for (const example of schemas[name].examples) {
+        expect(parseMessage('action-approved', example)).toEqual(example);
+      }
+    }
+    const deprecated = schemas['action-approved'].oneOf.map((b) => 'deprecated' in b);
+    expect(deprecated).toEqual([true, false]);
+    const [v2] = schemas['action-approved.v2'].examples;
+    for (const field of ['tenant_id', 'app']) {
+      const missing = Object.fromEntries(Object.entries(v2 ?? {}).filter(([key]) => key !== field));
+      expect(() => parseMessage('action-approved.v2', missing)).toThrow(new RegExp(field));
+    }
+    // A sim tenant's action names no app; the executor never runs one.
+    const sim = { ...v2, app: null };
+    expect(parseMessage('action-approved.v2', sim)).toEqual(sim);
+    expect(() => parseMessage('action-approved.v2', { ...v2, app: 'payroll' })).toThrow(
+      /action-approved.v2/,
+    );
+  });
+
+  it.each(['action-proposed.v1', 'action-approved.v1', 'action-approved.v2'] as const)(
     '%s rejects action kinds outside the allowlist',
     (name) => {
       const [example] = schemas[name].examples;

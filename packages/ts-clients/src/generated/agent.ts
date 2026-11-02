@@ -90,6 +90,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/switches/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["schemas"]["SwitchName"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One kill switch as the operator last set it, or its default.
+         * @description The gateway asks for `actions` before every claim of the executor, and claims nothing while it is off or this route does not answer.
+         */
+        get: operations["getSwitch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -121,6 +143,16 @@ export interface components {
          * @enum {string}
          */
         WaitReason: "tenant_cap" | "budget";
+        /**
+         * @description The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, and actions lets the executor claim an approved action.
+         * @enum {string}
+         */
+        SwitchName: "live" | "claude" | "planner" | "actions";
+        Switch: {
+            name: components["schemas"]["SwitchName"];
+            /** @description Whether the switch is on; one never set is at its default (only claude is on). */
+            on: boolean;
+        };
         InvestigationState: {
             /** Format: uuid */
             investigation_id: string;
@@ -331,6 +363,30 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getSwitch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["schemas"]["SwitchName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The switch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Switch"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
         };
     };
 }

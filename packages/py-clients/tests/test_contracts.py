@@ -9,6 +9,8 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from py_clients.generated.gateway import AlertmanagerWebhook
+from py_clients.generated.messages.action_approved_schema import ActionApproved
+from py_clients.generated.messages.action_approved_v2_schema import ActionApprovedV2
 from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
 from py_clients.generated.messages.plan_recorded_v1_schema import PlanRecordedV1
 from py_clients.generated.messages.report_recorded_schema import ReportRecorded
@@ -146,6 +148,27 @@ def test_report_recorded_rejects_unlisted_or_ungrounded_actions(change: dict[str
     action = REPORT_EXAMPLE["report"]["proposed_actions"][0]
     with pytest.raises(ValidationError):
         ReportRecordedV1.model_validate(with_report(proposed_actions=[{**action, **change}]))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_every_action_approved_version_validates_as_the_union(version: int) -> None:
+    schema_file = CONTRACTS / f"messages/action-approved.v{version}.schema.json"
+    for example in json.loads(schema_file.read_bytes())["examples"]:
+        assert isinstance(ActionApproved.model_validate(example).root, model_for(schema_file))
+
+
+def test_action_approved_v1_is_deprecated_and_v2_needs_its_tenant_and_app() -> None:
+    union = json.loads((CONTRACTS / "messages/action-approved.schema.json").read_bytes())
+    assert [branch.get("deprecated") for branch in union["oneOf"]] == [True, None]
+    schema_file = CONTRACTS / "messages/action-approved.v2.schema.json"
+    example: dict[str, Any] = json.loads(schema_file.read_bytes())["examples"][0]
+    for field in ("tenant_id", "app"):
+        with pytest.raises(ValidationError):
+            ActionApprovedV2.model_validate({k: v for k, v in example.items() if k != field})
+    # A sim tenant's action names no app; the executor never runs one.
+    assert ActionApprovedV2.model_validate(example | {"app": None}).app is None
+    with pytest.raises(ValidationError):
+        ActionApprovedV2.model_validate(example | {"app": "payroll"})
 
 
 def test_action_proposed_is_marked_unused() -> None:

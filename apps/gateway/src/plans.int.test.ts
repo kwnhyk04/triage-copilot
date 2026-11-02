@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
+import { parseMessage } from '@triage/ts-clients/messages';
 import type { FastifyInstance } from 'fastify';
 
 import { buildApp, createUpdates } from './app.ts';
 import { connectDb } from './db.ts';
 import { createDecidePlan } from './decisions.ts';
 import { storeEvent } from './events.ts';
+import { sha256 } from './intake.ts';
 import { createGetInvestigation } from './investigations.ts';
 import { APP_CONFIG, newTenant, scratchDb } from './testing.ts';
 
@@ -20,7 +22,7 @@ const model = (part: string, calls: number) => ({
 const PROPOSAL = {
   kind: 'restart_service',
   target: 'worker',
-  files: [],
+  files: [] as string[],
   rationale: 'The worker exited with 137 while its dependencies stay healthy [tc_01J9ZK3Q7M].',
 };
 
@@ -28,6 +30,9 @@ describe('plans against Postgres', () => {
   let scratch: Awaited<ReturnType<typeof scratchDb>>;
   let db: ReturnType<typeof connectDb>;
   let app: FastifyInstance;
+  let nudges = 0;
+  // LIVE_TENANTS: each plan's tenant is live, as only live triage makes plans.
+  const apps: Record<string, 'freight-audit' | 'filing-lens'> = {};
   const unused = () => Promise.reject(new Error('unused by this test'));
 
   beforeAll(async () => {
@@ -38,7 +43,13 @@ describe('plans against Postgres', () => {
       ping: db.ping,
       updates: createUpdates(),
       decide: unused,
-      decidePlan: createDecidePlan(db.sql),
+      decidePlan: createDecidePlan(
+        db.sql,
+        () => {
+          nudges++;
+        },
+        apps,
+      ),
       findTenant: unused,
       intake: unused,
       listInvestigations: unused,
@@ -54,6 +65,7 @@ describe('plans against Postgres', () => {
   /** A live triage's alert group with its report, then its plan as the agent sent it. */
   const planned = async (proposal: typeof PROPOSAL | null = PROPOSAL) => {
     const { tenantId } = await newTenant(db.sql);
+    apps[tenantId] = 'freight-audit';
     const investigationId = randomUUID();
     await db.sql`
       INSERT INTO gateway.alert_groups
@@ -77,7 +89,7 @@ describe('plans against Postgres', () => {
     expect(await storeEvent(db.sql, 'report-recorded', JSON.stringify(report))).toBe('stored');
     const plan = message(investigationId, proposal);
     expect(await storeEvent(db.sql, 'plan-recorded', JSON.stringify(plan))).toBe('stored');
-    return { investigationId, planId: plan.plan_id, plan };
+    return { tenantId, investigationId, planId: plan.plan_id, plan };
   };
   const message = (investigationId: string, proposal: typeof PROPOSAL | null) => ({
     schema_version: 1,
@@ -106,6 +118,10 @@ describe('plans against Postgres', () => {
   const queued = async () =>
     (await db.sql<{ count: number }[]>`SELECT count(*)::int AS count FROM gateway.outbox`)[0]
       ?.count;
+  const sent = async (planId: string) => [
+    ...(await db.sql<{ queue: string; message_group_id: string; body: unknown }[]>`
+      SELECT queue, message_group_id, body FROM gateway.outbox WHERE deduplication_id = ${planId}`),
+  ];
 
   it('stores a plan once and serves it, its models after the report', async () => {
     const { investigationId, planId, plan } = await planned();
@@ -140,7 +156,47 @@ describe('plans against Postgres', () => {
     );
   });
 
-  it('records one decision per plan and queues nothing; a plan without a proposal takes none', async () => {
+  it("queues an approved restart's kind and target for the executor, never its written steps", async () => {
+    const { tenantId, investigationId, planId } = await planned();
+    const nudged = nudges;
+    const approved = await decide(planId, 'approve', 'operator');
+    expect(approved.statusCode).toBe(200);
+
+    const [row, ...more] = await sent(planId);
+    expect(more).toEqual([]);
+    expect(row).toMatchObject({
+      queue: 'actions',
+      message_group_id: sha256(`${tenantId}\nworker`),
+    });
+    expect(parseMessage('action-approved.v2', row?.body)).toEqual({
+      schema_version: 2,
+      action_id: planId,
+      investigation_id: investigationId,
+      tenant_id: tenantId,
+      app: 'freight-audit',
+      kind: 'restart_service',
+      target: 'worker',
+      parameters: {},
+      approved_by: 'operator',
+      approved_at: approved.json<{ decided_at: string }>().decided_at,
+    });
+    expect(JSON.stringify(row?.body)).not.toContain('137');
+    expect(nudges).toBe(nudged + 1);
+  });
+
+  it('queues nothing for a rejected restart or an approved code fix', async () => {
+    const rejected = await planned();
+    expect((await decide(rejected.planId, 'reject')).statusCode).toBe(200);
+    const fix = await planned({
+      ...PROPOSAL,
+      kind: 'code_fix',
+      files: ['apps/worker/src/queue.ts'],
+    });
+    expect((await decide(fix.planId, 'approve')).statusCode).toBe(200);
+    expect([...(await sent(rejected.planId)), ...(await sent(fix.planId))]).toEqual([]);
+  });
+
+  it('records one decision per plan, and one ActionApproved; a plan without a proposal takes none', async () => {
     const before = await queued();
     const { investigationId, planId } = await planned();
 
@@ -156,8 +212,8 @@ describe('plans against Postgres', () => {
     expect(approved).toMatchObject({ id: planId, status: 'approved' });
     expect((await decide(planId, 'reject')).statusCode).toBe(409);
     expect((await detail(investigationId)).plan).toMatchObject({ status: 'approved' });
-    // Nothing runs from a plan in phase 2: no message is queued for the executor.
-    expect(await queued()).toBe(before);
+    // Ten concurrent approvals, one decision: one message for the executor.
+    expect(await queued()).toBe((before ?? 0) + 1);
 
     const empty = await planned(null);
     const refused = await decide(empty.planId, 'approve');

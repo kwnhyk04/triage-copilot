@@ -70,7 +70,7 @@ try {
       // Set, to {} while live is off: unset would read every investigation as simulated.
       const live = loadConfig(z.object({ LIVE_TENANTS: liveTenantsRequired }));
       const reads = {
-        liveTenants: live.LIVE_TENANTS,
+        liveTenants: Object.keys(live.LIVE_TENANTS),
         stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
       };
       const file = await demoFile(createGetInvestigation(readOnly, reads), ids);

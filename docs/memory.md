@@ -293,6 +293,15 @@ From the approved design doc:
   - No snapshot. Why: the sim keeps none, and a made-up one would decide every restart. Cost: `plan_refusal` refuses any restart for that reason alone.
   - No database and no model behind Opus: a `Limiter` with no spend check and `fallback_on_rate_limit` off. Why: the pass then touches nothing but Anthropic, and its most is each call's worst case added up ($6.03 here). Cost: neither database's caps count it; the Anthropic console's shared $50 does.
   - A plan the model answered is kept in `evals/reports/plans/`; a call that failed before any output is not, so a rerun asks only for it.
+- 2026-11-02: Phase 3's P3.1 and P3.2 (approved by the user on 2026-11-02), built on branch `p3-actions`. Decisions made while building, each with its reason:
+  - ActionApproved v2 is v1 plus `tenant_id` and `app`, with `app` null for a sim tenant. The gateway takes the app from `LIVE_TENANTS`, whose config now keeps each tenant's app, not only its id. Why: the executor checks the target against that app's catalog.
+  - An approved `restart_service` plan queues v2 as its kind and target alone; the plan id is the action id, and the parameters are empty. Why: the user's rule that a plan's written steps never run.
+  - Plan claims get their own table, `gateway.plan_executions`, but use the executor's existing claim and result routes. Why: plan decisions already live apart from `approvals` (2026-10-26), whose rows `executions`' foreign key reads. One route keeps the executor's client unchanged.
+  - The `actions` switch lives in `agent.switches` (agent 0014), as the approved plan's "kill switches" section says. The gateway's claim route asks the agent for it before every claim, so the check sits at the one gate every claim passes, and needs no new token. Cost: claims need the agent up (503 otherwise), and an approval made while the switch is off is refused and deleted, so it never runs later.
+  - The executor runs `restart_service` only, on an app or worker of the catalog with a container in one stack, `EXECUTOR_STACK` (default dev). Why: ActionApproved v2 names no stack, and production deploys no executor.
+  - `RESTARTABLE` moved from `agent.planner` to `watch.catalog`, so the planner's check and the executor share one rule.
+  - The restart runs in an empty temporary directory, with no `COMPOSE_*` variable passed on. Why: compose would otherwise read a compose file or `.env` it finds there. `docker compose -p freightaudit ps -a` from an empty directory listed FA's dev containers (Compose v5.6.1), so a project is found by its name alone. `restart` from an empty directory is not yet seen on a real container.
+  - FreightAudit's dev stack runs no app or worker container (its api and worker run on the host), so P3.3's real restart cannot target FA dev as written; the user chooses the target.
 
 ## Preferences and Instructions
 

@@ -238,7 +238,9 @@ class Switch(Base):
 
     __tablename__ = "switches"
     __table_args__ = (
-        CheckConstraint("name IN ('live', 'claude', 'planner')", name="switches_name_check"),
+        CheckConstraint(
+            "name IN ('live', 'claude', 'planner', 'actions')", name="switches_name_check"
+        ),
     )
 
     name: Mapped[str] = mapped_column(primary_key=True)

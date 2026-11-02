@@ -11,10 +11,24 @@ from uuid import UUID, uuid4
 
 import pytest
 from anthropic_errors import INVALID_KEY
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import Connection, Engine, create_engine, insert, select, update
 from test_llm import REQUEST, anthropic
-from test_workers_int import SCRIPT, TENANT, TOOLS, Counting, Tools, make_job, new_request, recorded
+from test_workers_int import (
+    SCRIPT,
+    SERVICE_TOKEN,
+    TENANT,
+    TOOLS,
+    Counting,
+    Tools,
+    make_job,
+    new_request,
+    recorded,
+)
 
+from agent.api import add_internal_api
 from agent.db import AiUsage, Investigation, ModelCall, Outbox
 from agent.job import PROMPT_SHA, UTC_TODAY
 from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft
@@ -62,15 +76,29 @@ def switch(engine: Engine, name: Switch, on: bool) -> None:
 
 def test_live_and_the_planner_start_off_claude_on_and_the_cli_flips_them(engine: Engine) -> None:
     with engine.connect() as conn:
-        assert [is_on(conn, name) for name in ("live", "claude", "planner")] == [False, True, False]
+        names: list[Switch] = ["live", "claude", "planner", "actions"]
+        assert [is_on(conn, name) for name in names] == [False, True, False, False]
 
     assert run(engine, ["set", "live", "on"]) == "live: on"
-    assert run(engine, ["show"]) == "live: on\nclaude: on\nplanner: off"
+    assert run(engine, ["show"]) == "live: on\nclaude: on\nplanner: off\nactions: off"
     assert run(engine, ["set", "planner", "on"]) == "planner: on"
     with pytest.raises(SystemExit):
         run(engine, ["set", "coder", "on"])
     with engine.connect() as conn:
         assert is_on(conn, "live") and is_on(conn, "planner")
+
+
+def test_the_internal_api_serves_each_switch_behind_the_service_token(engine: Engine) -> None:
+    # The gateway asks for `actions` before every claim of the executor (P3.2).
+    app = FastAPI()
+    add_internal_api(app, make_job(engine, Tools().all()), SecretStr(SERVICE_TOKEN))
+    api = TestClient(app, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
+    assert api.get("/internal/switches/actions").json() == {"name": "actions", "on": False}
+    switch(engine, "actions", True)
+    assert api.get("/internal/switches/actions").json() == {"name": "actions", "on": True}
+    assert api.get("/internal/switches/claude").json() == {"name": "claude", "on": True}
+    assert api.get("/internal/switches/coder").status_code == 400
+    assert TestClient(app).get("/internal/switches/actions").status_code == 401
 
 
 def test_a_live_tenant_parks_while_live_is_off_and_no_model_is_asked(engine: Engine) -> None:

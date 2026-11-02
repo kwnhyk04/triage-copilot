@@ -3,7 +3,7 @@ import { type GatewayConfig, loadGatewayConfig } from './config.ts';
 import { connectDb } from './db.ts';
 import { createDecide, createDecidePlan } from './decisions.ts';
 import { startEventsConsumer, storeEvent } from './events.ts';
-import { createClaim, createReport } from './executions.ts';
+import { agentSwitch, createClaim, createReport } from './executions.ts';
 import { createFindTenant, createIntake } from './intake.ts';
 import { buildInternalApp } from './internal.ts';
 import {
@@ -33,16 +33,14 @@ let nudgeRelay: () => void = () => undefined;
 const nudge = () => {
   nudgeRelay();
 };
-const reads = {
-  liveTenants: config.LIVE_TENANTS,
-  stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
-};
+const live = Object.keys(config.LIVE_TENANTS);
+const reads = { liveTenants: live, stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES };
 const app = await buildApp({
   config,
   ping: db.ping,
   updates: createUpdates(),
-  decide: createDecide(db.sql, nudge),
-  decidePlan: createDecidePlan(db.sql),
+  decide: createDecide(db.sql, nudge, config.LIVE_TENANTS),
+  decidePlan: createDecidePlan(db.sql, nudge, config.LIVE_TENANTS),
   findTenant: createFindTenant(db.sql),
   intake: createIntake(
     db.sql,
@@ -58,6 +56,7 @@ const internal = buildInternalApp({
   claim: createClaim(db.sql),
   report: createReport(db.sql),
   alertContext: createAlertContext(db.sql),
+  actionsOn: agentSwitch(config.AGENT_URL, config.AGENT_SERVICE_TOKEN, 'actions'),
 });
 const senders = {
   investigations: sqsSender(sqs, config.INVESTIGATIONS_QUEUE),
@@ -81,7 +80,7 @@ const events = startEventsConsumer(
   (type, body) => storeEvent(db.sql, type, body),
   app.log,
 );
-const retention = startRetention(db.sql, config.LIVE_TENANTS, app.log);
+const retention = startRetention(db.sql, live, app.log);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {

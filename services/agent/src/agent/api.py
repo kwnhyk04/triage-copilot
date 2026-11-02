@@ -16,7 +16,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agent.db import Investigation, ToolCall
 from agent.job import Job
-from py_clients.generated.agent import InvestigationState, InvestigationStatus, WaitReason
+from agent.switches import is_on
+from py_clients.generated.agent import (
+    InvestigationState,
+    InvestigationStatus,
+    Switch,
+    SwitchName,
+    WaitReason,
+)
 
 
 def problem(
@@ -51,6 +58,12 @@ def add_internal_api(app: FastAPI, job: Job, service_token: SecretStr) -> None:
         if found is None:
             raise HTTPException(404, "No investigation has this id.")
         return found
+
+    # The gateway asks for `actions` before every claim of the executor.
+    @router.get("/switches/{name}")
+    def switch(name: SwitchName) -> Switch:
+        with job.engine.connect() as conn:
+            return Switch(name=name, on=is_on(conn, name.value))
 
     app.include_router(router)
 

@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class Status(StrEnum):
@@ -49,6 +49,30 @@ class WaitReason(StrEnum):
 
     tenant_cap = "tenant_cap"
     budget = "budget"
+
+
+class SwitchName(StrEnum):
+    """
+    The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, and actions lets the executor claim an approved action.
+    """
+
+    live = "live"
+    claude = "claude"
+    planner = "planner"
+    actions = "actions"
+
+
+class Switch(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: SwitchName
+    on: Annotated[
+        bool,
+        Field(
+            description="Whether the switch is on; one never set is at its default (only claude is on)."
+        ),
+    ]
 
 
 class InvestigationState(BaseModel):
