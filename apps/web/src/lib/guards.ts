@@ -51,7 +51,10 @@ export function clientKey(
   return env.VERCEL === '1' ? (headers.get('x-real-ip') ?? 'unknown') : 'local';
 }
 
-/** Where to go after signing in: a path on this site, dot segments resolved; else the list. */
+// The site's pages: the landing, the two lists and their reports. Routes, probes and assets are not.
+const PAGES = /^\/(?:investigations(?:\/[\w-]+)?|demo(?:\/investigations\/[\w-]+)?)?$/;
+
+/** Where to go after signing in: one of this site's pages, dot segments resolved; else the list. */
 export function safeNext(next: unknown): string {
   if (typeof next !== 'string' || !next.startsWith('/') || next.includes('\\')) return HOME;
   let url: URL;
@@ -60,11 +63,8 @@ export function safeNext(next: unknown): string {
   } catch {
     return HOME;
   }
-  const path = url.pathname;
-  if (url.origin !== BASE || path.startsWith('//') || /^\/log(?:in|out)(?:\/|$)/.test(path)) {
-    return HOME;
-  }
-  return path + url.search;
+  if (url.origin !== BASE || !PAGES.test(url.pathname)) return HOME;
+  return url.pathname + url.search;
 }
 
 /** Whether a request comes from this site: Sec-Fetch-Site when sent, else Origin against Host. */
