@@ -6,7 +6,7 @@ import {
   ago,
   causeName,
   percent,
-  PLAN_STATES,
+  planBadge,
   PLANNING,
   planning,
   statusBadge,
@@ -32,6 +32,7 @@ type Summary = Pick<
   | 'source'
   | 'cause'
   | 'plan_status'
+  | 'plan_review'
 >;
 
 export const ILLUSTRATIVE_LABEL = 'Illustrative sample, not a real incident';
@@ -68,9 +69,9 @@ export interface ListProps {
   refresh?: boolean;
 }
 
-/** A live row's plan: its state, Planning while a refreshing list waits for it, else None. */
+/** A live row's plan: its state or Refused, Planning while a refreshing list waits, else None. */
 function PlanCell({ item, waiting }: { item: Summary; waiting: boolean }) {
-  const state = item.plan_status === null ? null : PLAN_STATES[item.plan_status];
+  const state = item.plan_status === null ? null : planBadge(item.plan_status, item.plan_review);
   const shown = waiting ? PLANNING : state;
   return (
     <td data-card={shown === null ? 'hide' : 'aside'}>

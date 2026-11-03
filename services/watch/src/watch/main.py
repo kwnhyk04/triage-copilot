@@ -61,6 +61,9 @@ class Settings(EnvSettings):
     watch_fl_health_urls: dict[str, str] = Field(default_factory=dict[str, str])
     watch_fl_repo: Path | None = None
     watch_fl_prometheus_url: str | None = None
+    # Where each app with a repo gets its source index at origin/main (<folder>/<app>.json), which
+    # the agent reads (SOURCE_INDEX_DIR); unset, none is written.
+    watch_source_index_dir: Path | None = None
     log_level: LogLevel = "info"
     otel_exporter_otlp_endpoint: str | None = None
 
@@ -79,10 +82,11 @@ class Settings(EnvSettings):
     def _plain_url(cls, url: str | None) -> str | None:
         return None if url is None else _url(url)
 
-    @field_validator("watch_fa_repo", "watch_fl_repo")
+    @field_validator("watch_fa_repo", "watch_fl_repo", "watch_source_index_dir")
     @classmethod
     def _repo(cls, repo: Path | None) -> Path | None:
-        # git gets it on its command line, where watch allows no character a shell would read.
+        # git gets a repo on its command line, where watch allows no character a shell would read;
+        # the index folder is held to the same.
         if repo is not None and not safe_argument(str(repo)):
             raise ValueError("takes a path of letters, digits, spaces and . _ - : / \\ only")
         return repo
@@ -107,8 +111,9 @@ class Settings(EnvSettings):
                 self.watch_fl_prometheus_url,
             ),
         ]
+        index = self.watch_source_index_dir
         return [
-            Target(CATALOGS[app], stack, token.get_secret_value(), health, repo, prometheus)
+            Target(CATALOGS[app], stack, token.get_secret_value(), health, repo, prometheus, index)
             for app, token, stack, health, repo, prometheus in apps
             if token
         ]

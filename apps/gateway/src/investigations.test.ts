@@ -38,6 +38,7 @@ describe('demoFile', () => {
     source,
     cause: null,
     plan_status: null,
+    plan_review: null,
     summary: 'checkout v1.8.0 raised the 5xx rate.',
     tokens_used: 41_200,
     hypotheses: [],

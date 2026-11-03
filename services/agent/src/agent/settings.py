@@ -13,8 +13,9 @@ from py_telemetry import LogLevel
 Provider = Literal["gemini", "anthropic", "nvidia", "openrouter", "ollama"]
 # The roles a model chain is built from, each with its own LLM_<ROLE>_* settings.
 ChainRole = Literal["primary", "fallback", "small"]
-# planner: the plan for a real incident's fix (P2), whichever model of its chain makes it.
-RoleName = Literal[ChainRole, "planner"]
+# planner: the plan for a real incident's fix (P2), whichever model of its chain makes it;
+# reviewer: that plan's review by Claude (Part B).
+RoleName = Literal[ChainRole, "planner", "reviewer"]
 # Claude's output_config.effort.
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # The apps whose real incidents TC triages (docs/context.md, Real Incidents).
@@ -44,11 +45,11 @@ class Role:
     api_key: str | None = field(default=None, repr=False)
     until: date | None = None
     # Every Claude role: what its calls may spend in a UTC day, in US dollars (agent.pricing); the
-    # planner's under its own cap, every other one under the triage cap.
+    # planner's and the reviewer's under their own caps, every other one under the triage cap.
     daily_usd: float | None = None
     # Every Claude role: what all of TC's Claude calls may spend in a UTC month, evals included.
     monthly_usd: float | None = None
-    # The planner's Claude: how hard it thinks; None leaves the model's default.
+    # The planner's and the reviewer's Claude: how hard it thinks; None leaves the model's default.
     effort: Effort | None = None
 
 
@@ -114,8 +115,8 @@ class Settings(EnvSettings):
     llm_claude_rpm: Annotated[int, Field(ge=0)] = 50
     llm_claude_until: date = date(2026, 11, 10)
     # Live triage asks Claude first, while ANTHROPIC_API_KEY is set and before LLM_CLAUDE_UNTIL,
-    # then the free chain; so does the sim with LLM_CLAUDE_FIRST. Any Claude call but a plan runs
-    # only if today's Claude spend (UTC) plus the call's worst case stays within
+    # then the free chain; so does the sim with LLM_CLAUDE_FIRST. Any Claude call but a plan or its
+    # review runs only if today's Claude spend (UTC) plus the call's worst case stays within
     # LLM_TRIAGE_DAILY_USD.
     llm_triage_model: str = "claude-haiku-5-5"
     llm_triage_daily_usd: Annotated[float, Field(ge=0)] = 0.40
@@ -129,6 +130,15 @@ class Settings(EnvSettings):
     llm_planner_model: str = "claude-opus-5-5"
     llm_planner_effort: Effort = "max"
     llm_planner_daily_usd: Annotated[float, Field(ge=0)] = 3.50
+    # Each plan the code checks pass is reviewed once by this Claude, while ANTHROPIC_API_KEY is
+    # set, before LLM_CLAUDE_UNTIL and with the reviewer switch on, only if today's reviews (UTC)
+    # plus its worst case stay within LLM_REVIEWER_DAILY_USD; $0.45 fits three at their worst.
+    llm_reviewer_model: str = "claude-sonnet-5-5"
+    llm_reviewer_effort: Effort = "high"
+    llm_reviewer_daily_usd: Annotated[float, Field(ge=0)] = 0.45
+    # watch's index of each app's tracked paths at origin/main (<folder>/<app>.json); without a
+    # readable one, every code fix is refused.
+    source_index_dir: Path | None = None
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     nvidia_api_key: SecretStr | None = None
@@ -138,7 +148,7 @@ class Settings(EnvSettings):
     fastembed_cache_path: Path | None = None
     runbooks_dir: Path = Path("runbooks")
 
-    @field_validator("llm_triage_model", "llm_planner_model")
+    @field_validator("llm_triage_model", "llm_planner_model", "llm_reviewer_model")
     @classmethod
     def _priced(cls, model: str) -> str:
         # The dollar cap cannot be checked without the model's prices.
@@ -212,19 +222,29 @@ class Settings(EnvSettings):
 
     def planner(self) -> Role | None:
         """The planner's Claude, first in its chain, when ANTHROPIC_API_KEY is set."""
+        model, effort = self.llm_planner_model, self.llm_planner_effort
+        return self._claude("planner", model, self.llm_planner_daily_usd, effort)
+
+    def reviewer(self) -> Role | None:
+        """The reviewer's Claude, which alone reviews a plan, when ANTHROPIC_API_KEY is set."""
+        model, effort = self.llm_reviewer_model, self.llm_reviewer_effort
+        return self._claude("reviewer", model, self.llm_reviewer_daily_usd, effort)
+
+    def _claude(self, name: RoleName, model: str, daily_usd: float, effort: Effort) -> Role | None:
+        """A Claude role under its own daily cap and TC's monthly one, until the credits end."""
         secret = self.anthropic_api_key
         if secret is None:
             return None
         return Role(
-            name="planner",
+            name=name,
             provider="anthropic",
-            model=self.llm_planner_model,
+            model=model,
             base_url=None,
             rpm=self.llm_claude_rpm,
             rpd=0,
             api_key=secret.get_secret_value(),
             until=self.llm_claude_until,
-            daily_usd=self.llm_planner_daily_usd,
+            daily_usd=daily_usd,
             monthly_usd=self.llm_claude_monthly_usd,
-            effort=self.llm_planner_effort,
+            effort=effort,
         )

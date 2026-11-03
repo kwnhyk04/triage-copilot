@@ -1,8 +1,9 @@
 // A stand-in gateway for the browser tests: node:http on 127.0.0.1 with no dependency. It serves the
-// demo's samples, plus one investigation that gains a step on each read until its report lands
-// and one real incident whose plan lands on its third read. It takes the same keys as the real
-// one and records plan decisions. /__e2e/* lets the tests reset
-// and read its state; it is never part of the real gateway.
+// demo's samples, whose pending plan the review flagged, plus one investigation that gains a step
+// on each read until its report lands, one real incident whose plan lands on its third read, and
+// one whose plan the review refused. It takes the same keys as the real one and records plan
+// decisions. /__e2e/* lets the tests reset and read its state; it is never part of the real
+// gateway.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { EVAL_RUNS, LIVE_SAMPLES, WORKER_OUT_OF_MEMORY } from '../src/demo/index.ts';
@@ -37,6 +38,7 @@ function running(count: number): Investigation {
     updated_at: '2026-10-26T10:00:00.000Z',
     cause: done ? { root_cause_class: 'unknown', service: 'api', confidence: 0.6 } : null,
     plan_status: null,
+    plan_review: null,
     summary: done ? 'The latency came back on its own; nothing failed.' : null,
     hypotheses: [],
     missing_evidence: [],
@@ -64,9 +66,46 @@ function planning(count: number): Investigation {
     created_at: planningSince,
     updated_at: planningSince,
     plan_status: landed ? 'pending' : null,
+    plan_review: landed ? plan.review.status : null,
     plan: landed ? plan : null,
   };
 }
+
+/** A real incident whose plan the review refused: it stays pending and takes no decision. */
+const REFUSED: Investigation = {
+  ...WORKER_OUT_OF_MEMORY,
+  id: E2E.refusedId,
+  group_id: 'c0ffee00-0000-4000-8000-000000000007',
+  title: 'QueueBacklog on worker',
+  plan_status: 'pending',
+  plan_review: 'refuse',
+  plan: {
+    ...WORKER_OUT_OF_MEMORY.plan,
+    id: 'c0ffee00-0000-4000-8000-000000000008',
+    proposal: {
+      kind: 'restart_service',
+      target: 'worker',
+      files: [],
+      rationale:
+        'The worker exited with 137 [tc_01JB2SNAP01]. Restart it, then flush the queue in ' +
+        'redis to rule it out.',
+    },
+    review: {
+      status: 'refuse',
+      by: 'model',
+      model: 'claude-sonnet-5-5',
+      issues: [
+        {
+          kind: 'forbidden_step',
+          quote: 'flush the queue in redis to rule it out',
+          reason: 'A change made as a test to redis, whose health check passes [tc_01JB2SNAP01].',
+        },
+      ],
+      reason: null,
+      new_files: [],
+    },
+  },
+};
 
 /** An investigation with any recorded decision on its plan. */
 function withDecision(investigation: Investigation): Investigation {
@@ -80,7 +119,9 @@ function withDecision(investigation: Investigation): Investigation {
 }
 
 const all = () =>
-  [running(reads), planning(planningReads), ...LIVE_SAMPLES, ...EVAL_RUNS].map(withDecision);
+  [running(reads), planning(planningReads), REFUSED, ...LIVE_SAMPLES, ...EVAL_RUNS].map(
+    withDecision,
+  );
 const send = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 const body = async (request: IncomingMessage) => {
@@ -109,7 +150,8 @@ createServer((request, response) => {
       const [, id = '', verdict = ''] = plan;
       const found = all().find((item) => item.plan?.id === id)?.plan;
       if (!found) return send(response, 404, { title: 'Not Found', status: 404 });
-      if (found.status !== 'pending')
+      // As the real gateway: one decision per plan, and none on a plan its review refused.
+      if (found.status !== 'pending' || found.review?.status === 'refuse')
         return send(response, 409, { title: 'Conflict', status: 409 });
       const { approver, reason } = (await body(request)) as { approver: string; reason?: string };
       decisions.push({

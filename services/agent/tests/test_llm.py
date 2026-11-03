@@ -5,8 +5,9 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import httpx2
 import pytest
@@ -22,7 +23,17 @@ from anthropic_errors import (
 from sqlalchemy import Connection
 
 from agent.job import REPORT_OUTPUT_CAP
-from agent.llm import LARGEST_CALL, PLAN_OUTPUT_CAP, Binding, Limiter, Router, spent
+from agent.llm import (
+    LARGEST_CALL,
+    PLAN_OUTPUT_CAP,
+    REVIEW_OUTPUT_CAP,
+    REVIEW_TIMEOUT,
+    Binding,
+    Limiter,
+    Router,
+    caps,
+    spent,
+)
 from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
@@ -709,6 +720,155 @@ def test_the_planner_cap_is_checked_against_the_plan_s_worst_case_with_nothing_c
     ]
     assert "planner cap" in (calls[0].error or "")
     assert (answer, claude.max_outputs) == (PLAN_ANSWER, [])
+
+
+# The reviewer's Claude: Sonnet at effort high, under its own $0.45 a UTC day and TC's $15 a month.
+REVIEWER = Role(
+    "reviewer",
+    "anthropic",
+    "claude-sonnet-5-5",
+    None,
+    0,
+    0,
+    daily_usd=0.45,
+    monthly_usd=15.0,
+    effort="high",
+)
+REVIEW_ANSWER: dict[str, Any] = {"verdict": "ok", "issues": []}
+REVIEW_REQUEST = PlanRequest(
+    "Review the plan.",
+    "The incident, then the plan.",
+    ToolSpec("submit_review", "Submit the review.", {"type": "object"}),
+    lambda answer: None if answer.get("verdict") else "it gives no verdict",
+    "sha-of-the-review-prompt",
+)
+
+
+def reviews(
+    claude: Fake | None,
+    *,
+    free: Fake | None = None,
+    limiter: Limiter | None = None,
+    sonnet: Role = REVIEWER,
+) -> Router:
+    """Live triage's router: the plan's chain, and the reviewer's Claude when there is one."""
+    primary = free or Fake("primary")
+    return Router(
+        Binding(role("primary", primary.model), primary),
+        Binding(role("fallback", "fallback-model"), Fake("fallback")),
+        Binding(role("small", "small-model"), Fake("small")),
+        fallback_on_rate_limit=True,
+        limiter=limiter or Limiter(None),
+        planner=Binding(PLANNER, Fake("opus")),
+        reviewer=None if claude is None else Binding(sonnet, claude),
+    )
+
+
+def test_a_review_is_one_call_to_the_reviewer_s_claude_recorded_as_the_reviewer_s() -> None:
+    claude, free = Fake("sonnet"), Fake("primary")
+    claude.answer = REVIEW_ANSWER
+
+    answer, calls, reason = asyncio.run(reviews(claude, free=free).review(REVIEW_REQUEST))
+
+    assert (answer, reason) == (REVIEW_ANSWER, None)
+    assert [(c.role, c.provider, c.model, c.outcome) for c in calls] == [
+        ("reviewer", "anthropic", "claude-sonnet-5-5", "ok")
+    ]
+    # Sonnet at effort high, with room above the 1,036 output tokens the measurement's largest used.
+    assert REVIEW_OUTPUT_CAP == 4_000
+    assert (claude.efforts, claude.max_outputs) == (["high"], [REVIEW_OUTPUT_CAP])
+    [call] = calls
+    assert (call.input_bound, call.max_output_tokens) == (REVIEW_REQUEST.bound, REVIEW_OUTPUT_CAP)
+    assert (call.prompt_sha, call.usage.input) == ("sha-of-the-review-prompt", 12_000)
+    # A review is never passed down the plan's chain.
+    assert free.max_outputs == []
+
+
+def test_an_invalid_or_failed_review_says_why_and_no_other_model_is_asked() -> None:
+    invalid, free = Fake("sonnet"), Fake("primary")
+    invalid.answer = {"issues": []}
+
+    answer, calls, reason = asyncio.run(reviews(invalid, free=free).review(REVIEW_REQUEST))
+
+    assert (answer, reason) == (None, "InvalidReview: it gives no verdict")
+    assert [(c.role, c.outcome, c.error) for c in calls] == [
+        ("reviewer", "error", "InvalidReview: it gives no verdict")
+    ]
+    # The invalid answer was billed, so its usage is recorded.
+    assert calls[0].usage.output == 900
+    refused = Fake("sonnet", Refused("anthropic declined the request (category cyber)"))
+    answer, calls, reason = asyncio.run(reviews(refused, free=free).review(REVIEW_REQUEST))
+    assert answer is None
+    assert reason == calls[0].error == "Refused: anthropic declined the request (category cyber)"
+    assert [(c.role, c.outcome) for c in calls] == [("reviewer", "error")]
+    assert free.max_outputs == []
+
+
+def test_a_review_past_its_timeout_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Slow(Fake):
+        async def structured(self, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], Usage]:
+            await asyncio.sleep(5)
+            return REVIEW_ANSWER, Usage()
+
+    assert REVIEW_TIMEOUT == 120.0
+    monkeypatch.setattr("agent.llm.REVIEW_TIMEOUT", 0.05)
+    answer, calls, reason = asyncio.run(reviews(Slow("sonnet")).review(REVIEW_REQUEST))
+    assert answer is None
+    assert [c.outcome for c in calls] == ["error"]
+    assert (reason or "").startswith("TimeoutError")
+
+
+def test_the_reviewer_cap_is_checked_against_the_review_s_worst_case_with_nothing_cached() -> None:
+    asked: list[tuple[str, float]] = []
+    over = "today's Claude spend on reviews plus this call's worst case passes the reviewer cap"
+
+    def is_spent(role: Role, worst_usd: float) -> str | None:
+        asked.append((role.model, worst_usd))
+        return over
+
+    claude = Fake("sonnet")
+    router = reviews(claude, limiter=Limiter(is_spent))
+
+    answer, calls, reason = asyncio.run(router.review(REVIEW_REQUEST))
+
+    # Every input token at the input rate, and the whole output allowance.
+    most = worst(RATES["claude-sonnet-5-5"], REVIEW_REQUEST.bound, REVIEW_OUTPUT_CAP, caches=False)
+    assert asked == [("claude-sonnet-5-5", pytest.approx(most))]
+    # The review says why in the stop's own words; its skipped call names the model too.
+    assert (answer, reason) == (None, over)
+    assert [(c.role, c.outcome, c.error) for c in calls] == [
+        ("reviewer", "skipped", f"claude-sonnet-5-5 skipped: {over}")
+    ]
+    assert claude.max_outputs == []
+
+
+def test_once_claude_s_credits_end_every_review_is_skipped_with_that_reason() -> None:
+    # spent() decides on the date alone, before any query: no connection is needed.
+    no_db = cast("Connection", object())
+    limiter = Limiter(lambda role, worst_usd: spent(no_db, role, worst_usd))
+    claude = Fake("sonnet")
+    ended = replace(REVIEWER, until=date(2026, 10, 1))
+
+    answer, calls, reason = asyncio.run(
+        reviews(claude, limiter=limiter, sonnet=ended).review(REVIEW_REQUEST)
+    )
+
+    assert (answer, reason) == (None, "its credits ended on 2026-10-01 (UTC)")
+    assert [(c.role, c.outcome) for c in calls] == [("reviewer", "skipped")]
+    assert claude.max_outputs == []
+
+
+def test_without_a_reviewer_no_review_is_asked() -> None:
+    assert asyncio.run(reviews(None).review(REVIEW_REQUEST)) == (None, [], "no Claude key is set")
+
+
+def test_the_reviewer_cap_counts_reviews_alone_and_tc_s_monthly_cap_every_role() -> None:
+    (_, _, usd, roles, name, _), (_, _, monthly, every, _, _) = caps(REVIEWER)
+    assert (usd, roles, name) == (0.45, ("reviewer",), "the reviewer cap")
+    assert (monthly, set(every)) == (15.0, set(get_args(RoleName)))
+    # Neither the triage cap nor the planner's counts a review.
+    for other in (TRIAGE, PLANNER):
+        assert "reviewer" not in caps(other)[0][3]
 
 
 def test_provider_text_is_masked_before_it_is_recorded_or_logged(

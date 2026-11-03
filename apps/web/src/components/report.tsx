@@ -4,16 +4,19 @@ import {
   cause,
   causeName,
   fallbackNotes,
+  ISSUE_KINDS,
   OUTCOMES,
   PARTS,
   percent,
   PLAN_KINDS,
-  PLAN_STATES,
   PLAN_WAIT_MINUTES,
+  planBadge,
   PLANNING,
   planning,
   planNote,
   progressLine,
+  REVIEW_NOTE,
+  reviewHeading,
   statusBadge,
   STEP_KINDS,
   stillChanging,
@@ -28,6 +31,7 @@ import { Badge } from './ui.tsx';
 const REFRESH_SECONDS = 3;
 
 type Plan = NonNullable<Investigation['plan']>;
+type PlanReview = NonNullable<Plan['review']>;
 /** Records a human's decision on a plan from the submitted form (a server action). */
 export type DecidePlan = (planId: string, form: FormData) => Promise<void>;
 
@@ -84,7 +88,35 @@ function Decide({ plan, decide, demo }: { plan: Plan; decide?: DecidePlan; demo?
   );
 }
 
-/** A real incident's plan: what it would do, what approving does, and the decision or its form. */
+/** A plan's review: its verdict, each issue with the step it quotes, and a model's note. */
+function Review({ review, pending }: { review: PlanReview; pending: boolean }) {
+  const { status, issues } = review;
+  const heading = reviewHeading(review, pending);
+  const warned = status === 'refuse' || status === 'flag';
+  return (
+    <div className={warned ? `review ${status === 'refuse' ? 'bad' : 'warn'}` : 'review'}>
+      {warned ? <h3>{heading}</h3> : <p>{heading}</p>}
+      {issues.length > 0 && (
+        <ul className="issues" role="list">
+          {issues.map((issue, i) => (
+            <li key={`${String(i)}-${issue.kind}`}>
+              <p>
+                <strong>{ISSUE_KINDS[issue.kind]}</strong>: <q>{issue.quote}</q>
+              </p>
+              <p className="muted">{issue.reason}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {review.by === 'model' && <p className="muted">{REVIEW_NOTE}</p>}
+    </div>
+  );
+}
+
+/**
+ * A real incident's plan: what it would do, its review, what approving does, and the decision or
+ * its form. A plan its review refused takes no decision, so it has neither note nor form.
+ */
 function PlanPanel({
   plan,
   decide,
@@ -96,7 +128,8 @@ function PlanPanel({
   demo?: boolean | undefined;
   now: number;
 }) {
-  const { proposal } = plan;
+  // A gateway older than reviews sends none: such a plan shows as it always did.
+  const { proposal, review } = plan;
   if (proposal == null) {
     return (
       <section className="panel" aria-labelledby="plan">
@@ -105,13 +138,15 @@ function PlanPanel({
       </section>
     );
   }
-  const pending = plan.status === 'pending';
+  const refused = review?.status === 'refuse';
+  const pending = plan.status === 'pending' && !refused;
   const decided = plan.status === 'approved' ? 'Approved' : 'Rejected';
+  const newFiles = new Set(review?.new_files);
   return (
     <section className={pending ? 'panel plan pending' : 'panel plan'} aria-labelledby="plan">
       <div className="panel-head">
         <h2 id="plan">Plan</h2>
-        <Badge state={PLAN_STATES[plan.status]} />
+        <Badge state={planBadge(plan.status, review?.status)} />
       </div>
       <p className="plan-what">
         {PLAN_KINDS[proposal.kind]} {proposal.target}
@@ -122,23 +157,36 @@ function PlanPanel({
           {proposal.files.map((file) => (
             <li key={file}>
               <code>{file}</code>
+              {newFiles.has(file) && (
+                <>
+                  {' '}
+                  <span className="muted">new file</span>
+                </>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <p className="plan-note">{planNote(proposal)}</p>
-      {pending ? (
-        <Decide
-          plan={plan}
-          {...(decide === undefined ? {} : { decide })}
-          {...(demo ? { demo } : {})}
-        />
+      {review != null && <Review review={review} pending={pending} />}
+      {refused ? (
+        <p className="decided">A refused plan takes no decision.</p>
       ) : (
-        <p className="decided">
-          {decided} at {utcTime(plan.decided_at ?? plan.recorded_at, now)} by{' '}
-          {plan.decided_by ?? 'someone unrecorded'}
-          {plan.decision_reason === null ? '.' : `: ${plan.decision_reason}`}
-        </p>
+        <>
+          <p className="plan-note">{planNote(proposal)}</p>
+          {pending ? (
+            <Decide
+              plan={plan}
+              {...(decide === undefined ? {} : { decide })}
+              {...(demo ? { demo } : {})}
+            />
+          ) : (
+            <p className="decided">
+              {decided} at {utcTime(plan.decided_at ?? plan.recorded_at, now)} by{' '}
+              {plan.decided_by ?? 'someone unrecorded'}
+              {plan.decision_reason === null ? '.' : `: ${plan.decision_reason}`}
+            </p>
+          )}
+        </>
       )}
     </section>
   );
@@ -198,7 +246,7 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
           <Badge state={verdictBadge(investigation)} />
           <Badge state={statusBadge(investigation.status)} />
           {investigation.plan_status !== null && (
-            <Badge state={PLAN_STATES[investigation.plan_status]} />
+            <Badge state={planBadge(investigation.plan_status, investigation.plan_review)} />
           )}
           {waiting && <Badge state={PLANNING} />}
         </p>

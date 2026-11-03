@@ -39,8 +39,8 @@ SIM_TIMEOUT = 10.0
 def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
     """The sim's router (Claude first with LLM_CLAUDE_FIRST, then the primary, fallback and small
     roles) and live triage's (Claude first while ANTHROPIC_API_KEY is set, then the same free
-    roles). They share one limiter, so a model's minute counts every request to it and a rejected
-    key stops Claude in both."""
+    roles, with the planner's and the reviewer's Claude). They share one limiter, so a model's
+    minute counts every request to it and a rejected key stops Claude in both."""
 
     def is_spent(role: Role, worst_usd: float) -> str | None:
         with engine.connect() as conn:
@@ -51,7 +51,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         for role in (settings.role(n) for n in ("primary", "fallback", "small"))
     )
     limiter = Limiter(is_spent)
-    triage, planner = settings.triage(), settings.planner()
+    triage, planner, reviewer = settings.triage(), settings.planner(), settings.reviewer()
     claude = Binding(triage, make_provider(triage)) if triage else None
     on_rate_limit = settings.llm_fallback_on_rate_limit
     sim = Router(
@@ -72,6 +72,7 @@ def make_routers(settings: Settings, engine: Engine) -> tuple[Router, Router]:
         limiter=limiter,
         claude=claude,
         planner=Binding(planner, make_provider(planner)) if planner else None,
+        reviewer=Binding(reviewer, make_provider(reviewer)) if reviewer else None,
     )
     return sim, live
 
@@ -116,9 +117,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         live_model=live_model,
         live_token_cap=settings.live_investigation_token_cap,
         live_daily_token_budget=settings.live_daily_ai_token_budget,
-        # Real incidents' plans ask the live router's plan chain; the snapshots come from the
-        # gateway's alert context.
-        planner=Planner(live_model, alerts.get) if isinstance(live_model, Router) else None,
+        # Real incidents' plans ask the live router's plan chain, and their reviews its reviewer;
+        # the snapshots come from the gateway's alert context, the source index from watch.
+        planner=(
+            Planner(live_model, alerts.get, live_model, settings.source_index_dir)
+            if isinstance(live_model, Router)
+            else None
+        ),
     )
     consumer = Consumer(
         sqs, settings.investigations_queue, job, max_in_flight=settings.agent_max_in_flight

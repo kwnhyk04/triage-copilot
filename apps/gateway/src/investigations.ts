@@ -30,6 +30,7 @@ interface Group {
   live: boolean;
   top: ReportRecordedV2['report']['hypotheses'][number] | null;
   plan_status: Schemas['ActionStatus'] | null;
+  plan_review: Schemas['PlanReviewStatus'] | null;
 }
 type Row = Group & { cursor_at: string };
 // The contract's Evidence.excerpt cap: the start of the cited result.
@@ -44,6 +45,7 @@ export interface PlanRow {
   rationale: string | null;
   problem: string | null;
   models: PlanRecordedV1['models'];
+  review: Schemas['PlanReview'] | null;
   recorded_at: Date;
   decision: 'approved' | 'rejected' | null;
   approver: string | null;
@@ -51,7 +53,10 @@ export interface PlanRow {
   reason: string | null;
 }
 
-/** A plan as the API serves it: its proposal, or null with the problem that left none. */
+/**
+ * A plan as the API serves it: its proposal, or null with the problem that left none, its review,
+ * and the human decision. A plan its review refused takes none, so it stays pending.
+ */
 export const toPlan = (row: PlanRow): Schemas['Plan'] => ({
   id: row.id,
   proposal:
@@ -64,6 +69,7 @@ export const toPlan = (row: PlanRow): Schemas['Plan'] => ({
           rationale: row.rationale ?? '',
         },
   problem: row.problem,
+  review: row.review,
   status: row.decision ?? 'pending',
   recorded_at: row.recorded_at.toISOString(),
   decided_by: row.approver,
@@ -214,7 +220,7 @@ export const createDigest =
 /**
  * A summary's columns over alert group g and its report r. A queued group whose newest step is
  * fresh reads running; the stored status stays queued, which the sweeper sweeps. A plan without a
- * proposal takes no decision, so it has no status.
+ * proposal takes no decision, so it has no status. The plan's review status rides beside it.
  */
 const summaryColumns = (sql: Sql, { liveTenants, stuckAfterMinutes }: ReadSettings) => sql`
   g.investigation_id AS id, g.id AS group_id, g.group_key, r.verdict, g.created_at, g.updated_at,
@@ -227,6 +233,8 @@ const summaryColumns = (sql: Sql, { liveTenants, stuckAfterMinutes }: ReadSettin
   (SELECT CASE WHEN p.kind IS NULL THEN NULL ELSE coalesce(d.decision::text, 'pending') END
    FROM gateway.plans p LEFT JOIN gateway.plan_decisions d ON d.plan_id = p.id
    WHERE p.investigation_id = g.investigation_id) AS plan_status,
+  (SELECT p.review->>'status' FROM gateway.plans p
+   WHERE p.investigation_id = g.investigation_id) AS plan_review,
   (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
    ORDER BY a.created_at, a.id LIMIT 1) AS labels`;
 
@@ -284,6 +292,7 @@ const investigationSummary = (group: Group): Schemas['InvestigationSummary'] => 
           confidence: group.top.confidence,
         },
   plan_status: group.plan_status,
+  plan_review: group.plan_review,
 });
 
 /**
@@ -343,8 +352,8 @@ export const createGetInvestigation =
       FROM gateway.proposed_actions a LEFT JOIN gateway.approvals p ON p.action_id = a.id
       WHERE a.investigation_id = ${id} ORDER BY a.proposed_at, a.id`;
     const [plan] = await sql<PlanRow[]>`
-      SELECT p.id, p.kind, p.target, p.files, p.rationale, p.problem, p.models, p.recorded_at,
-             d.decision, d.approver, d.decided_at, d.reason
+      SELECT p.id, p.kind, p.target, p.files, p.rationale, p.problem, p.models, p.review,
+             p.recorded_at, d.decision, d.approver, d.decided_at, d.reason
       FROM gateway.plans p LEFT JOIN gateway.plan_decisions d ON d.plan_id = p.id
       WHERE p.investigation_id = ${id}`;
     const results = new Map<string, string>();

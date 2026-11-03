@@ -21,8 +21,8 @@ output gets only the tokens its input leaves, and no call's prompt passes PROMPT
 (agent.model.TurnBudget).
 
 A live triage's real verdict, with the planner switch on, adds a due plan row in its report's
-transaction; the plan is then made once (agent.planner) and sent as PlanRecorded v1 after the
-report. A redelivered message finishes a plan its run left due.
+transaction; the plan and its review are then made once (agent.planner) and sent as PlanRecorded
+v2 after the report. A redelivered message finishes a plan its run left due.
 """
 
 import asyncio
@@ -36,6 +36,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID, uuid5
 
@@ -90,7 +91,7 @@ from agent.tools import (
 )
 from py_clients.generated.messages.investigation_requested_v1_schema import InvestigationRequestedV1
 from py_clients.generated.messages.investigation_requested_v2_schema import InvestigationRequestedV2
-from py_clients.generated.messages.plan_recorded_v1_schema import PlanRecordedV1
+from py_clients.generated.messages.plan_recorded_v2_schema import PlanRecordedV2
 from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
 from py_clients.generated.messages.step_recorded_v3_schema import StepRecordedV3
 
@@ -203,14 +204,15 @@ LAST_TURN = text("""
     ORDER BY id DESC LIMIT 1
 """)
 # Every model asked, per part, in the order first asked: ReportRecorded v2's models, and with
-# :plan PlanRecorded v1's.
+# :plan PlanRecorded v2's. Neither lists the reviewer's calls: the plan's review names its model.
 MODELS = text("""
     SELECT CASE role WHEN 'small' THEN 'summary' WHEN 'planner' THEN 'plan' ELSE 'triage' END
                AS part, provider, model,
            count(*) FILTER (WHERE outcome = 'ok') AS calls,
            count(*) FILTER (WHERE outcome <> 'ok') AS failed,
            (array_agg(error ORDER BY id DESC) FILTER (WHERE outcome <> 'ok'))[1] AS reason
-    FROM agent.model_calls WHERE investigation_id = :id AND (role = 'planner') = :plan
+    FROM agent.model_calls
+    WHERE investigation_id = :id AND role <> 'reviewer' AND (role = 'planner') = :plan
     GROUP BY 1, 2, 3 ORDER BY min(id) LIMIT 20
 """)
 
@@ -671,15 +673,17 @@ class Job:
             return "stopped"
         plan_id, report = due
         draft: PlanDraft | None = None
+        review: dict[str, Any] | None = None
         if self.ai_enabled and await asyncio.to_thread(is_on, conn, "planner"):
             evidence = _results(state)
-            draft, problem, calls = await self.planner.plan(
-                inv, state.app, report, evidence, state.fired_at
+            reviewing = partial(is_on, conn, "reviewer")
+            draft, problem, review, calls = await self.planner.plan(
+                inv, state.app, report, evidence, state.fired_at, reviewing
             )
             await self._record_calls(conn, inv, state, calls)
         else:
             problem = "The planner was switched off before the plan was made."
-        await asyncio.to_thread(_store_plan, conn, inv, plan_id, draft, problem)
+        await asyncio.to_thread(_store_plan, conn, inv, plan_id, draft, problem, review)
         self.on_commit()
         return "done"
 
@@ -1334,27 +1338,34 @@ def _due_plan(conn: Connection, inv: UUID) -> tuple[UUID, dict[str, Any]] | None
 
 
 def _store_plan(
-    conn: Connection, inv: UUID, plan_id: UUID, draft: PlanDraft | None, problem: str | None
+    conn: Connection,
+    inv: UUID,
+    plan_id: UUID,
+    draft: PlanDraft | None,
+    problem: str | None,
+    review: dict[str, Any] | None,
 ) -> None:
-    """Completes the due plan, with the plan or why there is none, and queues PlanRecorded v1 after
-    the report, with every model asked for it. A plan another run completed stays as it is."""
+    """Completes the due plan, with the plan and its review or why there is none, and queues
+    PlanRecorded v2 after the report, with every model asked for the plan. A plan another run
+    completed stays as it is."""
     plan = None if draft is None else draft.model_dump(mode="json")
     with conn.begin():
         planned_at = conn.execute(
             update(Plan)
             .where(Plan.investigation_id == inv, Plan.planned_at.is_(None))
-            .values(plan=plan, problem=problem, planned_at=func.now())
+            .values(plan=plan, problem=problem, review=review, planned_at=func.now())
             .returning(Plan.planned_at)
         ).scalar_one_or_none()
         if planned_at is None:
             return
-        message = PlanRecordedV1.model_validate(
+        message = PlanRecordedV2.model_validate(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "plan_id": plan_id,
                 "investigation_id": inv,
                 "plan": plan,
                 "problem": problem,
+                "review": review,
                 "models": _models(conn, inv, plan=True),
                 "recorded_at": planned_at,
             }

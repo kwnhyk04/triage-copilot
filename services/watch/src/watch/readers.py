@@ -2,8 +2,8 @@
 
 Every command is a fixed argv with no shell, under a timeout, with a minimal environment, so none
 of TC's settings or secrets reach a child process. Docker may only list (`ps`) and read logs,
-git may only `log` origin/main, and HTTP may only GET the configured URLs, never following a
-redirect. `docker inspect` is never run: a container's environment holds keys.
+git may only `log`, resolve and list origin/main, and HTTP may only GET the configured URLs, never
+following a redirect. `docker inspect` is never run: a container's environment holds keys.
 """
 
 import json
@@ -53,6 +53,8 @@ _ENV_KEPT = frozenset(
 _ARGUMENT = re.compile(r"[\w.:/\\=%{}@+, -]*")
 # A line of `docker logs --timestamps`: RFC 3339 in UTC with nanoseconds, a space, the line.
 _STAMPED = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z ?(.*)", re.S)
+# A full commit id, SHA-1 or SHA-256, as `git rev-parse` prints it.
+_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 class Refused(Exception):
@@ -220,12 +222,12 @@ class Commit:
 
 
 class Git:
-    """`git log` of origin/main as last fetched, the only git command watch runs. It never
-    fetches; hooks, fsmonitor, textconv and external diff drivers, signature checks, lazy fetches
-    of a partial clone, and the user's and system's config are all off. It lists changed paths,
-    never file contents."""
+    """`git log`, `rev-parse` and `ls-tree` of origin/main as last fetched, the only git commands
+    watch runs. It never fetches; hooks, fsmonitor, textconv and external diff drivers, signature
+    checks, lazy fetches of a partial clone, and the user's and system's config are all off. It
+    lists paths, never file contents."""
 
-    SUBCOMMANDS = frozenset({"log"})
+    SUBCOMMANDS = frozenset({"log", "rev-parse", "ls-tree"})
     REF = "refs/remotes/origin/main"
     ENV: ClassVar[dict[str, str]] = {
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -282,6 +284,16 @@ class Git:
                 raise ReadError("git log printed a commit without its date") from None
             commits.append(Commit(sha, when, subject, tuple(filter(None, paths))))
         return commits
+
+    def tree(self) -> tuple[str, list[str]]:
+        """origin/main's commit and every path it tracks, from the repo's root. The ref is not
+        peeled with ^{commit}, a character cmd.exe reads: fetch writes it from a branch, which git
+        keeps on commits."""
+        sha = self.call("rev-parse", "--verify", "--end-of-options", self.REF).strip()
+        if not _COMMIT.fullmatch(sha):
+            raise ReadError("git rev-parse printed no commit")
+        out = self.call("ls-tree", "-r", "--full-tree", "--name-only", "-z", sha)
+        return sha, [path for path in out.split("\0") if path]
 
 
 def check_url(url: str) -> None:

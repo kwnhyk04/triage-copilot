@@ -60,6 +60,30 @@ describe('InvestigationList', () => {
     expect(count(html, '<span class="badge ok">Report ready</span>')).toBe(3);
   });
 
+  it('shows a plan its review refused as a red Refused badge, never as still planning', () => {
+    const refused = {
+      ...WORKER_OUT_OF_MEMORY,
+      plan_status: 'pending' as const,
+      plan_review: 'refuse' as const,
+      updated_at: '2026-10-26T10:00:00.000Z',
+    };
+    const html = shown({ items: [refused], refresh: true });
+    expect(html).toContain('<td data-card="aside"><span class="badge bad">Refused</span></td>');
+    expect(html).not.toContain('Decision needed');
+    expect(html).not.toContain('Planning');
+  });
+
+  it('shows plans as before when an older gateway sends no plan_review', () => {
+    const items = LIVE_SAMPLES.map((item) => ({ ...item, plan_review: null }));
+    const older = items.map((item) => {
+      const copy: Record<string, unknown> = { ...item };
+      delete copy.plan_review;
+      return copy;
+    }) as unknown as typeof items;
+    expect(shown({ items: older })).toBe(shown({ items }));
+    expect(shown({ items })).toContain('<span class="badge warn">Decision needed</span>');
+  });
+
   it('fixes the columns and centres the confidence as a block whose digits line up', () => {
     const html = shown();
     expect(html).toContain('<table class="list-table cards fixed incidents">');

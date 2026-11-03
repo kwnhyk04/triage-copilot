@@ -4,8 +4,9 @@ fallback; the small role for log-page summaries, after Claude too; and a limiter
 role under its requests per minute and per day, and off any model whose provider said it is
 spent. Any Claude failure moves its call alone down the chain; credits gone stop Claude until the
 month ends, and a rejected key until the agent restarts. A plan for a real incident asks the
-planner's Claude, under the planner's own daily cap, then the free chain. Every other Claude call
-stays within the triage cap a day, and every Claude call within TC's monthly dollar cap.
+planner's Claude, under the planner's own daily cap, then the free chain; its review asks the
+reviewer's Claude alone, under the reviewer's own daily cap. Every other Claude call stays within
+the triage cap a day, and every Claude call within TC's monthly dollar cap.
 
 Every request is returned as a ModelCall, with its outcome, usage and prompt sha, for the job to
 record; a skipped one says why. Provider text is masked (watch.scrub) before it is kept or logged.
@@ -18,6 +19,7 @@ from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from functools import partial
 from typing import Any, Literal
 
 from pydantic import ValidationError
@@ -59,6 +61,10 @@ LARGEST_CALL = (PROMPT_LIMIT, 4_096)
 # A plan's output allowance at effort medium, thinking included; providers.plan_limits has each
 # effort's.
 PLAN_OUTPUT_CAP = plan_limits("medium")[0]
+# A review's output allowance, thinking included, and its timeout: Sonnet's measured reviews
+# (evals/reports, 2026-11-02 reviews a2e82b9b) used at most 1,036 output tokens and 8.3 s.
+REVIEW_OUTPUT_CAP = 4_000
+REVIEW_TIMEOUT = 120.0
 SUMMARY_OUTPUT_CAP = 400
 SUMMARY_MIN_OUTPUT = 64
 SUMMARY_SYSTEM = (
@@ -102,10 +108,12 @@ SPEND_SINCE = text("""
       AND created_at >= date_trunc(:period, now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
     GROUP BY model
 """)
-# Whose calls each cap counts: the planner's daily cap its plans, the triage cap every other
-# Claude call of the day (evals included), and TC's monthly cap all of them.
+# Whose calls each cap counts: the planner's daily cap its plans, the reviewer's its reviews, the
+# triage cap every other Claude call of the day (evals included), and TC's monthly cap all of them.
 PLANS: tuple[RoleName, ...] = ("planner",)
+REVIEWS: tuple[RoleName, ...] = ("reviewer",)
 TURNS: tuple[RoleName, ...] = ("primary", "fallback", "small")
+EVERY = PLANS + REVIEWS + TURNS
 # A dollar cap: its period, how a reason names it, the cap, whose calls it counts, its name, and
 # what those calls spent.
 Cap = tuple[Literal["day", "month"], str, float | None, tuple[RoleName, ...], str, str]
@@ -122,7 +130,7 @@ def calls_today(conn: Connection, model: str) -> int:
 
 
 def claude_spend(
-    conn: Connection, period: Literal["day", "month"], roles: tuple[RoleName, ...] = PLANS + TURNS
+    conn: Connection, period: Literal["day", "month"], roles: tuple[RoleName, ...] = EVERY
 ) -> float | str:
     """What Claude cost since this UTC day or month began for the roles' calls, in US dollars,
     every model priced by its own rates; or the name of a model with no rates, whose cost cannot
@@ -140,6 +148,25 @@ def claude_spend(
     return total
 
 
+def caps(role: Role) -> tuple[Cap, Cap]:
+    """The role's daily dollar cap and TC's monthly one: the planner's and the reviewer's count
+    their own calls, the triage cap every other role's, and the month every role's."""
+    roles, name, what = {
+        "planner": (PLANS, "the planner cap", "spend on plans"),
+        "reviewer": (REVIEWS, "the reviewer cap", "spend on reviews"),
+    }.get(role.name, (TURNS, "the triage cap", "spend"))
+    day: Cap = ("day", "today's", role.daily_usd, roles, name, what)
+    month: Cap = (
+        "month",
+        "this month's",
+        role.monthly_usd,
+        EVERY,
+        "TC's monthly Claude cap",
+        "spend",
+    )
+    return day, month
+
+
 def stop(conn: Connection, role: Role, worst_usd: float = 0.0) -> tuple[str, str] | None:
     """Why no request to the role's model can get through now, as a short code (agent.metrics)
     and a sentence, or None: Claude's credits have expired, it is switched off, today's or this
@@ -149,22 +176,8 @@ def stop(conn: Connection, role: Role, worst_usd: float = 0.0) -> tuple[str, str
         return "credits_ended", f"its credits ended on {role.until.isoformat()} (UTC)"
     if role.provider == "anthropic" and not is_on(conn, "claude"):
         return "switched_off", "Claude is switched off (agent.switches)"
-    day: Cap = (
-        ("day", "today's", role.daily_usd, PLANS, "the planner cap", "spend on plans")
-        if role.name == "planner"
-        else ("day", "today's", role.daily_usd, TURNS, "the triage cap", "spend")
-    )
-    month: Cap = (
-        "month",
-        "this month's",
-        role.monthly_usd,
-        PLANS + TURNS,
-        "TC's monthly Claude cap",
-        "spend",
-    )
-    for code, (period, when, cap, roles, name, what) in (
-        ("daily_cap", day),
-        ("monthly_cap", month),
+    for code, (period, when, cap, roles, name, what) in zip(
+        ("daily_cap", "monthly_cap"), caps(role), strict=True
     ):
         if cap is None:
             continue
@@ -274,6 +287,7 @@ class Router:
         limiter: Limiter,
         claude: Binding | None = None,
         planner: Binding | None = None,
+        reviewer: Binding | None = None,
     ) -> None:
         self.primary = primary
         self.fallback = fallback
@@ -284,6 +298,8 @@ class Router:
         self.claude = claude
         # The planner's Claude, before the free chain of a plan.
         self.planner = planner
+        # The reviewer's Claude, the only model a plan's review asks.
+        self.reviewer = reviewer
 
     def _chain(self, *bindings: Binding | None) -> list[Binding]:
         """The bindings that exist, in order; evals leave out the free fallback."""
@@ -385,6 +401,43 @@ class Router:
             calls.append(_plan_call(role, "ok", bound, sha, usage, started))
             return answer, calls
         return None, calls
+
+    async def review(
+        self, request: PlanRequest
+    ) -> tuple[dict[str, Any] | None, list[ModelCall], str | None]:
+        """The reviewer's answer when request.problems accepts it, its one call, recorded as the
+        reviewer's, and otherwise why there is none: a spent cap or switch, in the stop's own
+        words, or the call's error. A review asks no other model and is never retried."""
+        if self.reviewer is None:
+            return None, [], "no Claude key is set"
+        role, provider = self.reviewer.role, self.reviewer.provider
+        bound, cap = request.bound, REVIEW_OUTPUT_CAP
+        record = partial(
+            _plan_call, role, bound=bound, sha=request.prompt_sha, name="reviewer", max_output=cap
+        )
+        try:
+            # A review marks nothing for the cache, so its input bills at the input rate.
+            await self.limiter.acquire(role, _worst(role, bound, cap, caches=False))
+        except QuotaExhausted as error:
+            why = str(error).removeprefix(f"{role.model} skipped: ")
+            return None, [record("skipped", error=str(error))], mask(why)[:500]
+        started = time.perf_counter()
+        try:
+            answer, usage = await asyncio.wait_for(
+                provider.structured(request.system, request.text, request.shape, cap, role.effort),
+                REVIEW_TIMEOUT,
+            )
+        except Exception as error:
+            self._after_failure(role, error)
+            usage = error.usage if isinstance(error, ModelError) else Usage()
+            failed = record(_outcome(error), usage=usage, started=started, error=error)
+            return None, [failed], failed.error
+        problem = request.problems(answer)
+        if problem is not None:
+            invalid = f"InvalidReview: {problem}"
+            failed = record("error", usage=usage, started=started, error=invalid)
+            return None, [failed], failed.error
+        return answer, [record("ok", usage=usage, started=started)], None
 
     def _after_failure(self, role: Role, error: Exception) -> None:
         """Says so when Claude's credits are gone, and keeps every Claude model off until the
@@ -526,12 +579,16 @@ def _plan_call(
     usage: Usage = NO_USAGE,
     started: float | None = None,
     error: Exception | str | None = None,
+    *,
+    name: RoleName = "planner",
+    max_output: int | None = None,
 ) -> ModelCall:
-    """A plan's call, recorded as the planner's whichever model of the chain it went to."""
+    """A plan's call, recorded as the planner's whichever model of the chain it went to; or a
+    review's, as the reviewer's with its own output allowance."""
     ms = 0 if started is None else _ms(started)
     why = _err(error) if isinstance(error, Exception) else error
-    call = _call(role, outcome, bound, plan_limits(role.effort)[0], usage, ms, why, sha=sha)
-    return replace(call, role="planner")
+    cap = plan_limits(role.effort)[0] if max_output is None else max_output
+    return replace(_call(role, outcome, bound, cap, usage, ms, why, sha=sha), role=name)
 
 
 def _outcome(error: Exception) -> Outcome:

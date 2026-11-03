@@ -53,6 +53,25 @@ def planned(scenario: str, kind: str, target: str, files: Sequence[str] = ()) ->
     return asyncio.run(plans.plan_one(Scripted(answer), SCENARIOS[scenario], TRIAGE))
 
 
+def test_the_fresh_set_is_the_first_two_test_incidents_of_each_family() -> None:
+    manifest = harness.load(harness.SET / "manifest.json")
+    test = sorted(sid for sid, entry in manifest["scenarios"].items() if entry["split"] == "test")
+    families = sorted({sid.rsplit("-", 1)[0] for sid in test})
+    first_two: list[str] = []
+    for family in families:
+        first_two += [sid for sid in test if sid.rsplit("-", 1)[0] == family][:2]
+    assert tuple(first_two) == plans.FRESH
+    assert len(plans.FRESH) == 16
+    # Their kinds are known too, so each gets a catalog.
+    assert {name for sid in plans.FRESH for name in SCENARIOS[sid].services} <= set(plans.KINDS)
+
+
+def test_a_report_names_its_set_so_dev_and_fresh_passes_stay_apart() -> None:
+    assert plans.report_name("2026-11-03", "claude-opus-5-5", "max", "fresh").startswith(
+        "2026-11-03-fresh-plans-"
+    )
+
+
 def test_every_dev_service_has_a_kind_and_providers_are_left_out() -> None:
     manifest = harness.load(harness.SET / "manifest.json")
     dev = [sid for sid, entry in manifest["scenarios"].items() if entry["split"] == "dev"]

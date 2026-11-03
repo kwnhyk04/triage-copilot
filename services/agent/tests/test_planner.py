@@ -1,14 +1,21 @@
 """The planner without a database: the plan's shape per app, what a valid plan is, the prompt and
-its bound, and the check on real targets (P2.3), on fixtures of the apps' catalogs."""
+its bound, the check on real targets (P2.3), and the plan's review (Part B), on fixtures of the
+apps' catalogs."""
 
+import asyncio
 import copy
 import json
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import CheckConstraint
 
-from agent.model import PlanRequest
+from agent.db import Base
+from agent.model import ModelCall, PlanRequest
 from agent.planner import (
     PLAN_INPUT_BYTES,
     PLANNER_PROMPT_SHA,
@@ -16,12 +23,16 @@ from agent.planner import (
     SOURCES,
     PlanDraft,
     PlanKind,
+    Planner,
     parse_plan,
     plan_problems,
     plan_refusal,
     plan_shape,
     planner_text,
 )
+from agent.reviewer import REVIEWER_PROMPT_SHA, REVIEWER_SYSTEM
+from agent.switches import DEFAULTS
+from py_clients.generated.gateway import AlertContext
 from watch.catalog import CATALOGS
 
 FA, FL = CATALOGS["freight-audit"], CATALOGS["filing-lens"]
@@ -243,8 +254,225 @@ def test_none_always_passes_and_a_code_fix_needs_allowlisted_source_files() -> N
     assert plan_refusal(draft("code_fix", "postgres", ok), FA, None) is not None
 
 
+def test_a_code_fix_names_files_never_patterns() -> None:
+    # High's memory-leak-1 named services/orders/**/*.py, which the allowlist matched (2026-11-03).
+    for path in (
+        "services/api/**/*.py",
+        "services/api/src/*.py",
+        "services/api/src/app?.py",
+        "services/api/src/[ab].py",
+        "services/api/src/{a,b}.py",
+    ):
+        refused = plan_refusal(draft("code_fix", "api", [path]), FL, None)
+        assert refused == f"{path} is a pattern, not a file: name each file it changes", path
+
+
 def test_the_check_reads_the_snapshot_without_changing_it() -> None:
     down = snapshot(api=503)
     before = copy.deepcopy(down)
     plan_refusal(draft("restart_service", "api"), FA, down)
     assert json.dumps(down) == json.dumps(before)
+
+
+# Part B: the review of every plan a model gave, the code checks first.
+COMMIT = "4f1c2a9e0b7d5c3a1e9f7b5d3c1a9e7f5b3d1c9a"
+NEW = "services/api/src/app/retry.py"
+FIX: dict[str, Any] = {
+    "kind": "code_fix",
+    "target": "api",
+    "files": ["services/api/src/app/main.py", NEW],
+    "rationale": "Errors began with commit 9c1d2e3 [tc_01JA0GIT01]. Guard the lookup, then retry.",
+}
+OK: dict[str, Any] = {"verdict": "ok", "issues": []}
+WARNING = {
+    "kind": "fallback_step",
+    "quote": "If errors persist, turn retry off.",
+    "reason": "No cited result ties the retry flag to the errors.",
+}
+FORBIDDEN = {
+    "kind": "forbidden_step",
+    "quote": "Turn search-results-badges off to rule it out.",
+    "reason": "Nothing the triage cites shows the flag caused the errors.",
+}
+Answer = dict[str, Any] | None
+
+
+class Chain:
+    """The plan's chain and the reviewer's Claude, each with its one answer (None: it failed), and
+    what each was asked."""
+
+    def __init__(self, plan: Answer, review: Answer = None, why: str | None = None) -> None:
+        self.answer, self.verdict, self.why = plan, review, why
+        self.plans: list[PlanRequest] = []
+        self.reviews: list[PlanRequest] = []
+
+    async def plan(self, request: PlanRequest) -> tuple[Answer, list[ModelCall]]:
+        self.plans.append(request)
+        outcome = "ok" if self.answer else "error"
+        return self.answer, [ModelCall("planner", "anthropic", "claude-opus-5-5", outcome)]
+
+    async def review(self, request: PlanRequest) -> tuple[Answer, list[ModelCall], str | None]:
+        self.reviews.append(request)
+        outcome = "ok" if self.verdict else "error"
+        call = ModelCall("reviewer", "anthropic", "claude-sonnet-5-5", outcome)
+        return self.verdict, [call], self.why
+
+
+def unread(inv: UUID) -> AlertContext:
+    raise ValueError("no gateway in these tests")
+
+
+def index(folder: Path) -> Path:
+    """watch's index of FilingLens at origin/main: main.py is there, and retry.py would be new."""
+    files = ["services/api/src/app/main.py", "services/api/src/app/db.py", "README.md"]
+    written = {"app": "filing-lens", "commit": COMMIT, "files": files}
+    (folder / "filing-lens.json").write_text(json.dumps(written), encoding="utf-8")
+    return folder
+
+
+Planned = tuple[PlanDraft | None, str | None, dict[str, Any] | None, Sequence[ModelCall]]
+
+
+def make(
+    chain: Chain, sources: Path | None, reviewing: Callable[[], bool] = lambda: True
+) -> Planned:
+    """FilingLens's plan, with no snapshot, and its review."""
+    planner = Planner(chain, unread, chain, sources)
+    report = snapshot_report()
+    return asyncio.run(planner.plan(uuid4(), "filing-lens", report, {}, FIRED, reviewing))
+
+
+def test_the_reviewer_switch_is_on_by_default_and_the_table_takes_every_switch() -> None:
+    assert DEFAULTS["reviewer"] is True
+    table = Base.metadata.tables["agent.switches"]
+    [check] = [c for c in table.constraints if isinstance(c, CheckConstraint)]
+    assert [name for name in DEFAULTS if f"'{name}'" not in str(check.sqltext)] == []
+
+
+@pytest.mark.parametrize(
+    ("answer", "indexed", "refused"),
+    [
+        (
+            {**FIX, "target": "postgres"},
+            True,
+            "postgres is a database: a plan never restarts or changes a database, queue, cache, "
+            "storage or proxy; plan none, and name the step a human must take",
+        ),
+        (
+            {**FIX, "files": ["services/billing/app.py"]},
+            True,
+            f"services/billing/app.py is not in filing-lens's repo at origin/main ({COMMIT[:12]}), "
+            "nor is its folder",
+        ),
+        # No index folder, or none watch wrote: no file can be checked, so the fix is refused.
+        (
+            FIX,
+            False,
+            "no source index of filing-lens at origin/main could be read, so no file can be "
+            "checked",
+        ),
+        (
+            {**FIX, "kind": "restart_service", "files": []},
+            False,
+            "no snapshot of filing-lens could be read, so nothing shows api failing: restart "
+            "nothing",
+        ),
+    ],
+)
+def test_a_plan_the_code_checks_refuse_is_kept_with_their_reason_and_no_model_is_asked(
+    tmp_path: Path, answer: dict[str, Any], indexed: bool, refused: str
+) -> None:
+    chain = Chain(answer, OK)
+    plan, problem, review, calls = make(chain, index(tmp_path) if indexed else None)
+    assert plan is not None
+    assert (plan.model_dump(), problem) == (answer, None)
+    assert review == {
+        "status": "refuse",
+        "by": "check",
+        "model": None,
+        "issues": [
+            {"kind": "code_check", "quote": f"{plan.kind} of {plan.target}", "reason": refused}
+        ],
+        "reason": None,
+        "new_files": [],
+    }
+    assert chain.reviews == []
+    assert [call.role for call in calls] == ["planner"]
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        (OK, "ok"),
+        ({"verdict": "flag", "issues": [WARNING]}, "flag"),
+        # The issues decide: any forbidden step refuses, whatever verdict the model gave.
+        ({"verdict": "flag", "issues": [WARNING, FORBIDDEN]}, "refuse"),
+    ],
+)
+def test_the_reviewer_reads_what_the_planner_read_and_its_issues_decide_the_verdict(
+    tmp_path: Path, answer: dict[str, Any], status: str
+) -> None:
+    chain = Chain(FIX, answer)
+    plan, problem, review, calls = make(chain, index(tmp_path))
+    assert (plan is not None, problem) == (True, None)
+    assert review == {
+        "status": status,
+        "by": "model",
+        "model": "claude-sonnet-5-5",
+        "issues": answer["issues"],
+        "reason": None,
+        "new_files": [NEW],
+    }
+    [planned], [asked] = chain.plans, chain.reviews
+    assert asked.text.startswith(planned.text)
+    assert (asked.system, asked.prompt_sha) == (REVIEWER_SYSTEM, REVIEWER_PROMPT_SHA)
+    assert f"- {NEW} (a new file; its folder exists at origin/main)" in asked.text.splitlines()
+    assert [call.role for call in calls] == ["planner", "reviewer"]
+
+
+def test_only_a_code_fix_needs_the_source_index() -> None:
+    chain = Chain({**FIX, "kind": "none", "target": "postgres"}, OK)
+    _, _, review, _ = make(chain, None)
+    assert review is not None
+    assert (review["status"], review["by"], review["new_files"]) == ("ok", "model", [])
+
+
+def test_a_plan_is_not_reviewed_while_the_reviewer_is_switched_off(tmp_path: Path) -> None:
+    chain = Chain(FIX, OK)
+    plan, problem, review, calls = make(chain, index(tmp_path), lambda: False)
+    assert (plan is not None, problem) == (True, None)
+    assert review == {
+        "status": "not_reviewed",
+        "by": None,
+        "model": None,
+        "issues": [],
+        "reason": "the reviewer is switched off",
+        "new_files": [NEW],
+    }
+    assert chain.reviews == []
+    assert [call.role for call in calls] == ["planner"]
+
+
+def test_a_plan_is_not_reviewed_when_the_reviewer_cannot_answer(tmp_path: Path) -> None:
+    chain = Chain(FIX, None, "its credits ended on 2026-11-10 (UTC)")
+    plan, problem, review, calls = make(chain, index(tmp_path))
+    # The plan stands, for a human to decide unreviewed.
+    assert (plan is not None, problem) == (True, None)
+    assert review == {
+        "status": "not_reviewed",
+        "by": None,
+        "model": "claude-sonnet-5-5",
+        "issues": [],
+        "reason": "its credits ended on 2026-11-10 (UTC)",
+        "new_files": [NEW],
+    }
+    outcomes = [(call.role, call.outcome) for call in calls]
+    assert outcomes == [("planner", "ok"), ("reviewer", "error")]
+
+
+def test_a_plan_no_model_gave_has_no_review() -> None:
+    chain = Chain(None, OK)
+    plan, problem, review, _ = make(chain, None)
+    assert (plan, review) == (None, None)
+    assert (problem or "").startswith("No model gave a plan: claude-opus-5-5")
+    assert chain.reviews == []

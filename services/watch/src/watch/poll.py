@@ -5,6 +5,8 @@ that opted in, its Prometheus alerts. An alert fires after FIRE_AFTER bad observ
 and resolves after RESOLVE_AFTER good ones, and only those transitions are posted to the
 gateway's webhook. Its labels are always the same five, so fingerprints and dedupe hold; what
 varies goes in its annotations, with a scrubbed snapshot of the app of at most SNAPSHOT_BYTES.
+With a repo and a source index folder, each poll also writes the app's tracked paths at
+origin/main there whenever that commit changes, for the agent's check of a code fix's files.
 """
 
 import json
@@ -53,7 +55,8 @@ Observed = dict["Key", tuple[bool, str]]
 @dataclass(frozen=True)
 class Target:
     """One watched app: its catalog and stack, its tenant's webhook token, health URLs by
-    service, its repo (for origin/main's commits) and, on a dev stack, its Prometheus."""
+    service, its repo (for origin/main's commits), on a dev stack its Prometheus, and the folder
+    its source index goes to."""
 
     catalog: Catalog
     stack: Stack
@@ -61,6 +64,7 @@ class Target:
     health: Mapping[str, str] = field(default_factory=dict[str, str])
     repo: Path | None = None
     prometheus: str | None = None
+    sources: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,8 @@ class Watcher:
         self._alerts: list[dict[str, str]] = []
         # Commits and query results, read once per poll for all of its snapshots.
         self._changes: tuple[object, object] | None = None
+        # The origin/main commit whose source index was last written.
+        self._indexed: str | None = None
 
     @property
     def app(self) -> str:
@@ -212,8 +218,32 @@ class Watcher:
         self._read_docker(now, observed)
         self._read_prometheus(observed)
         posted = self._step(now, observed)
+        self._write_index()
         self.ok = not self.problems
         return posted
+
+    def _write_index(self) -> None:
+        """Writes `<sources>/<app>.json` (app, commit, files) once origin/main's commit is new, as
+        a temp file moved over the old one, so no reader sees half of it. A failure is logged,
+        and the next poll tries again."""
+        folder = self.target.sources
+        if self.git is None or folder is None:
+            return
+        try:
+            commit, files = self.git.tree()
+            if commit == self._indexed:
+                return
+            folder.mkdir(parents=True, exist_ok=True)
+            temp = folder / f"{self.app}.json.tmp"
+            index = {"app": self.app, "commit": commit, "files": files}
+            temp.write_text(json.dumps(index), encoding="utf-8")
+            temp.replace(folder / f"{self.app}.json")
+        except (ReadError, OSError) as error:
+            extra = {"app": self.app, "error": mask(str(error))}
+            log.warning("source index not written", extra=extra)
+            return
+        self._indexed = commit
+        log.info("source index written", extra={"app": self.app, "commit": commit[:12]})
 
     def _probe(self, observed: Observed) -> None:
         for service, url in self.target.health.items():

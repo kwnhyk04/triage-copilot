@@ -301,8 +301,11 @@ services:
       # The model providers, through the egress proxy's port for the agent. Every internal address
       # is http://, which HTTPS_PROXY leaves alone.
       HTTPS_PROXY: http://egress-proxy:3128
+      # watch's source index of each app at origin/main, which every code fix is checked against.
+      SOURCE_INDEX_DIR: /sources
     volumes:
       - ${FASTEMBED_CACHE_PATH:?set FASTEMBED_CACHE_PATH in .env}:/models/fastembed:ro
+      - ${SOURCE_INDEX_DIR:?set SOURCE_INDEX_DIR in .env}:/sources:ro
     networks:
       data: {}
       outbound: { ipv4_address: 10.231.233.2 }
