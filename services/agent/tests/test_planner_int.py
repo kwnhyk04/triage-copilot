@@ -136,6 +136,32 @@ class Failing(Plans):
         raise RuntimeError("the agent stopped mid-plan")
 
 
+class Watching(Plans):
+    """A reviewer that sees which of the investigation's calls are recorded when it is asked, as
+    the router's caps read them."""
+
+    def __init__(self, engine: Engine, inv: UUID, *answers: dict[str, Any] | None) -> None:
+        super().__init__(*answers)
+        self.engine, self.inv = engine, inv
+        self.seen: list[list[str]] = []
+
+    async def review(
+        self, request: PlanRequest
+    ) -> tuple[dict[str, Any] | None, list[ModelCall], str | None]:
+        query = select(CallRow.role).where(CallRow.investigation_id == self.inv)
+        with self.engine.connect() as conn:
+            self.seen.append(sorted(conn.execute(query).scalars()))
+        return await super().review(request)
+
+
+class Crashing(Plans):
+    async def review(
+        self, request: PlanRequest
+    ) -> tuple[dict[str, Any] | None, list[ModelCall], str | None]:
+        self.reviews.append(request)
+        raise RuntimeError("the agent stopped mid-review")
+
+
 def alerts(snapshot: dict[str, Any] | None) -> Callable[[UUID], AlertContext]:
     """The gateway's alert context: one firing alert, with watch's snapshot when there is one."""
 
@@ -293,6 +319,43 @@ def test_a_redelivery_makes_no_second_plan_and_finishes_one_left_unmade(planning
     assert run(planned_job(planning, plans), crashed) == "done"
     assert plan_message(planning, inv).plan is not None
     assert len(plans.requests) == 2
+
+
+def test_the_planner_s_calls_are_recorded_before_its_review(planning: Engine) -> None:
+    request = new_request(LIVE)
+    plans = Watching(planning, request.investigation_id, RESTART_API)
+
+    assert run(planned_job(planning, plans), request) == "done"
+
+    # The review's caps read this month's spend from agent.model_calls: Opus's plan is in it.
+    assert plans.seen == [["planner", "primary"]]
+
+
+def test_a_failed_review_never_asks_the_planner_again_on_redelivery(planning: Engine) -> None:
+    request = new_request(LIVE)
+    inv = request.investigation_id
+    crashing = Crashing(RESTART_API)
+    with pytest.raises(RuntimeError, match="mid-review"):
+        run(planned_job(planning, crashing), request)
+    assert "plan-recorded" not in [kind for kind, _ in messages(planning, inv)]
+
+    # No plan answer is left: asking the planner again would fail.
+    redelivered = Plans()
+    assert run(planned_job(planning, redelivered), request) == "done"
+
+    assert redelivered.requests == []
+    message = plan_message(planning, inv)
+    assert message.plan is not None
+    assert message.plan.model_dump(mode="json") == RESTART_API
+    assert message.review is not None
+    assert message.review.model_dump(mode="json")["status"] == "ok"
+    # Opus was asked and billed once, and the review read what it read.
+    assert [(m.model, m.calls, m.failed) for m in message.models] == [("claude-opus-5-5", 1, 0)]
+    [planned], [reviewed] = crashing.requests, redelivered.reviews
+    assert reviewed.text.startswith(planned.text)
+    with planning.connect() as conn:
+        roles = conn.execute(select(CallRow.role).where(CallRow.investigation_id == inv))
+        assert sorted(roles.scalars()) == ["planner", "primary", "reviewer"]
 
 
 def test_no_plan_says_why_and_a_plan_the_code_checks_refuse_is_kept_with_its_review(

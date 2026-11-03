@@ -19,6 +19,54 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-03: Review fixes from the ultrareview of #32 and #33, on branch review-fixes
+
+- What happened: the user's ultrareview of #32 (the plan reviewer) and #33 found four real issues. The user asked for all four fixed, tests first with each new test failing on main, then the full suite with 2 workers for e2e and the docs, with no commit.
+- Why: the review's findings, as the user gave them:
+  1. `planner.py`'s `GLOB` refused `[`, `]`, `{` and `}`, which are real path characters (Next.js dynamic routes such as FreightAudit's `apps/web/app/invoices/[id]/page.tsx`).
+  2. `job.py` recorded the planner's Opus calls only after the review: the review's monthly cap could not see them, and a failed review paid Opus again on redelivery.
+  3. `contracts/openapi/agent.yaml`'s `SwitchName` lacked `reviewer`, so `GET /internal/switches/reviewer` answered 400.
+  4. watch ran `ls-tree` at every poll, even when `rev-parse` showed the same commit.
+- What we did, in order:
+  1. `git switch -c review-fixes` from main `9f4638b` (#33), with a clean working tree.
+  2. Tests first. Each new test failed on the unchanged code for its own reason:
+     - `test_planner.py::test_square_brackets_and_braces_are_path_characters_and_the_index_decides`: "apps/web/app/invoices/[id]/page.tsx is a pattern, not a file". `test_a_code_fix_names_files_never_patterns` now keeps `**`, `*` and `?` only.
+     - `test_planner_int.py::test_the_planner_s_calls_are_recorded_before_its_review`: the reviewer saw `['primary']`, no planner call.
+     - `test_planner_int.py::test_a_failed_review_never_asks_the_planner_again_on_redelivery`: the redelivery asked the planner again (`IndexError: pop from empty list`, from a fake chain with no answer left).
+     - `test_agent_api.py::test_the_internal_api_names_every_switch`: `SwitchName` had 4 of the 5 switches. `test_live_int.py`'s switch test gained `GET /internal/switches/reviewer`, which answered 400.
+     - `test_watch_poll.py::test_ls_tree_runs_only_when_rev_parse_shows_a_new_commit`: three polls at SHA, SHA and NEXT ran ls-tree three times.
+  3. The fixes:
+     - `planner.py`: `GLOB = frozenset("*?")`.
+     - `planner.py`: `Planner.plan` became `incident` (what the planner reads, the snapshot included), `draft` (the plan's chain) and `review` (was `_review`), so the job records between them. In `job.py`, `_keep_plan` records the planner's calls and keeps its plan on the due row (`agent.plans.plan`) in one transaction before the review. `_due_plan` returns that kept plan, and a redelivery reviews it without asking the planner. `_store_calls` now wraps `_add_calls`, which writes in the caller's transaction. With the planner switch off or AI disabled, a kept plan goes, as a due plan always did.
+     - `agent.yaml` 0.6.0: `SwitchName` gains `reviewer`. The first shape kept `Switch.name` as `$ref SwitchName`, and `make contracts-breaking` failed (exit 2) with `response-property-enum-value-added` on the 200 answer's `name`. As with Part B's status enums, the shape changed, not the gate: the answer's `name` is a string with `x-extensible-enum` listing the five, as oasdiff's own hint says. The path parameter keeps the closed enum, so any other name still answers 400. `make codegen` regenerated both agent clients.
+     - watch: `Git.tree()` became `Git.head()` (rev-parse, checked as a full sha) and `Git.files(commit)` (ls-tree, which refuses anything but a full sha, so the old check between the two calls stays). `_write_index` lists only a new commit.
+  4. The full suite, then `make infra-down`.
+- Small events and mistakes:
+  - The GateGuard hook refused the first edit of each file until its importers, affected API, data and the user's instruction were stated; each refused edit was sent again unchanged.
+  - My first `test_watch_readers.py` edit named the new reader `git`, the name of the test's git executable that its `run()` closure reads: `TypeError: expected str, bytes or os.PathLike object, not Git`. Renamed to `reader`.
+  - `make codegen` rewrote three unchanged Python clients with CRLF (`gateway.py`, `plan_recorded_schema.py` and `plan_recorded_v2_schema.py`). `git diff --quiet` exits 0 for each, but `git status` lists them as modified. Why: not confirmed (docs/memory.md, Known Issues).
+  - `test_alerting_int.py::test_egress_log_counts_each_refusal_of_the_proxy` failed once in the full `make test-int`, then passed alone (9.8 s) and in a full rerun of the Python integration tests. Why: not confirmed; its traceback was not kept, since that run's output was filtered to its summary. It tests the egress proxy's log exporter, which this branch does not touch.
+  - e2e ran with `--workers=2`, as the user asked, through `make --eval` with `make test-e2e`'s three commands, since the target passes no arguments. `playwright.config.ts` pins one worker because the tests share the fake gateway's state; all 30 passed with two.
+  - Test subsets ran the same way (`make --eval='<name>: ; uv run python -m pytest ...' <name>`), so they got `.env` as `make test` does, without Claude Code reading it.
+  - `docs/context.md` called the agent contract 0.3.0, though it was 0.5.0 from 2026-11-02 (phase 3); the line now says 0.6.0 and notes the old figure.
+  - `make infra-up` started this project's dev Postgres, ElasticMQ and Toxiproxy; `make infra-down` removed them after the suite, and the volumes stay.
+- Cost: no model call. Every test uses fakes.
+- Files:
+  - Agent: `services/agent/src/agent/{planner,job,db}.py`, with tests in `test_planner.py`, `test_planner_int.py`, `test_agent_api.py` and `test_live_int.py`.
+  - Contract: `contracts/openapi/agent.yaml`, and the generated `packages/py-clients/src/py_clients/generated/agent.py` and `packages/ts-clients/src/generated/agent.ts`.
+  - watch: `services/watch/src/watch/{readers,poll}.py`, with tests in `test_watch_readers.py` and `test_watch_poll.py`.
+  - Docs: the README, docs/context.md, docs/memory.md, docs/migrations.md, docs/todo.md and this file.
+- Validation:
+  - `make lint` and `make typecheck` (5 turbo tasks; pyright 0 errors): exit 0.
+  - `make test`: pytest 767 passed and 158 deselected; Jest ts-config 3, ts-clients 69, web 118, gateway 81; exit 0.
+  - `make contracts-check`: exit 0.
+  - `make contracts-breaking`: exit 0. The gateway spec "No changes detected", the agent spec "No breaking changes to report, but the specs are different", and no message version edited. The first shape exited 2, above.
+  - `make test-int`: exit 2. The gateway's 9 suites and 56 tests passed; pytest 157 passed and 1 failed (above). `uv run python -m pytest -m integration` again, through make: exit 0.
+  - Browser tests with `--workers=2`: 30 passed in 52.5 s.
+- Outstanding:
+  - The user ships it. Deploying it needs the new agent image (`TC_TAG`, then `make prod-up`; no migration, no new setting) and `make dev-watch` restarted on main.
+  - The alerting test's one failure, above, if it comes back.
+
 ### 2026-11-03: Part B step 3: the plan reviewer wired in behind the reviewer switch, on branch plan-reviewer
 
 - What happened: the user approved step 3 with Sonnet 5.5 at effort high, rules v4, a 4,000-token output allowance and $0.45 a day, and asked for three additions (docs/memory.md, 2026-11-03, Part B step 3). Every plan is now checked in code, then reviewed by the reviewer's Claude when the checks pass. A refused plan is kept, shown with its reasons, and takes no decision.

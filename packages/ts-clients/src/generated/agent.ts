@@ -144,13 +144,14 @@ export interface components {
          */
         WaitReason: "tenant_cap" | "budget";
         /**
-         * @description The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, and actions lets the executor claim an approved action.
+         * @description The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, actions lets the executor claim an approved action, and reviewer lets Claude review a plan the code checks pass.
          * @enum {string}
          */
-        SwitchName: "live" | "claude" | "planner" | "actions";
+        SwitchName: "live" | "claude" | "planner" | "actions" | "reviewer";
         Switch: {
-            name: components["schemas"]["SwitchName"];
-            /** @description Whether the switch is on; one never set is at its default (only claude is on). */
+            /** @description The switch asked for, a SwitchName. Switches are added over time, so a client takes any name here. */
+            name: string;
+            /** @description Whether the switch is on; one never set is at its default (claude and reviewer are on). */
             on: boolean;
         };
         InvestigationState: {

@@ -101,6 +101,7 @@ def test_the_internal_api_serves_each_switch_behind_the_service_token(engine: En
     switch(engine, "actions", True)
     assert api.get("/internal/switches/actions").json() == {"name": "actions", "on": True}
     assert api.get("/internal/switches/claude").json() == {"name": "claude", "on": True}
+    assert api.get("/internal/switches/reviewer").json() == {"name": "reviewer", "on": True}
     assert api.get("/internal/switches/coder").status_code == 400
     assert TestClient(app).get("/internal/switches/actions").status_code == 401
 

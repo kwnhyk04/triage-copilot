@@ -224,15 +224,16 @@ class Watcher:
 
     def _write_index(self) -> None:
         """Writes `<sources>/<app>.json` (app, commit, files) once origin/main's commit is new, as
-        a temp file moved over the old one, so no reader sees half of it. A failure is logged,
-        and the next poll tries again."""
+        a temp file moved over the old one, so no reader sees half of it. Each poll resolves the
+        commit; only a new one is listed. A failure is logged, and the next poll tries again."""
         folder = self.target.sources
         if self.git is None or folder is None:
             return
         try:
-            commit, files = self.git.tree()
+            commit = self.git.head()
             if commit == self._indexed:
                 return
+            files = self.git.files(commit)
             folder.mkdir(parents=True, exist_ok=True)
             temp = folder / f"{self.app}.json.tmp"
             index = {"app": self.app, "commit": commit, "files": files}

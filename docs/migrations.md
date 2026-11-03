@@ -2,6 +2,14 @@
 
 Schema changes follow expand, migrate, contract. Record each change here, newest first.
 
+## 2026-11-03: Agent API 0.6.0 and kept plans (no migration)
+
+- Expand only.
+- Agent API 0.6.0: `SwitchName`, the path parameter of `GET /internal/switches/{name}`, gains `reviewer`, so the route answers it instead of 400; any other unknown name still gets 400.
+  - The 200 answer's `Switch.name` is now a string with `x-extensible-enum` (the five names), no longer `SwitchName`. Why: oasdiff rates a new value in a response enum as breaking (`response-property-enum-value-added`, an ERR on the first try). The name answered is the one asked for, so a client that asks for `actions` gets `actions` as before; the gateway reads only `on`.
+  - oasdiff (`make contracts-breaking`): "No breaking changes to report, but the specs are different". Clients regenerated: Python's `Switch.name` is `str`, TypeScript's `string`.
+- `agent.plans.plan` also holds a due plan's answer from the planner until its review is stored (`_keep_plan`). No schema change: the column exists and is nullable. A due row from before this change holds none, so its plan is made as before, and an older agent finishes a row with a kept plan by planning again.
+
 ## 2026-11-03: Plan reviews (agent 0015, gateway 0010, gateway API 0.10.0, PlanRecorded v2)
 
 - Expand only, all of it.

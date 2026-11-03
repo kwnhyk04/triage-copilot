@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot agent
-  version: 0.5.0
+  version: 0.6.0
   description: >-
     Internal API of the agent service. Only other backend services call it, with the service
     token. Errors are RFC 9457 Problem Details (application/problem+json).
@@ -217,21 +217,26 @@ components:
         token budget.
     SwitchName:
       type: string
-      enum: [live, claude, planner, actions]
+      enum: [live, claude, planner, actions, reviewer]
       description: >-
         The operator's kill switches (make switch): live lets live tenants' investigations run,
-        claude lets any Claude model be called, planner lets a real incident get a plan, and
-        actions lets the executor claim an approved action.
+        claude lets any Claude model be called, planner lets a real incident get a plan, actions
+        lets the executor claim an approved action, and reviewer lets Claude review a plan the
+        code checks pass.
     Switch:
       type: object
       additionalProperties: false
       required: [name, 'on']
       properties:
         name:
-          $ref: '#/components/schemas/SwitchName'
+          type: string
+          x-extensible-enum: [live, claude, planner, actions, reviewer]
+          description: >-
+            The switch asked for, a SwitchName. Switches are added over time, so a client takes
+            any name here.
         'on':
           type: boolean
-          description: Whether the switch is on; one never set is at its default (only claude is on).
+          description: Whether the switch is on; one never set is at its default (claude and reviewer are on).
     InvestigationState:
       type: object
       required:

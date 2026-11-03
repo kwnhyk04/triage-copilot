@@ -16,6 +16,8 @@ from agent.pricing import RATES, worst
 from agent.providers import plan_limits
 from agent.reviewer import REVIEW_INPUT_BYTES
 from agent.settings import Settings
+from agent.switches import DEFAULTS
+from py_clients.generated.agent import SwitchName
 from py_config import ConfigError, load_settings
 
 TOKEN = secrets.token_urlsafe(32)
@@ -38,6 +40,11 @@ STATE = "/internal/investigations/1b4e28ba-2fa1-41d2-883f-0016d3cca427/state"
 def test_healthz() -> None:
     response = TestClient(create_app(OFFLINE)).get("/healthz")
     assert response.json() == {"status": "ok"}
+
+
+def test_the_internal_api_names_every_switch() -> None:
+    # GET /internal/switches/{name} takes the contract's SwitchName: every switch, in order.
+    assert [name.value for name in SwitchName] == list(DEFAULTS)
 
 
 def test_settings_hold_no_approver_key(monkeypatch: pytest.MonkeyPatch) -> None:

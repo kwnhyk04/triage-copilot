@@ -22,7 +22,9 @@ output gets only the tokens its input leaves, and no call's prompt passes PROMPT
 
 A live triage's real verdict, with the planner switch on, adds a due plan row in its report's
 transaction; the plan and its review are then made once (agent.planner) and sent as PlanRecorded
-v2 after the report. A redelivered message finishes a plan its run left due.
+v2 after the report. A redelivered message finishes a plan its run left due. The plan is kept with
+the calls that made it before its review starts, so the review's caps count them and a redelivery
+reviews the kept plan without asking the planner again.
 """
 
 import asyncio
@@ -665,24 +667,30 @@ class Job:
         self, conn: Connection, inv: UUID, state: State, stopping: asyncio.Event
     ) -> Outcome:
         """Makes the investigation's due plan, once, and sends it after the report: done, or
-        stopped when shutdown began first, which keeps the plan due for the message's redelivery."""
+        stopped when shutdown began first, which keeps the plan due for the message's redelivery.
+        The plan is kept with its calls before its review, so the review's caps count what it cost
+        and a redelivery reviews the kept plan without asking the planner again."""
         due = None if self.planner is None else await asyncio.to_thread(_due_plan, conn, inv)
         if self.planner is None or due is None or state.app is None:
             return "done"
         if stopping.is_set():
             return "stopped"
-        plan_id, report = due
-        draft: PlanDraft | None = None
+        plan_id, report, kept = due
+        draft = None if kept is None else PlanDraft.model_validate(kept)
+        problem: str | None = None
         review: dict[str, Any] | None = None
         if self.ai_enabled and await asyncio.to_thread(is_on, conn, "planner"):
             evidence = _results(state)
-            reviewing = partial(is_on, conn, "reviewer")
-            draft, problem, review, calls = await self.planner.plan(
-                inv, state.app, report, evidence, state.fired_at, reviewing
-            )
-            await self._record_calls(conn, inv, state, calls)
+            incident = await self.planner.incident(inv, state.app, report, evidence, state.fired_at)
+            if draft is None:
+                draft, problem, calls = await self.planner.draft(incident)
+                state.used += await asyncio.to_thread(_keep_plan, conn, inv, calls, draft)
+            if draft is not None:
+                reviewing = partial(is_on, conn, "reviewer")
+                review, calls = await self.planner.review(incident, draft, reviewing)
+                await self._record_calls(conn, inv, state, calls)
         else:
-            problem = "The planner was switched off before the plan was made."
+            draft, problem = None, "The planner was switched off before the plan was made."
         await asyncio.to_thread(_store_plan, conn, inv, plan_id, draft, problem, review)
         self.on_commit()
         return "done"
@@ -1199,44 +1207,51 @@ def _tokens_today(conn: Connection) -> int:
 
 def _store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
     """Records model requests and adds their tokens to the investigation and the day."""
-    spent = sum(c.usage.input + c.usage.output for c in calls)
     with conn.begin():
+        return _add_calls(conn, inv, calls)
+
+
+def _add_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
+    """_store_calls in the caller's transaction."""
+    if not calls:
+        return 0
+    spent = sum(c.usage.input + c.usage.output for c in calls)
+    conn.execute(
+        insert(ModelCall),
+        [
+            {
+                "investigation_id": inv,
+                "role": c.role,
+                "provider": c.provider,
+                "model": c.model,
+                "outcome": c.outcome,
+                "input_tokens": c.usage.input,
+                "output_tokens": c.usage.output,
+                "cached_tokens": c.usage.cached,
+                "cache_write_tokens": c.usage.cache_writes,
+                "thought_tokens": c.usage.thoughts,
+                "input_bound": c.input_bound,
+                "max_output_tokens": c.max_output_tokens,
+                "latency_ms": c.latency_ms,
+                "error": c.error,
+                "prompt_sha": c.prompt_sha,
+            }
+            for c in calls
+        ],
+    )
+    if spent:
         conn.execute(
-            insert(ModelCall),
-            [
-                {
-                    "investigation_id": inv,
-                    "role": c.role,
-                    "provider": c.provider,
-                    "model": c.model,
-                    "outcome": c.outcome,
-                    "input_tokens": c.usage.input,
-                    "output_tokens": c.usage.output,
-                    "cached_tokens": c.usage.cached,
-                    "cache_write_tokens": c.usage.cache_writes,
-                    "thought_tokens": c.usage.thoughts,
-                    "input_bound": c.input_bound,
-                    "max_output_tokens": c.max_output_tokens,
-                    "latency_ms": c.latency_ms,
-                    "error": c.error,
-                    "prompt_sha": c.prompt_sha,
-                }
-                for c in calls
-            ],
+            update(Investigation)
+            .where(Investigation.id == inv)
+            .values(budget_tokens_used=Investigation.budget_tokens_used + spent)
         )
-        if spent:
-            conn.execute(
-                update(Investigation)
-                .where(Investigation.id == inv)
-                .values(budget_tokens_used=Investigation.budget_tokens_used + spent)
+        conn.execute(
+            pg_insert(AiUsage)
+            .values(day=UTC_TODAY, tokens=spent)
+            .on_conflict_do_update(
+                index_elements=[AiUsage.day], set_={"tokens": AiUsage.tokens + spent}
             )
-            conn.execute(
-                pg_insert(AiUsage)
-                .values(day=UTC_TODAY, tokens=spent)
-                .on_conflict_do_update(
-                    index_elements=[AiUsage.day], set_={"tokens": AiUsage.tokens + spent}
-                )
-            )
+        )
     return spent
 
 
@@ -1326,15 +1341,32 @@ def _results(state: State) -> dict[str, str]:
     }
 
 
-def _due_plan(conn: Connection, inv: UUID) -> tuple[UUID, dict[str, Any]] | None:
-    """The plan the investigation's report made due and no run has made yet, with that report."""
+def _due_plan(
+    conn: Connection, inv: UUID
+) -> tuple[UUID, dict[str, Any], dict[str, Any] | None] | None:
+    """The plan the investigation's report made due and no run has finished, with that report and
+    the plan an earlier run kept before its review (_keep_plan), if any."""
     with conn.begin():
         row = conn.execute(
-            select(Plan.id, Investigation.final_report)
+            select(Plan.id, Investigation.final_report, Plan.plan)
             .join(Investigation, Investigation.id == Plan.investigation_id)
             .where(Plan.investigation_id == inv, Plan.planned_at.is_(None))
         ).one_or_none()
-    return None if row is None else (row.id, row.final_report or {})
+    return None if row is None else (row.id, row.final_report or {}, row.plan)
+
+
+def _keep_plan(conn: Connection, inv: UUID, calls: Sequence[Call], draft: PlanDraft | None) -> int:
+    """Records the planner's calls and keeps its plan on the due row, in one transaction, before
+    the plan's review: the review's caps count them, and a redelivery reviews the kept plan."""
+    with conn.begin():
+        spent = _add_calls(conn, inv, calls)
+        if draft is not None:
+            conn.execute(
+                update(Plan)
+                .where(Plan.investigation_id == inv, Plan.planned_at.is_(None))
+                .values(plan=draft.model_dump(mode="json"))
+            )
+    return spent
 
 
 def _store_plan(

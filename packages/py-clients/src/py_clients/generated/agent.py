@@ -53,24 +53,30 @@ class WaitReason(StrEnum):
 
 class SwitchName(StrEnum):
     """
-    The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, and actions lets the executor claim an approved action.
+    The operator's kill switches (make switch): live lets live tenants' investigations run, claude lets any Claude model be called, planner lets a real incident get a plan, actions lets the executor claim an approved action, and reviewer lets Claude review a plan the code checks pass.
     """
 
     live = "live"
     claude = "claude"
     planner = "planner"
     actions = "actions"
+    reviewer = "reviewer"
 
 
 class Switch(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    name: SwitchName
+    name: Annotated[
+        str,
+        Field(
+            description="The switch asked for, a SwitchName. Switches are added over time, so a client takes any name here."
+        ),
+    ]
     on: Annotated[
         bool,
         Field(
-            description="Whether the switch is on; one never set is at its default (only claude is on)."
+            description="Whether the switch is on; one never set is at its default (claude and reviewer are on)."
         ),
     ]
 
