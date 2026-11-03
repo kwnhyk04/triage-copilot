@@ -21,7 +21,7 @@ unexport COMPOSE_PROFILES
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 # Production is its own compose project (own containers, network and volumes). Compose's own values
-# come from .env.prod, and each service reads its own env file (README, Deploy).
+# come from .env.prod, and each service reads its own env file (docs/guide.md, Deploy).
 PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
 	-f infra/docker-compose.prod.yml --env-file .env.prod
 
@@ -206,16 +206,16 @@ digest:
 demo-save:
 	pnpm --filter @triage/gateway demo:save $(IDS)
 
-# Writes production's .env.prod, .env.prod.gateway and .env.prod.agent here (README, Deploy): a fresh
-# secret for every internal one, empty values for what the user pastes, no value printed. It
-# refuses, writing nothing, when any of the three exists.
+# Writes production's .env.prod, .env.prod.gateway and .env.prod.agent here (docs/guide.md,
+# Deploy): a fresh secret for every internal one, empty values for what the user pastes, no value
+# printed. It refuses, writing nothing, when any of the three exists.
 prod-env:
 	uv run python scripts/prod_env.py
 
-# Production (README, Deploy): pulls the images, migrates, loads the runbooks, starts the gateway,
-# the egress proxy, the agent and the Funnel sidecar, and waits until they are ready. The timeout
-# ends the wait when a container crash-loops, as the gateway does on a setting it refuses; its logs
-# name the setting.
+# Production (docs/guide.md, Deploy): pulls the images, migrates, loads the runbooks, starts the
+# gateway, the egress proxy, the agent and the Funnel sidecar, and waits until they are ready. The
+# timeout ends the wait when a container crash-loops, as the gateway does on a setting it refuses;
+# its logs name the setting.
 prod-up:
 	$(PROD) up -d --wait --wait-timeout 300
 

@@ -220,6 +220,26 @@ def test_the_snapshot_stays_within_48_kb_and_keeps_the_newest_lines(
     assert not [line for lines in logs.values() for line in lines if "line 000 " in line]
 
 
+def test_a_quiet_container_s_last_lines_reach_the_snapshot_however_old(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer
+) -> None:
+    # FilingLens's postgres wrote nothing for days after its start, so a first read of the last
+    # ten minutes alone left its own lines out of 2026-11-01's ReadinessCheckFailed snapshot.
+    ready = "2026-10-20 08:00:05.000 UTC [1] LOG:  database system is ready to accept connections"
+    api = log_text(LOGS["freight-audit"]["api"])
+    _stack(tools, logs={"postgres": f"2026-10-20T08:00:05.000000000Z {ready}\n", "api": api})
+    server.route("/readyz", Route(200))
+    watcher = _watch(server, gateway)
+    watcher.poll(NOW)
+    assert _snapshot(_named(gateway, "ReadinessCheckFailed"))["logs"]["postgres"] == [ready]
+    _stack(tools)
+    watcher.poll(NOW + timedelta(seconds=30))
+    # The first read starts at the container's creation, each later one where the last ended.
+    reads = [call["argv"] for call in tools.calls() if call["argv"][:1] == ["logs"]]
+    since = [argv[3] for argv in reads if argv[-1] == "freightaudit-prod-postgres-1"]
+    assert since == ["2026-10-20T08:00:00Z", "2026-10-25T09:55:00Z"]
+
+
 def test_an_alert_the_gateway_refused_is_posted_again_next_poll(
     tools: FakeTools, server: FakeServer, gateway: FakeServer
 ) -> None:

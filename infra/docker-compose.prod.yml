@@ -4,7 +4,7 @@
 # prod-switch, prod-digest), which loads .env and reads .env.prod for the names below.
 # Only the egress proxy has a route out or a published port: watch's 127.0.0.1:4202, which it
 # forwards to the gateway, and HTTPS from the agent and the Funnel sidecar to their own hosts. The
-# observability profile adds alerting (README, Alerting): Prometheus's rules, delivered by
+# observability profile adds alerting (docs/guide.md, Alerting): Prometheus's rules, delivered by
 # Alertmanager to Discord and Gmail through the proxy too.
 name: triagecopilot-prod
 
@@ -15,7 +15,7 @@ networks:
   # The data stores, and every container that talks to them.
   data: { internal: true }
   # Funnel's path: the internet-facing sidecar shares it with the gateway alone, from a fixed
-  # address the gateway trusts for X-Forwarded-For (GATEWAY_TRUST_PROXY; README, Deploy).
+  # address the gateway trusts for X-Forwarded-For (GATEWAY_TRUST_PROXY; docs/guide.md, Deploy).
   edge:
     internal: true
     ipam: { config: [{ subnet: 10.231.233.16/28, ip_range: 10.231.233.24/29 }] }

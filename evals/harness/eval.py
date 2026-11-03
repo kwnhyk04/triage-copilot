@@ -1,6 +1,6 @@
 """The eval: every scenario of a split, RUNS times, through the real path (run.py), scored against
 the scenario labels (score.py), checked against thresholds.json, and written to a dated report;
-the full test split also writes the README's eval table.
+the full test split also writes the eval table in evals/README.md.
 
     make eval SPLIT=dev|test RUNS=3 SUBSET=ci|full [ESTIMATE=1] [SET_FLOORS=1] [ALLOW_LOOSER=1]
 
@@ -52,7 +52,8 @@ THRESHOLDS = REPO / "evals" / "thresholds.json"
 PRINT_WIDTH = 100
 PRICING = REPO / "evals" / "pricing.json"
 MEMORY = REPO / "docs" / "memory.md"
-README = REPO / "README.md"
+# The eval's own README holds the table; the front page stays one screen.
+README = REPO / "evals" / "README.md"
 GAP = 60
 WITHIN = 900.0
 FAILED, QUOTA, SETUP = 1, 2, 3
@@ -185,7 +186,7 @@ def report_name(
     today: str, scope: str, prompt: str, models: dict[str, str], cap: int = DEFAULT_CAP
 ) -> tuple[str, bool]:
     """The report's name, and whether it is the official one: the full test split on the default
-    free models and token cap, which also writes the README table. Tuning runs of one day keep a
+    free models and token cap, which also writes the eval table. Tuning runs of one day keep a
     report per prompt, and runs on other models, Claude first or another cap their own."""
     if scope.startswith("test-full-") and models == DEFAULTS and cap == DEFAULT_CAP:
         return today, True

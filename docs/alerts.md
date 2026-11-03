@@ -27,7 +27,7 @@ While its metrics fail, InvestigationsFailing, ClaudeOff and ClaudeDailyCapReach
 watch's `/readyz` on this PC failed for 5 minutes. The probe goes through the egress proxy's port 4240, the only way from a container to this PC. watch is not running, its last poll is over three intervals old, or that poll did not read and post everything. No FreightAudit or FilingLens incident reaches TC meanwhile.
 
 1. Check that `make dev-watch` still runs, and run `curl.exe -s http://127.0.0.1:4240/readyz`.
-2. Its log names the app whose poll failed (`poll failed`). A post the gateway refused shows as `alert not posted` with its status. A 401 means the token in `.env` is not the tenant's current one (`make prod-token` replaces it), or the proxy drops it (README, Deploy, egress check 6).
+2. Its log names the app whose poll failed (`poll failed`). A post the gateway refused shows as `alert not posted` with its status. A 401 means the token in `.env` is not the tenant's current one (`make prod-token` replaces it), or the proxy drops it (docs/guide.md, Deploy, egress check 6).
 3. If watch answers 200 and the alert stays: `docker logs triagecopilot-prod-egress-proxy-1 --since 15m | Select-String "watch/readyz"`. A `/503` there means the proxy cannot reach watch: `WATCH_HOST` must stay `127.0.0.1` and `WATCH_PORT` 4240.
 4. Start `make dev-watch` again.
 
@@ -77,10 +77,10 @@ The egress proxy refused a request (`TCP_DENIED`) in the last 10 minutes: a cont
    - 10.231.233.50: Alertmanager.
    - 10.231.233.51: the mail relay.
    - 10.231.233.52: Prometheus.
-2. A host an app now needs, such as a provider's new name or a new Tailscale relay: add it to `infra/squid/squid.conf` and its live test by pull request (README, Egress). Never allow a bare IP address.
+2. A host an app now needs, such as a provider's new name or a new Tailscale relay: add it to `infra/squid/squid.conf` and its live test by pull request (docs/guide.md, Egress). Never allow a bare IP address.
 3. Anything else counts as a compromise until it is explained. `docker compose -p triagecopilot-prod stop tailscale` takes TC off the internet in seconds.
 
-README's egress check 5 makes one refusal on purpose.
+Egress check 5 in docs/guide.md makes one refusal on purpose.
 
 ## MonitoringBlind
 

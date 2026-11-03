@@ -35,6 +35,18 @@ def test_containers_follow_compose_naming_and_run_only_where_they_exist() -> Non
     assert fl.service("ingest").optional
 
 
+def test_each_app_reaches_out_through_its_egress_proxy_in_production() -> None:
+    # Each app's internal outbound network, as docker showed it on 2026-11-03: FreightAudit's
+    # worker and FilingLens's api go out through the proxy, and so does each Tailscale sidecar.
+    users = {"freight-audit": {"worker", "tailscale"}, "filing-lens": {"api", "tailscale"}}
+    for app, catalog in CATALOGS.items():
+        proxy = catalog.service("egress-proxy")
+        assert (proxy.kind, proxy.stacks) == ("proxy", ("prod",))
+        assert {s.name for s in catalog.services if proxy.name in s.depends_on} == users[app]
+    fl = CATALOGS["filing-lens"]
+    assert fl.container(fl.service("egress-proxy"), "prod") == "filinglens-prod-egress-proxy-1"
+
+
 def test_container_names_are_unique_across_both_apps_and_stacks() -> None:
     names = [
         name

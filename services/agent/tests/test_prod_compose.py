@@ -188,7 +188,7 @@ def test_each_proxy_client_has_its_own_port_and_fixed_address() -> None:
         assert re.search(rf"^acl {name}_ip src {ip}$", conf, re.MULTILINE)
     # Tailscale's log upload would need its log server, which the proxy does not allow.
     assert _environment("tailscale")["TS_TAILSCALED_EXTRA_ARGS"] == "--no-logs-no-support"
-    # The gateway trusts the sidecar's X-Forwarded-For at this fixed address (README, Deploy).
+    # The gateway trusts the sidecar's X-Forwarded-For at this address (docs/guide.md, Deploy).
     assert address("tailscale", "edge") == "10.231.233.18"
 
 
