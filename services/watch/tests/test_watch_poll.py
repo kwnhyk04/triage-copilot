@@ -325,6 +325,19 @@ def test_the_source_index_is_written_at_the_first_poll_and_each_new_origin_main(
     assert watcher.ok
 
 
+def test_ls_tree_runs_only_when_rev_parse_shows_a_new_commit(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _origin(tools, SHA, TREE)
+    watcher = _indexing(server, gateway, tmp_path / "repo", tmp_path / "sources")
+    watcher.poll(NOW)
+    watcher.poll(NOW + timedelta(seconds=30))
+    _origin(tools, NEXT, TREE)
+    watcher.poll(NOW + timedelta(seconds=60))
+    git = [call["argv"][10] for call in tools.calls() if call["tool"] == "git"]
+    assert git == ["rev-parse", "ls-tree", "rev-parse", "rev-parse", "ls-tree"]
+
+
 def test_a_source_index_that_cannot_be_written_is_logged_and_the_poll_goes_on(
     tools: FakeTools,
     server: FakeServer,

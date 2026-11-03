@@ -261,7 +261,8 @@ class Plan(Base):
     )
     # plan_id in PlanRecorded, which a human's decision names.
     id: Mapped[UUID] = mapped_column(unique=True)
-    # PlanRecorded's plan; null while the plan is due, and when no model gave one.
+    # PlanRecorded's plan; null when no model gave one. A due plan holds it from the planner's
+    # answer on, so a redelivery reviews it without asking the planner again.
     plan: Mapped[dict[str, Any] | None]
     problem: Mapped[str | None]
     # PlanRecorded v2's review (since 0015); null with no plan, and for plans made before 0015.

@@ -285,15 +285,20 @@ class Git:
             commits.append(Commit(sha, when, subject, tuple(filter(None, paths))))
         return commits
 
-    def tree(self) -> tuple[str, list[str]]:
-        """origin/main's commit and every path it tracks, from the repo's root. The ref is not
-        peeled with ^{commit}, a character cmd.exe reads: fetch writes it from a branch, which git
-        keeps on commits."""
+    def head(self) -> str:
+        """origin/main's commit. The ref is not peeled with ^{commit}, a character cmd.exe reads:
+        fetch writes it from a branch, which git keeps on commits."""
         sha = self.call("rev-parse", "--verify", "--end-of-options", self.REF).strip()
         if not _COMMIT.fullmatch(sha):
             raise ReadError("git rev-parse printed no commit")
-        out = self.call("ls-tree", "-r", "--full-tree", "--name-only", "-z", sha)
-        return sha, [path for path in out.split("\0") if path]
+        return sha
+
+    def files(self, commit: str) -> list[str]:
+        """Every path the commit tracks, from the repo's root; `commit` is a full id from head()."""
+        if not _COMMIT.fullmatch(commit):
+            raise Refused(f"{mask(commit)!r} is not a full commit id")
+        out = self.call("ls-tree", "-r", "--full-tree", "--name-only", "-z", commit)
+        return [path for path in out.split("\0") if path]
 
 
 def check_url(url: str) -> None:

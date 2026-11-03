@@ -228,10 +228,13 @@ def test_the_source_index_lists_origin_main_s_tree_with_hooks_and_drivers_off(
     repo = Path("H:/repos/filing-lens")
     tree = "services/api/src/app/main.py\0services/api/src/app/a b.py\0README.md\0"
     tools.scenario({"git": {"rev-parse": {"stdout": f"{SHA}\n"}, "ls-tree": {"stdout": tree}}})
-    assert Git(repo).tree() == (
-        SHA,
-        ["services/api/src/app/main.py", "services/api/src/app/a b.py", "README.md"],
-    )
+    git = Git(repo)
+    assert git.head() == SHA
+    assert git.files(SHA) == [
+        "services/api/src/app/main.py",
+        "services/api/src/app/a b.py",
+        "README.md",
+    ]
     prefix = [
         "-C",
         str(repo),
@@ -259,8 +262,10 @@ def test_the_source_index_lists_origin_main_s_tree_with_hooks_and_drivers_off(
 def test_a_source_index_needs_a_commit_from_rev_parse(tools: FakeTools) -> None:
     tools.scenario({"git": {"rev-parse": {"stdout": "--output=x\n"}}})
     with pytest.raises(ReadError, match="git rev-parse printed no commit"):
-        Git(Path("repo")).tree()
-    # Nothing was listed for it.
+        Git(Path("repo")).head()
+    # ls-tree lists a full commit id only, and runs nothing for anything else.
+    with pytest.raises(Refused, match="is not a full commit id"):
+        Git(Path("repo")).files("--output=x")
     assert [call["argv"][10] for call in tools.calls()] == ["rev-parse"]
 
 
@@ -290,9 +295,10 @@ def test_the_source_index_comes_from_origin_main_of_a_real_repo(tmp_path: Path) 
     run("commit", "-q", "-m", "Local only: never on origin")
     (repo / "untracked.py").write_text("x", encoding="utf-8")
     # From a folder inside the repo, the whole tree is still listed from its root.
-    commit, paths = Git(repo / "services").tree()
+    reader = Git(repo / "services")
+    commit = reader.head()
     assert commit == run("rev-parse", "refs/remotes/origin/main")
-    assert sorted(paths) == [
+    assert sorted(reader.files(commit)) == [
         "README.md",
         "services/api/src/app/a b.py",
         "services/api/src/app/main.py",

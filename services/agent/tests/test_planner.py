@@ -30,7 +30,7 @@ from agent.planner import (
     plan_shape,
     planner_text,
 )
-from agent.reviewer import REVIEWER_PROMPT_SHA, REVIEWER_SYSTEM
+from agent.reviewer import REVIEWER_PROMPT_SHA, REVIEWER_SYSTEM, index_refusal, source_index
 from agent.switches import DEFAULTS
 from py_clients.generated.gateway import AlertContext
 from watch.catalog import CATALOGS
@@ -256,13 +256,7 @@ def test_none_always_passes_and_a_code_fix_needs_allowlisted_source_files() -> N
 
 def test_a_code_fix_names_files_never_patterns() -> None:
     # High's memory-leak-1 named services/orders/**/*.py, which the allowlist matched (2026-11-03).
-    for path in (
-        "services/api/**/*.py",
-        "services/api/src/*.py",
-        "services/api/src/app?.py",
-        "services/api/src/[ab].py",
-        "services/api/src/{a,b}.py",
-    ):
+    for path in ("services/api/**/*.py", "services/api/src/*.py", "services/api/src/app?.py"):
         refused = plan_refusal(draft("code_fix", "api", [path]), FL, None)
         assert refused == f"{path} is a pattern, not a file: name each file it changes", path
 
@@ -336,10 +330,18 @@ Planned = tuple[PlanDraft | None, str | None, dict[str, Any] | None, Sequence[Mo
 def make(
     chain: Chain, sources: Path | None, reviewing: Callable[[], bool] = lambda: True
 ) -> Planned:
-    """FilingLens's plan, with no snapshot, and its review."""
+    """FilingLens's plan, with no snapshot, and its review, in the job's steps."""
     planner = Planner(chain, unread, chain, sources)
-    report = snapshot_report()
-    return asyncio.run(planner.plan(uuid4(), "filing-lens", report, {}, FIRED, reviewing))
+
+    async def steps() -> Planned:
+        incident = await planner.incident(uuid4(), "filing-lens", snapshot_report(), {}, FIRED)
+        plan, problem, calls = await planner.draft(incident)
+        if plan is None:
+            return None, problem, None, calls
+        review, reviewed = await planner.review(incident, plan, reviewing)
+        return plan, None, review, [*calls, *reviewed]
+
+    return asyncio.run(steps())
 
 
 def test_the_reviewer_switch_is_on_by_default_and_the_table_takes_every_switch() -> None:
@@ -398,6 +400,23 @@ def test_a_plan_the_code_checks_refuse_is_kept_with_their_reason_and_no_model_is
     }
     assert chain.reviews == []
     assert [call.role for call in calls] == ["planner"]
+
+
+def test_square_brackets_and_braces_are_path_characters_and_the_index_decides() -> None:
+    # Next.js routes such as FreightAudit's invoices/[id] page are real files (2026-11-03).
+    page = "apps/web/app/invoices/[id]/page.tsx"
+    for path in (page, "apps/web/app/[...slug]/page.tsx", "apps/api/src/routes/{invoice}.ts"):
+        assert plan_refusal(draft("code_fix", "api", [path]), FA, None) is None, path
+    # The index matches exactly: [id] names a folder, never a class of the letters i and d.
+    index = source_index("freight-audit", COMMIT, [page, "apps/web/app/invoices/i/page.tsx"])
+    assert index_refusal([page], "freight-audit", index) == (None, ())
+    edit = "apps/web/app/invoices/[id]/edit.tsx"
+    assert index_refusal([edit], "freight-audit", index) == (None, (edit,))
+    other = "apps/web/app/invoices/[slug]/page.tsx"
+    assert index_refusal([other], "freight-audit", index) == (
+        f"{other} is not in freight-audit's repo at origin/main ({COMMIT[:12]}), nor is its folder",
+        (),
+    )
 
 
 @pytest.mark.parametrize(

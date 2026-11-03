@@ -16,6 +16,7 @@ import fnmatch
 import hashlib
 import json
 from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, cast
@@ -45,8 +46,9 @@ SOURCES: dict[AppName, tuple[str, ...]] = {
 }
 # Folders a source path may still not cross: migrations, generated code and dependencies.
 NOT_SOURCE = frozenset({"migrations", "drizzle", "generated", "node_modules"})
-# A glob's or wildcard's characters: a plan names files, never patterns, which SOURCES would match.
-GLOB = frozenset("*?[]{}")
+# Wildcards: a plan names files, never patterns, which SOURCES would match. Brackets and braces are
+# path characters (Next.js routes such as `[id]`), so the source index's exact match judges them.
+GLOB = frozenset("*?")
 
 PLANNER_SYSTEM = """You are Triage Copilot's planner. A triage of an alert group from a real app \
 that runs on this PC (freight-audit or filing-lens) found a real incident. Plan its fix for a \
@@ -384,11 +386,22 @@ def _review_of(
     }
 
 
+@dataclass(frozen=True)
+class Incident:
+    """One incident as the planner and its reviewer read it: the app's catalog, the newest
+    snapshot (None when none could be read), and what the planner is told (planner_text)."""
+
+    catalog: Catalog
+    snapshot: dict[str, Any] | None
+    text: str
+
+
 class Planner:
-    """Makes one real incident's plan: its prompt, the plan's chain, then the plan's review: the
-    code checks, and the reviewer's Claude on a plan they pass. `read` is the gateway's alert
-    context (AlertContextClient.get), where the snapshots are; `sources` is the folder of watch's
-    source index, without which every code fix is refused."""
+    """Makes one real incident's plan in steps the job records apart (agent.job): the incident as
+    the planner reads it, the plan's chain, then the plan's review: the code checks, and the
+    reviewer's Claude on a plan they pass. `read` is the gateway's alert context
+    (AlertContextClient.get), where the snapshots are; `sources` is the folder of watch's source
+    index, without which every code fix is refused."""
 
     def __init__(
         self,
@@ -402,46 +415,44 @@ class Planner:
         self.reviewer = reviewer
         self.sources = sources
 
-    async def plan(
+    async def incident(
         self,
         inv: UUID,
         app: str,
         report: Mapping[str, Any],
         evidence: Mapping[str, str],
         fired_at: datetime,
-        reviewing: Callable[[], bool],
-    ) -> tuple[PlanDraft | None, str | None, dict[str, Any] | None, Sequence[ModelCall]]:
-        """The plan, or None and why there is none; its review, None with no plan; and every model
-        call made for both. `reviewing` reads the reviewer switch, just before the review."""
+    ) -> Incident:
+        """The incident as the planner reads it, with the newest snapshot of its group's alerts."""
         catalog = next(c for c in CATALOGS.values() if c.app == app)
         snapshot, unread = await asyncio.to_thread(newest_snapshot, self.read, inv)
         text = planner_text(catalog, report, evidence, snapshot, unread, fired_at)
-        problems = plan_problems(catalog)
-        request = PlanRequest(
-            PLANNER_SYSTEM, text, plan_shape(catalog), problems, PLANNER_PROMPT_SHA
-        )
+        return Incident(catalog, snapshot, text)
+
+    async def draft(
+        self, incident: Incident
+    ) -> tuple[PlanDraft | None, str | None, Sequence[ModelCall]]:
+        """The plan's chain's answer, or None and why there is none, with every call made."""
+        catalog = incident.catalog
+        shape, problems = plan_shape(catalog), plan_problems(catalog)
+        request = PlanRequest(PLANNER_SYSTEM, incident.text, shape, problems, PLANNER_PROMPT_SHA)
         answer, calls = await self.model.plan(request)
         if answer is None:
             failed = next((call for call in reversed(calls) if call.outcome != "ok"), None)
             why = f"{failed.model}: {failed.error}" if failed else "no model could be asked"
-            return None, f"No model gave a plan: {why}"[:1000], None, calls
-        draft = parse_plan(answer, catalog)
-        review, reviewed = await self._review(draft, catalog, snapshot, text, reviewing)
-        return draft, None, review, [*calls, *reviewed]
+            return None, f"No model gave a plan: {why}"[:1000], calls
+        return parse_plan(answer, catalog), None, calls
 
-    async def _review(
-        self,
-        draft: PlanDraft,
-        catalog: Catalog,
-        snapshot: Mapping[str, Any] | None,
-        text: str,
-        reviewing: Callable[[], bool],
+    async def review(
+        self, incident: Incident, draft: PlanDraft, reviewing: Callable[[], bool]
     ) -> tuple[dict[str, Any], Sequence[ModelCall]]:
         """The code checks' refusal, with no model asked; else the reviewer's issues and the
-        verdict they give, or why no model reviewed the plan. The reviewer reads the planner's
-        view of the incident (`text`), then the plan."""
-        app, folder = catalog.app, self.sources
-        refused, new = plan_refusal(draft, catalog, snapshot), ()
+        verdict they give, or why no model reviewed the plan, with every call made. The reviewer
+        reads the planner's view of the incident, then the plan; `reviewing` reads the reviewer
+        switch, just before the review."""
+        catalog, folder = incident.catalog, self.sources
+        app = catalog.app
+        refused, new = plan_refusal(draft, catalog, incident.snapshot), ()
         if refused is None and draft.kind == "code_fix":
             index = None if folder is None else await asyncio.to_thread(load_index, folder, app)
             refused, new = index_refusal(draft.files, app, index)
@@ -452,7 +463,7 @@ class Planner:
         if not await asyncio.to_thread(reviewing):
             off = "the reviewer is switched off"
             return _review_of("not_reviewed", None, None, [], off, new), []
-        answer, calls, why = await self.reviewer.review(review_request(text, draft, new))
+        answer, calls, why = await self.reviewer.review(review_request(incident.text, draft, new))
         model = calls[-1].model if calls else None
         if answer is None:
             return _review_of("not_reviewed", None, model, [], why, new), calls
