@@ -402,16 +402,25 @@ def test_a_missing_or_malformed_setting_stops_alertmanager_naming_it_alone(
     assert [value for value in settings.values() if value and value in printed] == []
 
 
+def reaches(delivery: Delivery, total: float) -> Callable[[], float | None]:
+    """A check for until(): egress-log's count once it is at least `total`."""
+
+    def check() -> float | None:
+        now = delivery.denied()
+        return now if now >= total else None
+
+    return check
+
+
 def test_egress_log_counts_each_refusal_of_the_proxy(delivery: Delivery) -> None:
     before = delivery.denied()
-    # A tunnel the relay may open is no refusal; a host outside its allowlist is one.
+    # A tunnel the relay may open is no refusal; a host outside its allowlist is one, each time.
     assert delivery.ask(3131, "CONNECT smtp.gmail.com:587") == 200
-    assert delivery.ask(3131, "CONNECT example.com:443") == 403
-
-    def counted() -> float | None:
-        now = delivery.denied()
-        return now if now > before else None
-
-    assert until(counted, "egress-log's count", 30) == before + 1
+    # Each refusal is counted before the next is sent, so each reaches egress-log on its own and
+    # the count must add them up (it once held the last one alone, so it never rose past 1).
+    for refused in (1, 2, 3):
+        assert delivery.ask(3131, "CONNECT example.com:443") == 403
+        total = before + refused
+        assert until(reaches(delivery, total), f"egress-log's count of {total:g}", 30) == total
     time.sleep(3)
-    assert delivery.denied() == before + 1
+    assert delivery.denied() == before + 3

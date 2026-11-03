@@ -20,6 +20,16 @@ __pycache__/
 .env.*
 !.env.example
 
+# Private: agent instructions and working notes, kept on this PC and in its backup. The alert
+# runbooks (the rules link to them), the guide and the logo files stay public.
+/AGENTS.md
+/CLAUDE.md
+.claude/
+docs/*
+!docs/alerts.md
+!docs/guide.md
+!docs/brand/
+
 # Eval output: the dated reports are kept, the per-run cache (runs/) is not.
 evals/reports/*
 !evals/reports/.gitkeep

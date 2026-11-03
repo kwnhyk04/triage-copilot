@@ -1,15 +1,15 @@
 #!/bin/sh
-# Production's Alertmanager starts here (infra/docker-compose.prod.yml; README, Alerting). The
-# Discord webhook URL and the SMTP password from .env.prod go to the files alertmanager.yml names,
-# on tmpfs and readable by Alertmanager's user alone; the two addresses go over its placeholders in
-# a copy on /tmp; then the command runs without the four in its environment. A missing or malformed
-# setting stops it here, naming the setting. Nothing here prints a value.
+# Production's Alertmanager starts here (infra/docker-compose.prod.yml; docs/guide.md, Alerting).
+# The Discord webhook URL and the SMTP password from .env.prod go to the files alertmanager.yml
+# names, on tmpfs and readable by Alertmanager's user alone; the two addresses go over its
+# placeholders in a copy on /tmp; then the command runs without the four in its environment. A
+# missing or malformed setting stops it here, naming the setting. Nothing here prints a value.
 set -eu
 
 for name in ALERT_DISCORD_WEBHOOK_URL ALERT_SMTP_PASSWORD ALERT_EMAIL_FROM ALERT_EMAIL_TO; do
   eval "value=\${$name:-}"
   if [ -z "$value" ]; then
-    echo "alertmanager: $name is empty: set it in .env.prod (README, Alerting)" >&2
+    echo "alertmanager: $name is empty: set it in .env.prod (docs/guide.md, Alerting)" >&2
     exit 1
   fi
 done

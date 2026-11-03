@@ -135,13 +135,15 @@ CATALOGS: dict[AppName, Catalog] = {
         app="filing-lens",
         projects={"prod": "filinglens-prod", "dev": "filinglens"},
         services=(
-            Service("api", "app", _FL_STORES),
+            # In production the api and the sidecar reach out through the egress proxy (2026-11-03).
+            Service("api", "app", (*_FL_STORES, "egress-proxy")),
             Service("ingest", "worker", _FL_STORES, optional=True),
             Service("embed", "worker", _FL_STORES, optional=True),
             Service("postgres", "database"),
             Service("redis", "cache"),
             Service("rabbitmq", "queue"),
-            Service("tailscale", "proxy", ("api",), stacks=("prod",)),
+            Service("egress-proxy", "proxy", stacks=("prod",)),
+            Service("tailscale", "proxy", ("api", "egress-proxy"), stacks=("prod",)),
         ),
         # structlog lines: `event` is the message, `exception` the formatted traceback. Request
         # text, documents and filing contents are left out.

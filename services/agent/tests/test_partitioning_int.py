@@ -47,21 +47,24 @@ class Writer(threading.Thread):
         self.dual_write, self.stop = threading.Event(), threading.Event()
         self.dual_write.set()
         self.written = 0
-        self.slowest = 0.0
+        # The slowest write of each phase, by the phase it started in.
+        self.phase = "dual-write on"
+        self.slowest: dict[str, float] = {}
         self.errors: list[Exception] = []
 
     def run(self) -> None:
         for investigation_id in itertools.cycle(self.investigations):
             if self.stop.is_set():
                 return
-            started = time.monotonic()
+            phase, started = self.phase, time.monotonic()
             try:
                 with self.engine.begin() as conn:
                     record_step(conn, investigation_id, EVENT, dual_write=self.dual_write.is_set())
                 self.written += 1
             except Exception as error:
                 self.errors.append(error)
-            self.slowest = max(self.slowest, time.monotonic() - started)
+            took = time.monotonic() - started
+            self.slowest[phase] = max(self.slowest.get(phase, 0.0), took)
             time.sleep(0.002)
 
 
@@ -105,14 +108,19 @@ def test_partition_swap_while_a_writer_runs(scratch_db: "ScratchDb") -> None:
     writer.start()
     try:
         phase_done("dual-write on")
+        writer.phase = "backfill"
         copied = backfill(jobs)
         phase_done("backfill")
+        writer.phase = "swap"
         scratch_db.migrate_agent("0003")  # Checks the month counts, then swaps the names.
         phase_done("swap")
+        writer.phase = "dual-write off"
         writer.dual_write.clear()  # The next release turns the flag off.
         phase_done("dual-write off")
+        writer.phase = "contract"
         scratch_db.migrate_agent("0004")  # A later release drops the old table.
         phase_done("contract")
+        writer.phase = "partition job"
         with jobs.begin() as conn:
             created = ensure_partitions(conn, far, far)
         phase_done("partition job")
@@ -122,12 +130,15 @@ def test_partition_swap_while_a_writer_runs(scratch_db: "ScratchDb") -> None:
         jobs.dispose()
     scratch_db.partitions("ensure")  # The CLI path, which logs what it created.
 
-    log.info("writes after each phase %s, slowest %.3f s", written_after, writer.slowest)
-    assert writer.errors == []
+    # In every message, since a failure's log lines may not be kept (2026-10-25's were not).
+    slowest = {phase: round(took, 3) for phase, took in writer.slowest.items()}
+    timings = f"writes after each phase {written_after}, slowest write by phase {slowest}"
+    log.info("%s", timings)
+    assert writer.errors == [], timings
     # No write waited out a lock timeout: the swap held its locks only briefly.
-    assert writer.slowest < 3
+    assert max(writer.slowest.values()) < 3, timings
     counts = [0, *written_after.values()]
-    assert all(after > before for before, after in itertools.pairwise(counts)), written_after
+    assert all(after > before for before, after in itertools.pairwise(counts)), timings
     assert copied >= seeded
     assert created == [f"investigation_steps_y{far:%Y}m{far:%m}"]
     with engine.begin() as conn:

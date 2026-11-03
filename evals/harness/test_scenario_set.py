@@ -142,10 +142,12 @@ def test_every_required_signal_shows_in_the_tools_results(scenario_id: str) -> N
             "/loki/api/v1/query_range", params={"query": '{service=~".+"}'}
         )
         tries.append(time.perf_counter() - began)
-        assert every.status_code == (503 if LOADED[scenario_id].scenario.down == "logs" else 200)
         if tries[-1] < COLD_LIMIT:
             break
-    assert min(tries) < COLD_LIMIT, f"every cold try took {COLD_LIMIT} s or more: {tries}"
+    else:
+        pytest.fail(f"every cold try took {COLD_LIMIT} s or more: {tries}")
+    # Only the fast try's answer counts: a try slowed past the sim's 2 s limit answers 400.
+    assert every.status_code == (503 if LOADED[scenario_id].scenario.down == "logs" else 200)
 
     async def results() -> list[tuple[str, str]]:
         transport = httpx2.ASGITransport(app=APPS.data)

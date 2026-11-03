@@ -1,8 +1,8 @@
-"""make prod-env: writes production's three env files in the current folder (README, Deploy), with
-a fresh secret for every internal password, key and token. What only the user has (the model
-providers' keys, TS_AUTHKEY, TC_TAG and the alert settings) is left empty for them to paste;
-compose, the services and Alertmanager's entrypoint each refuse an empty value as missing. It
-prints the names to paste, never a value, and writes nothing when any of the three files exists.
+"""make prod-env: writes production's three env files in the current folder (docs/guide.md,
+Deploy), with a fresh secret for every internal password, key and token. What only the user has
+(the model providers' keys, TS_AUTHKEY, TC_TAG and the alert settings) is left empty for them to
+paste; compose, the services and Alertmanager's entrypoint each refuse an empty value as missing.
+It prints the names to paste, never a value, and writes nothing when any of the three files exists.
 """
 
 import re
@@ -33,8 +33,8 @@ def images() -> str:
 def contents() -> dict[str, str]:
     agent_token = fresh()
     prod = f"""\
-# Production's values for compose (README, Deploy), written by make prod-env with fresh secrets.
-# Never commit it; the empty values are yours to paste.
+# Production's values for compose (docs/guide.md, Deploy), written by make prod-env with fresh
+# secrets. Never commit it; the empty values are yours to paste.
 PROD_POSTGRES_PASSWORD={fresh()}
 PROD_GATEWAY_DB_PASSWORD={fresh()}
 PROD_AGENT_DB_PASSWORD={fresh()}
@@ -44,7 +44,7 @@ TC_IMAGES={images()}
 TC_TAG=
 # Paste: a one-off, tagged, pre-approved Tailscale auth key.
 TS_AUTHKEY=
-# Alerting (README, Alerting): paste all four, then add COMPOSE_PROFILES=observability.
+# Alerting (docs/guide.md, Alerting): paste all four, then add COMPOSE_PROFILES=observability.
 # The Discord channel's webhook URL, starting https://discord.com/api/webhooks/.
 ALERT_DISCORD_WEBHOOK_URL=
 # The Gmail account's app password: its 16 letters, without spaces.
@@ -55,19 +55,19 @@ ALERT_EMAIL_FROM=
 ALERT_EMAIL_TO=
 """
     gateway = f"""\
-# The production gateway's settings (README, Deploy), written by make prod-env with fresh secrets.
-# Never commit it. Vercel takes GATEWAY_API_KEY and APPROVER_API_KEY from here.
+# The production gateway's settings (docs/guide.md, Deploy), written by make prod-env with fresh
+# secrets. Never commit it. Vercel takes GATEWAY_API_KEY and APPROVER_API_KEY from here.
 GATEWAY_API_KEY={fresh()}
 APPROVER_API_KEY={fresh()}
 AGENT_SERVICE_TOKEN={agent_token}
 EXECUTOR_SERVICE_TOKEN={fresh()}
 # The live tenants as JSON once live goes on (P1.12); {{}} keeps every tenant the sim's.
 LIVE_TENANTS={{}}
-# After README, Deploy, check 5: GATEWAY_TRUST_PROXY=10.231.233.18
+# After docs/guide.md, Deploy, check 5: GATEWAY_TRUST_PROXY=10.231.233.18
 """
     agent = f"""\
-# The production agent's settings (README, Deploy), written by make prod-env. Never commit it;
-# the empty values are yours to paste.
+# The production agent's settings (docs/guide.md, Deploy), written by make prod-env. Never
+# commit it; the empty values are yours to paste.
 AGENT_SERVICE_TOKEN={agent_token}
 AI_ENABLED=true
 LIVE_TENANTS={{}}
@@ -100,8 +100,8 @@ def main() -> None:
     }
     lines = [f"prod-env: wrote {', '.join(FILES)}, each secret made fresh; none is printed."]
     for title, alerting in (
-        ("before make prod-up (README, Deploy)", False),
-        ("before alerting starts (README, Alerting)", True),
+        ("before make prod-up (docs/guide.md, Deploy)", False),
+        ("before alerting starts (docs/guide.md, Alerting)", True),
     ):
         lines.append(f"Paste these {title}:")
         for name, keys in pasted.items():

@@ -12,6 +12,12 @@ connectors:
         conditions:
           - 'IsMatch(log.body, " TCP_DENIED/")'
 
+processors:
+  # count sends each batch's refusals as a delta, which the Prometheus exporter shows alone, so
+  # the count never rose past one batch's. This adds the batches up, kept as long as the series.
+  delta_to_cumulative:
+    max_stale: 24h
+
 exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
@@ -25,4 +31,5 @@ service:
       exporters: [count]
     metrics:
       receivers: [count]
+      processors: [delta_to_cumulative]
       exporters: [prometheus]

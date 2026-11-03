@@ -194,6 +194,21 @@ def test_filing_lens_s_cache_and_queue_are_never_restarted() -> None:
         assert plan_refusal(draft("restart_service", target), FL, None) is not None
 
 
+def test_a_restart_needs_the_egress_proxy_healthy_only_on_the_stack_that_runs_it() -> None:
+    # FilingLens's api reaches out through the proxy in production; its dev stack runs none.
+    def fl(stack: str, *running: str) -> dict[str, Any]:
+        failing = {"service": "api", "url": "https://[tailnet]/readyz", "status": 503}
+        containers = [container(service) for service in running]
+        return {"app": "filing-lens", "stack": stack, "health": [failing], "containers": containers}
+
+    restart, stores = draft("restart_service", "api"), ("api", "postgres", "redis", "rabbitmq")
+    assert plan_refusal(restart, FL, fl("dev", *stores)) is None
+    assert plan_refusal(restart, FL, fl("prod", *stores, "egress-proxy")) is None
+    refused = plan_refusal(restart, FL, fl("prod", *stores))
+    assert refused is not None
+    assert "does not show what it depends on healthy (egress-proxy)" in refused
+
+
 def test_a_restart_passes_when_the_target_fails_and_what_it_depends_on_is_healthy() -> None:
     # The api's health check fails while its postgres, redis and minio run healthy.
     assert plan_refusal(draft("restart_service", "api"), FA, snapshot(api=503)) is None

@@ -1,7 +1,7 @@
-# Production's alert rules (the observability profile; README, Alerting). Alertmanager sends one
-# message per rule, its alerts listed, to Discord and to the inbox (infra/alertmanager), with the
-# rule's own section of docs/alerts.md as its only link. Summaries say what happened and what it
-# stops; nothing in them is secret. promtool tests each rule (prometheus-alerts.test.yml).
+# Production's alert rules (the observability profile; docs/guide.md, Alerting). Alertmanager
+# sends one message per rule, its alerts listed, to Discord and to the inbox (infra/alertmanager),
+# with the rule's own section of docs/alerts.md as its only link. Summaries say what happened and
+# what it stops; nothing in them is secret. promtool tests each rule (prometheus-alerts.test.yml).
 groups:
   - name: triage-copilot
     rules:

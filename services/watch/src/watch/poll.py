@@ -278,7 +278,9 @@ class Watcher:
         self, service: str, container: Container, now: datetime, observed: Observed
     ) -> None:
         catalog = self.target.catalog
-        since = self._read_until.get(service, now - LOG_HOLD)
+        # The first read starts at the container's creation, so a quiet one, such as an idle
+        # database, still shows its own last lines (its start, its last error) in the snapshot.
+        since = self._read_until.get(service) or container.created or now - LOG_HOLD
         try:
             lines = self.docker.logs(container, since, now, LOG_TAIL)
         except ReadError as error:

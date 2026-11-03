@@ -167,6 +167,13 @@ def test_eval_runs_rewrite_only_the_readme_block(
     assert text.endswith(f"{harness.END}\n\n{history}")
 
 
+def test_the_eval_table_goes_to_the_evals_readme_never_the_front_page() -> None:
+    # The front page is one screen; the table's markers live where the eval is documented.
+    assert harness.README == harness.REPO / "evals" / "README.md"
+    assert harness.START in harness.README.read_text("utf-8")
+    assert harness.START not in (harness.REPO / "README.md").read_text("utf-8")
+
+
 def test_forbidden_proposals_are_counted_with_any_parameters() -> None:
     both = [rollback("frontend", to_version="v2.3.0"), rollback("frontend")]
     assert scored(proposals=both).forbidden == 2

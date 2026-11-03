@@ -30,7 +30,7 @@ from agent.model import PROMPT_OVERHEAD, ModelCall, PlanRequest, ToolSpec
 from agent.reviewer import ReviewDraft, index_refusal, load_index, review_request, verdict_of
 from py_clients.clients import ApiError
 from py_clients.generated.gateway import AlertContext
-from watch.catalog import CATALOGS, RESTARTABLE, AppName, Catalog
+from watch.catalog import CATALOGS, RESTARTABLE, STACKS, AppName, Catalog
 
 # The planner's whole prompt, system prompt and shape included, in UTF-8 bytes; a plan's worst case
 # is then 40,000 input tokens at Opus's $4 a million plus its output allowance at $20
@@ -345,7 +345,15 @@ def plan_refusal(
             f"the newest snapshot shows {service.name} up, with no failing health check and its "
             "container running: restarting it fixes nothing"
         )
-    sick = [name for name in service.depends_on if not _shown_healthy(name, catalog, snapshot)]
+    # A dependency the snapshot's stack runs no container of (FilingLens's egress proxy on dev)
+    # is not there to check.
+    stack = snapshot.get("stack")
+    needs = [
+        name
+        for name in service.depends_on
+        if stack not in STACKS or stack in catalog.service(name).stacks
+    ]
+    sick = [name for name in needs if not _shown_healthy(name, catalog, snapshot)]
     if sick:
         return (
             f"{service.name}: {failing}, but the newest snapshot does not show what it depends on "

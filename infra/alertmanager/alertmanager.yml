@@ -1,6 +1,7 @@
-# Production's alert delivery (README, Alerting): every alert to a Discord channel and to an inbox.
-# entrypoint.sh writes the webhook URL and the SMTP password to the files named here, and the two
-# Gmail addresses over their placeholders in a copy on /tmp, so this file holds none of them.
+# Production's alert delivery (docs/guide.md, Alerting): every alert to a Discord channel and to
+# an inbox. entrypoint.sh writes the webhook URL and the SMTP password to the files named here, and
+# the two Gmail addresses over their placeholders in a copy on /tmp, so this file holds none of
+# them.
 global:
   # Alertmanager sends no SMTP through a proxy, so mail goes to smtp-relay, which tunnels it through
   # the egress proxy. STARTTLS runs from here to Gmail, its certificate checked against Gmail's name.
