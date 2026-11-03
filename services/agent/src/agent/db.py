@@ -196,9 +196,10 @@ class ModelCall(Base):
     investigation_id: Mapped[UUID] = mapped_column(
         ForeignKey(Investigation.id, ondelete="CASCADE"), index=True
     )
-    # planner (since 0013): a plan's call, whichever model of its chain it went to.
+    # planner (since 0013): a plan's call, whichever model of its chain it went to; reviewer (since
+    # 0015): a plan's review.
     role: Mapped[str] = mapped_column(
-        Enum("primary", "fallback", "small", "planner", name="model_role")
+        Enum("primary", "fallback", "small", "planner", "reviewer", name="model_role")
     )
     provider: Mapped[str]
     model: Mapped[str]
@@ -239,7 +240,8 @@ class Switch(Base):
     __tablename__ = "switches"
     __table_args__ = (
         CheckConstraint(
-            "name IN ('live', 'claude', 'planner', 'actions')", name="switches_name_check"
+            "name IN ('live', 'claude', 'planner', 'actions', 'reviewer')",
+            name="switches_name_check",
         ),
     )
 
@@ -250,7 +252,7 @@ class Switch(Base):
 
 class Plan(Base):
     """A real incident's plan (P2, since 0013): its report's transaction adds the row, and the
-    planner completes it once, with the plan or the problem that left none."""
+    planner completes it once, with the plan and its review or the problem that left none."""
 
     __tablename__ = "plans"
 
@@ -262,6 +264,8 @@ class Plan(Base):
     # PlanRecorded's plan; null while the plan is due, and when no model gave one.
     plan: Mapped[dict[str, Any] | None]
     problem: Mapped[str | None]
+    # PlanRecorded v2's review (since 0015); null with no plan, and for plans made before 0015.
+    review: Mapped[dict[str, Any] | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     # Null while the plan is due: a redelivered message finishes it.
     planned_at: Mapped[datetime | None]

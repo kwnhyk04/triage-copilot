@@ -1,8 +1,9 @@
 """Kill switches the operator flips without a restart: `live` lets live tenants' investigations
 run (default off), `claude` lets any Claude model be called (default on), `planner` lets a real
-incident's report get a plan (default off; P2.5 turns it on), and `actions` lets the executor
-claim an approved action (default off). The job reads `live` before every model turn and
-`planner` before every plan, the limiter reads `claude` before every Claude request, and the
+incident's report get a plan (default off; P2.5 turns it on), `actions` lets the executor claim
+an approved action (default off), and `reviewer` lets Claude review a plan the code checks pass
+(default on). The job reads `live` before every model turn, `planner` before every plan and
+`reviewer` before every review, the limiter reads `claude` before every Claude request, and the
 gateway asks for `actions` (GET /internal/switches/actions) before every claim, so a flip takes
 effect at the next one.
 
@@ -22,9 +23,15 @@ from agent.db import Switch as Row
 from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
-Switch = Literal["live", "claude", "planner", "actions"]
+Switch = Literal["live", "claude", "planner", "actions", "reviewer"]
 # A switch with no row is at its default.
-DEFAULTS: dict[Switch, bool] = {"live": False, "claude": True, "planner": False, "actions": False}
+DEFAULTS: dict[Switch, bool] = {
+    "live": False,
+    "claude": True,
+    "planner": False,
+    "actions": False,
+    "reviewer": True,
+}
 
 
 def is_on(conn: Connection, name: Switch) -> bool:

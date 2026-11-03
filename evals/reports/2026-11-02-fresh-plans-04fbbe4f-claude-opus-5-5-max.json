@@ -1,0 +1,584 @@
+{
+  "date": "2026-11-02",
+  "set": "fresh",
+  "planner": {
+    "model": "claude-opus-5-5",
+    "effort": "max",
+    "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+  },
+  "triage": {
+    "models": [
+      "primary=claude-haiku-5-5"
+    ],
+    "token_cap": 350000
+  },
+  "summary": {
+    "plans": 16,
+    "answered": 16,
+    "kept": 16,
+    "refused": [],
+    "kinds": {
+      "none": 14,
+      "code_fix": 2
+    },
+    "acts_on_storage": [],
+    "kept_on_storage": [],
+    "cost": {
+      "total": 6.37296,
+      "mean": 0.39831,
+      "median": 0.3698,
+      "max": 0.809984
+    }
+  },
+  "plans": [
+    {
+      "scenario": "bad-config-3",
+      "triage": "cd052c3d0c357846d27d1b0b1e38f8bd70d90cdc80531976c19d3ff7f27418be",
+      "bound": 17252,
+      "plan": {
+        "kind": "none",
+        "target": "pricing",
+        "files": [],
+        "rationale": "Cause: a config change in pricing. dev.kim turned on the dynamic-discounts flag at -19m32s [tc_PY7T37RAH0]. Pricing CPU then climbed steadily from 0.33 (-20m) to ~0.98 [tc_RJ1RDG5Z4M], while traffic stayed flat near 250 rps [tc_EVBT5QB0X0] and errors stayed near 0.2% [tc_9G2HNTH1PV]. Once CPU passed 0.9, p99 jumped from ~0.11s (-6m) to 2.7s (-3m) [tc_MMV0WNR52G]. That matches the recurring 'slow quote: dynamic-discounts' warnings of 2.39-2.88s [tc_8KEWPGGQHR]. The price-display-rounding flag (-2m12s) came after the jump, so it is not the cause. Why none: pricing is up and serving 200s, no health-check or container failure is shown, and a restart would not turn the flag off. No deploy or commit lines up (last deploy 03:11Z) and no code was examined, so a code fix is unfounded. Turning the flag off is a human action outside these plan kinds. It is reversible and also tests the hypothesis. Steps: 1) Check with dev.kim, then approve the pending disable_feature_flag action for dynamic-discounts (or turn it off in the flag tool). Leave price-display-rounding alone. 2) Verify within 5-10 min: pricing CPU back toward 0.33, p99 near 0.11s, 'slow quote' warnings gone, checkout and cart latency normal. 3) If CPU stays high with the flag off, look elsewhere. The CPU series starts at -20m and the log page covers only the last ~3 min. Check CPU before the flip, pricing memory, restarts and throttling, node CPU, and catalog and coredns latency; the triage saw none of these. 4) Before re-enabling, review the dynamic-discounts rule set and its cost. Logged rule counts range from 765 to 9983, and time does not follow count (1840 rules took 2390ms, 9969 took 396ms), which hints at a pathological rule or input. Profile it and propose a code fix with that evidence."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 8193,
+            "output": 12433,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 17252,
+          "max_output_tokens": 64000,
+          "latency_ms": 110767,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.281432
+    },
+    {
+      "scenario": "bad-config-4",
+      "triage": "4f40d075886df0522e6aacc646d149c1f736befa27ad536297776b77ae435b32",
+      "bound": 40000,
+      "plan": {
+        "kind": "none",
+        "target": "cart-legacy",
+        "files": [],
+        "rationale": "Cause: api-gateway's 5xx ratio stepped from ~0.002 to ~0.070 between 13:19:12Z and 13:22:12Z and stayed there [tc_2V0Q6R3D47]. Every error line is a 503 'no healthy upstream' for cart-legacy on GET /api/cart/... [tc_NY2R219K0N][tc_2E8MRA3V1K][tc_HPJ339RPHG], so the gateway sees no healthy cart-legacy endpoint. Why is unknown. cart-legacy has no error, restart or peer metrics and no logs at all, not even in the healthy hour before [tc_FVBQ69Q325][tc_BXJ6742Q69][tc_Q8W7VE30QD][tc_5RP4JZRPMZ][tc_VVJVAGSW2M], and there is no snapshot. Nothing shows its container down, restarting or unhealthy. The gateway's view alone cannot tell a dead container from a route, DNS or endpoint problem, so a restart is not justified on this evidence, and no commit ties the errors to code. The cart v7.10.0 deploy at 13:23:13Z came after the jump, so it is not the cause. The missing pre-incident telemetry may also mean cart-legacy was not running before and a gateway route or endpoint change began sending traffic to it. No automatic action. A human should: 1. Check the cart-legacy container: docker ps -a, docker inspect (State, Health, ExitCode, OOMKilled) and docker logs. Curl its health endpoint from the api-gateway container. 2. From api-gateway, confirm coredns resolves cart-legacy. Review the gateway's upstream/route config for /api/cart and any change near 13:19-13:22Z. 3. If cart-legacy is down or unhealthy and nothing else is wrong (it depends on nothing), restart it. If it was retired on purpose, fix the gateway route that still sends /api/cart traffic to it rather than reviving it. If a route or DNS change caused this, revert it. 4. Add metrics and logs for cart-legacy. Verify: the cart-legacy 'no healthy upstream' lines stop in api-gateway logs, api-gateway http_error_ratio returns to ~0.002 within minutes, and the alert resolves."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 18783,
+            "output": 20154,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 40000,
+          "max_output_tokens": 64000,
+          "latency_ms": 166000,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.478212
+    },
+    {
+      "scenario": "bad-deploy-3",
+      "triage": "5a23efacd80863771ba2139b1c811bab96ddebd71ae94cc3cedd8928cfd14b4b",
+      "bound": 31792,
+      "plan": {
+        "kind": "code_fix",
+        "target": "payments",
+        "files": [
+          "services/payments/idempotency.py",
+          "services/payments/app.py"
+        ],
+        "rationale": "Cause: payments v3.0.0 (#918 'Idempotency cache with a global lock', 13:20:08Z) makes every POST /charge queue on one global lock [tc_P4ZB8WBGCC]. Every slow request logged runs v3.0.0 and spends 2280-2871ms of 2412-3005ms waiting for the idempotency lock, with only ~130ms of real work [tc_9GRANQ5E4M][tc_EVYVFVXCV9]. Payments p99 rose from ~0.30s to ~3.08s between -6m01s and -3m01s, after the deploy [tc_4ZN0BVR12K]. Card-network upstream p99 (~0.34s) [tc_VSKDW7YDQW], CPU (~0.47) [tc_7DQWTN20FF] and error ratio (~0.2%) [tc_2THNRY5W21] stayed flat, and payments had no other change in 22h. The time goes to waiting on the lock #918 added, not to the DB or the provider, so a restart would not fix it. Change: in the idempotency cache from #918, replace the global lock with per-idempotency-key locking. Hold the shared lock only to look up or create the key's entry, and hold only that key's lock across the charge. Charges with different keys then run in parallel, while a repeated key still waits for and returns the first result. The file paths are inferred, not read: idempotency.py for the cache and app.py for POST /charge; match them to the #918 diff before approving. Reverting #918 is an acceptable fallback, and rolling payments back to v2.9.7 is a faster interim step a human may take. Also before approving: onset came 2-3 min after the deploy (p99 was still ~0.30s at -6m01s), and logs for 13:20-13:23Z were not pulled. Confirm that no slow line comes from v2.9.7 and that db_lock_wait on payments-db is flat. Check: once the fix is deployed, the 'waiting for the idempotency lock' warnings stop and http_latency_p99_seconds for payments returns to ~0.3s. The error ratio should stay ~0.2%, a repeated POST /charge with the same idempotency key should still be deduplicated, and PaymentsHighLatency should resolve."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 14277,
+            "output": 30993,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 31792,
+          "max_output_tokens": 64000,
+          "latency_ms": 362221,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.676968
+    },
+    {
+      "scenario": "bad-deploy-4",
+      "triage": "19c25f5f43d3b02d829108c1062cbf90bcea72bd3886bf27632a08c6792b1df8",
+      "bound": 40000,
+      "plan": {
+        "kind": "code_fix",
+        "target": "pricing",
+        "files": [
+          "services/pricing/app.py"
+        ],
+        "rationale": "Cause: pricing v1.12.0, deployed 12:54:30Z by dev.kim as 'Return totals as decimal strings (#377)', returns quote totals as strings such as \"4899.50\" where checkout expects a number. Checkout throws InvalidResponseException and POST /checkout returns 500. Evidence: the deploy is at -35m01s [tc_PVN8HNXW1P] and checkout's first InvalidResponseException comes 8s later at -34m53s [tc_BVENJH7RKG]. Checkout's error ratio steps from 0.002 to 0.028 at -33m and from 0.028 to 0.21 at -3m [tc_HB0C6P1YVP]. The second step matches the end of pricing's rolling update per the report, and the exception lines grow denser from about -4m40s [tc_BVENJH7RKG]. The only exception in checkout's error logs names a string total from pricing [tc_MVPRK5TDNG][tc_HYCPWEN26R], while its GET /cart/total calls keep returning 200 [tc_HYCPWEN26R]. Cart's deploy at -25m01s left the ratio flat, and checkout last deployed at 02:05Z [tc_PVN8HNXW1P][tc_HB0C6P1YVP]. Per the report, pricing itself answers 200 at its usual ~0.002 error ratio. Nothing shows a container down, and a restart would keep serving v1.12.0. Plan: in pricing, revert the response change of #377 so quote totals are JSON numbers again, as in v1.11.3. Rolling pricing back to v1.11.3 has the same effect if that is faster. The file is inferred: confirm that services/pricing/app.py is where #377 changed the response, and point the change at the real file if not. Keeping decimal strings for money precision is a separate, coordinated contract change in which checkout must accept them first. Check: before approving, call pricing's /quote once and see the total come back quoted. After the fix is deployed, the total is a number, checkout logs no new InvalidResponseException and POST /checkout returns 200. http_error_ratio{service=\"checkout\"} should fall back to about 0.002 within a few minutes, and pricing's own error ratio should stay about 0.002."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 15713,
+            "output": 21906,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 40000,
+          "max_output_tokens": 64000,
+          "latency_ms": 249612,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.500972
+    },
+    {
+      "scenario": "db-pool-exhaustion-2",
+      "triage": "b4f03d99e10af5a0b75edfebef52a509709b49ea26e5ce825a61da3c194ada66",
+      "bound": 40000,
+      "plan": {
+        "kind": "none",
+        "target": "payments-db",
+        "files": [],
+        "rationale": "Cause: on payments-db, pid 7741 (dba_ops, psql) runs VACUUM FULL public.ledger_entries, logged as started at -7m22s [tc_KWGVJWV5X8]. VACUUM FULL holds an ACCESS EXCLUSIVE lock for its whole run, so every reader waits. 'still waiting for AccessShareLock ... blocked by pid 7741' lines run nonstop from -7m57s to +12s [tc_KWGVJWV5X8] [tc_0BWYM00PDC]. From the -7m30s sample: lock wait rose from ~0.003s to 3s [tc_3B71ZX7BGX], slow queries from ~0.1/s to 14/s [tc_0TPAMBEN53] and DB connections from ~40 to 80 [tc_MZR4FZ184S]. Payments' pool went from ~9 to ~30 of 30 [tc_TCVGEGQMVR], and payments fails with pool acquire timeouts (active=30, idle=0) and PoolTimeoutException [tc_QYYN6GE4X1]. Payments is a victim. No code defect is shown: the report puts the last deploy ~26h before onset, though tc_BFESXCFRKE and the error-ratio results were not shown here. A restart is barred while its dependency payments-db is unhealthy, and it would only refill the pool. Ending a database session needs a human, so the plan is none. Steps: 1) On payments-db, inspect pid 7741 in pg_stat_activity, pg_locks and pg_stat_progress_cluster. The waits begin ~35s before the logged start, so confirm what it holds and that it is still active. 2) With dba_ops, unless it is nearly done, run SELECT pg_cancel_backend(7741); if it persists, run pg_terminate_backend(7741). Cancelling VACUUM FULL is safe; the table stays as before. 3) Redo the maintenance off-peak, or use pg_repack or plain VACUUM, with lock_timeout set. Check: no new 'blocked by pid 7741' lines. On payments-db, lock wait is back near 0.003s, slow queries near 0.1/s and connections near 40. Payments db_pool_in_use is back near 9/30, PoolTimeoutException lines stop, the error ratio returns to ~0.002 and PaymentsHighErrorRate resolves. If the pool stays saturated once payments-db is healthy, a payments restart can then be planned separately."
+      },
+      "target_kind": "database",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 17002,
+            "output": 17533,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 40000,
+          "max_output_tokens": 64000,
+          "latency_ms": 142814,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.418668
+    },
+    {
+      "scenario": "db-pool-exhaustion-4",
+      "triage": "2265ba1981aed4c4fbde31fc350014879aff4cd7b4bedb9bb74a4715d7f42b09",
+      "bound": 13693,
+      "plan": {
+        "kind": "none",
+        "target": "accounts-db",
+        "files": [],
+        "rationale": "Cause: lock contention on accounts-db (a database), not a defect in accounts. At about 13:25:45Z (-7.5 min), accounts-db lock wait jumped from ~0.004 to ~2.8 s/s [tc_92VZJA7Y4W], slow queries from ~0.1 to ~11/s [tc_HC1PFCFEET] and connections from ~43 to ~70 [tc_JFC3TDTZFQ]. accounts' db_pool_in_use then filled to its max of 25. Its error ratio rose from ~0.2% to ~14% while request rate, CPU and memory stayed flat [tc_GWN8FE7TGK][tc_RPTZ7Y8VCQ]. The last accounts deploy was ~10 h before onset [tc_80A2SM4FJ1], so no code change is implicated. The runbook says restarting the app only refills the pool while the lock holds [tc_5VQAF7SWG0], and a database is never a restart target. No restart or code fix applies: a human must end the blocking query. Steps: 1) On accounts-db, list active sessions and lock waits (e.g. pg_stat_activity/pg_locks or the engine's equivalent). Find the long-running statement holding the lock since ~13:25Z, and its client. 2) Identify its source (a migration, batch job or manual query; check whether nightly-backup or another job was running against accounts-db then). Once it is confirmed safe, cancel or terminate that session, and keep the job from re-running until it is fixed. 3) Check accounts-db deploy and config history around 13:25Z, which the triage did not cover. When the logs backend is back, review accounts and accounts-db logs for lock wait timeouts. 4) Confirm coredns is healthy (the triage did not check it). Verify: on accounts-db, db_lock_wait_seconds is back near 0.004 s/s, slow queries near 0.1/s and connections near 45. On accounts, db_pool_in_use drops well below 25 (~7), http_error_ratio returns to ~0.2% and AccountsHighErrorRate resolves. If the pool stays saturated after the lock clears, re-triage accounts."
+      },
+      "target_kind": "database",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 7119,
+            "output": 4277,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 13693,
+          "max_output_tokens": 64000,
+          "latency_ms": 37117,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.114016
+    },
+    {
+      "scenario": "dns-partition-2",
+      "triage": "89c63cc3370c9c0e82c237ad060205942c6f478e70104f97a003fae4b93d0c42",
+      "bound": 20122,
+      "plan": {
+        "kind": "none",
+        "target": "coredns",
+        "files": [],
+        "rationale": "Cause: CoreDNS (10.96.0.10) is CPU-saturated, so orders' DNS lookups time out. coredns CPU went from ~0.30 to ~0.97-1.0 at -6m [tc_AXS80QZDC8]. From -4m orders had ~24 DNS lookup errors/s [tc_GWVVASRFY0], its logs are all 'lookup orders-db.internal on 10.96.0.10:53: read udp: i/o timeout' [tc_YGPFH3PWYT], and its error ratio rose from ~0.002 to 0.18 at -3m [tc_Z5KNV7SHZR]. SERVFAIL stayed low [tc_6GBCVWV67V], which fits timeouts, not bad answers. orders CPU is flat [tc_3XPNXAFF80]. nightly-backup on node-1 stayed at ~0.20-0.24 for 60m [tc_TQ6QAS8SP4][tc_QH2CC8X33A], so neither explains the load. What triggered the CoreDNS load is unknown. Why none: coredns is a proxy, which a plan may not restart. Restarting orders would not help while its dependency coredns is unhealthy. No deploy to orders, orders-db or coredns lies in the window, so nothing points to a defect in services/**/*.py. Human steps: 1) Inspect coredns: container state, CPU limit and throttling, logs, and query rate per client and name (e.g. coredns_dns_requests_total). Look for a surge source such as a client retry loop, ndots/search-domain amplification or a new job. Also check node-1 total CPU, which returned no data. 2) Check coredns Corefile/config changes and its deploy history beyond the first page around -6m; revert any change found. 3) Mitigate: stop or throttle a flooding client, raise coredns CPU or add replicas, or enlarge its cache. Restart coredns only if it looks wedged, after saving its logs. 4) From orders, resolve orders-db.internal via 10.96.0.10 (dig/nslookup) to time it. Also check orders-db health and the inventory DNS errors the triage reports (~15/s, not in cited results). Verify: coredns CPU is back near 0.30, orders dns_lookup_errors_per_second is near 0 and its http_error_ratio near 0.002, orders logs show no new i/o timeout lines, inventory DNS errors are gone, and OrdersHighErrorRate resolves."
+      },
+      "target_kind": "proxy",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 9844,
+            "output": 11547,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 20122,
+          "max_output_tokens": 64000,
+          "latency_ms": 92528,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.270316
+    },
+    {
+      "scenario": "dns-partition-3",
+      "triage": "1ec6e8c7db5b0856e3fd9d487738227d698dc9d4c630cbceb83f92d78c18cb30",
+      "bound": 35399,
+      "plan": {
+        "kind": "none",
+        "target": "coredns",
+        "files": [],
+        "rationale": "Cause: cluster DNS (coredns) is failing. coredns logs '[FATAL] plugin/loop: Loop (127.0.0.1:43920 -> :53) detected for zone \".\"' 8 times from -6m47s to +14s [tc_P0KYC2DJ4G][tc_EA19Z8XN4S]. That error makes CoreDNS exit, so it likely crash-loops: its upstream forward points back at itself (e.g. a loopback nameserver like 127.0.0.53). Every retrieved accounts error is 'lookup accounts-db.internal on 10.96.0.10:53 ... i/o timeout', from at least -4m01s to +5s [tc_11036HF334][tc_CB1YM23CTH]: accounts fails at name resolution, before reaching its database. No accounts change lines up: last deploy v1.5.3 (dependency bump) was ~29h earlier [tc_HMVW7WV90G], no config/flag lines [tc_ERJ7E9YJY2]. So no code_fix applies. coredns is a proxy, and a restart would not clear a config loop anyway. accounts may not be restarted while its dependency is down. Metrics were down, so this rests on logs. Steps: (1) Check coredns container state, restart count and previous logs; expect exits right after the loop error. (2) Inspect the Corefile forward line and the resolv.conf it uses; find the upstream pointing at 127.0.0.x or 10.96.0.10 itself; review recent Corefile, image or host DNS changes (not checked by the triage). (3) Point forward . at real upstream resolver IPs (or give coredns the real host resolv.conf, e.g. /run/systemd/resolve/resolv.conf); do not just remove the loop plugin. Roll out coredns. (4) Also check catalog, which depends on coredns, and accounts-db health, which the triage could not check. Verify: coredns stays up with a stable restart count and no new plugin/loop lines; accounts-db.internal resolves via 10.96.0.10 from the accounts container; accounts i/o timeout errors stop and AccountsHighErrorRate clears; when metrics return, http_error_ratio and dns_servfail_ratio are back to baseline. If accounts still fails once DNS is healthy, restart accounts then."
+      },
+      "target_kind": "proxy",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 18216,
+            "output": 19321,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 35399,
+          "max_output_tokens": 64000,
+          "latency_ms": 154920,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.459284
+    },
+    {
+      "scenario": "expired-cert-2",
+      "triage": "dd2f51b2e4bd79860e81503273da7d0088a3e17b732cac9d629ff1c15bd25519",
+      "bound": 23273,
+      "plan": {
+        "kind": "none",
+        "target": "inventory",
+        "files": [],
+        "rationale": "Cause: inventory's serving TLS certificate expired. No restart or code change fixes that, so this plan runs nothing. Evidence: tls_cert_days_remaining{service=inventory} fell steadily with no renewal and hit 0 at about -4m (~13:40Z) [tc_GF405P8Y1T]. From then, orders' reserve-stock calls to inventory.internal fail with 'x509: certificate has expired' [tc_HE9VVAS5J2]. orders' TLS handshake errors to inventory went from 0 to 30/s [tc_DG97RTD8KP], and orders' error ratio rose from ~0.002 to 0.27 [tc_WSTW0ZDRJH]. There was no orders deploy near the onset (last 2026-10-20T11:13Z). The runbook says renewal is a manual step outside the allowed actions, with the certificate's service as root cause [tc_H22Q8D23DR]. Restarting orders would not help: it rightly rejects the cert, and its dependency inventory is unhealthy. Restarting inventory alone would serve the same expired cert. Skipping verification in code would be unsafe. Steps for a human: 1) Confirm the served cert: openssl s_client -connect inventory.internal:<port> -servername inventory.internal </dev/null | openssl x509 -noout -subject -issuer -dates (expect notAfter ~13:40Z). 2) Renew or reissue it for inventory.internal from the same CA, with the same SANs and a chain orders trusts. 3) Install it where inventory loads its cert and key, then reload or restart inventory. 4) Find why rotation did not happen (renewal job, cron or cert-manager, mounted secret, config), fix it, and alert when days remaining drops below ~14. Also read inventory's own metrics and logs, which the triage skipped. Verify: tls_cert_days_remaining{service=inventory} well above 0; tls_handshake_errors_per_second{service=orders,peer=inventory} back to 0; http_error_ratio{service=orders} back near 0.002; no new 'certificate has expired' lines in orders logs; OrdersHighErrorRate resolves."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 9036,
+            "output": 12086,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 23273,
+          "max_output_tokens": 64000,
+          "latency_ms": 89472,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.277864
+    },
+    {
+      "scenario": "expired-cert-3",
+      "triage": "5e0aa395158fa94c9ec586034b26059889df080785dcc3ced55ffbfc5bf86431",
+      "bound": 23884,
+      "plan": {
+        "kind": "none",
+        "target": "shipping",
+        "files": [],
+        "rationale": "Cause: the TLS certificate served by the external carrier API (api.carrier-api.example.net) appears to have expired. That API is not in the catalog, so shipping is named as the catalog service that owns this call. Since about 13:41Z, shipping's POSTs to /v1/rates fail with 'x509: certificate has expired or is not yet valid' [tc_CV5G5N7QQC]. TLS handshake errors to carrier-api went from 0 to 25/s [tc_FS1F2QM7TE], and shipping's 5xx ratio went from ~0.002 to 0.42 [tc_RPD3FS94E7]. The last shipping deploy (v1.5.7) was ~23.7h before the onset [tc_Q3TKMFTQMZ], so no commit explains it. The runbook makes certificate renewal a manual step outside the allowed actions [tc_J4153F0VJ8]. A restart would hit the same certificate, and no shipping code defect is shown, so this plan changes nothing. Gaps: no cert-expiry series, no carrier-side logs, and the dependency graph was unavailable [tc_V82PGHEK10]. Human steps: (1) From the shipping container and from an outside host, run openssl s_client -connect api.carrier-api.example.net:443 -servername api.carrier-api.example.net -showcerts and read notBefore/notAfter of each cert in the chain. (2) Rule out the client side, since the same error fires on clock skew: compare the shipping container clock (date -u) with NTP. If only shipping sees an expired cert, check what coredns resolves the host to, and whether shipping's CA bundle relies on an expired root (if so, rebuild its image with current CA certs). (3) If the carrier's leaf or intermediate cert expired, ask the carrier API provider to renew and redeploy it. Do not turn off TLS verification in shipping as a workaround. (4) Warn checkout's owners, as checkout depends on shipping. Verify: openssl shows a future notAfter, shipping's carrier-api TLS handshake errors drop to 0, its 5xx ratio returns to ~0.002, the x509 log lines stop and ShippingHighErrorRate resolves."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 9623,
+            "output": 15285,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 23884,
+          "max_output_tokens": 64000,
+          "latency_ms": 175314,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.344192
+    },
+    {
+      "scenario": "memory-leak-2",
+      "triage": "28540c6b8deac1ca7a15d29e67dbc1ecfd775bda1cffd341d4b1cc941097eaab",
+      "bound": 9392,
+      "plan": {
+        "kind": "none",
+        "target": "search",
+        "files": [],
+        "rationale": "Cause not established. The evidence is too thin for a restart or a code change. Search p99 stepped from ~0.2s to a near-constant ~3.3s between -6m and -3m [tc_ZVNTZ69Z79]. Search CPU rose from ~0.27 to ~0.88 between -20m and -9m while traffic stayed flat at ~250 rps [tc_CS41EM5213, tc_GKZH7QZDVZ, tc_K5A7JYCE2T, tc_R2853PM84T]. Memory sat at 0.91-0.99 of its limit, with sharp dips to ~0.55 at -6m and -1m30s [tc_AG28JGGK60] that may be OOM kills or GC. Search is the likeliest locus. A restart is not justified: no failed health check or down or restarting container is shown, and its dependencies search-index and coredns are unverified because the upstream series were empty [tc_YVN1YT6K7G, tc_RBBCYK450D, tc_60D04GBFHX]. A code_fix is not justified either: the last deploy (v1.6.7, ~11h earlier) does not line up with the onset, and no erroring code path is known. Latency also jumped 3-6m after CPU had plateaued, to a near-constant value with throttling at ~1%. That could point to a dependency timeout rather than CPU queueing. The plan changes nothing. Human steps: 1) Check search container restarts and the last termination reason (OOMKilled?) near -6m and -1m30s. If it is OOM churn, raise the memory limit or find the leak. 2) Check search-index and coredns directly: latency, errors, DNS SERVFAIL and timeouts, recent deploys and config. Fix why search's upstream_* metrics are missing. 3) Profile search CPU and heap to see what grew from -20m at flat traffic. Check config and flag changes, background jobs, and other workloads on node-5. 4) Once a cause is found, re-triage for a targeted restart or code_fix. Check it worked: search p99 back to ~0.2s, CPU ~0.3 at ~250 rps, memory well under the limit with no restarts, and SearchHighLatency resolved."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 4272,
+            "output": 11450,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 9392,
+          "max_output_tokens": 64000,
+          "latency_ms": 94852,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.246088
+    },
+    {
+      "scenario": "memory-leak-4",
+      "triage": "9814bf9ab7c676365706eabdef945f1f53a3f6876b5c1aacf27f3d60dbd0a4ac",
+      "bound": 9758,
+      "plan": {
+        "kind": "none",
+        "target": "notifications",
+        "files": [],
+        "rationale": "Cause: notifications runs out of memory. memory_usage_ratio rose from a ~0.40 baseline (-360m to -162m) to 0.98 of its 2Gi limit [tc_G5GAD962NG] while traffic stayed flat at 254-280 rps over the last 30m [tc_1KNDV0R3EH], so it looks like a leak or growing state, not load. It was OOMKilled at -7m20s, -4m48s and -1m48s [tc_24DW93ADXY], restarts went 0->3 [tc_11DVPQSJ9C] and http_error_ratio rose from ~0.002 to 0.11 [tc_P1W3X1X6B4]. The orders deploy at -3m came after the climb and the first OOMKill, so it is not the cause. Why none: a restart would not help. The runtime already restarts it, and after each kill memory falls only to ~0.54 and is back at 0.95-0.98 within ~90s [tc_9YFBJ6WV04]. Its dependencies, events-broker and coredns, were also never shown healthy. A code_fix has nothing to point at: the last deploy (v1.4.2, base image) landed ~29h before the climb began [tc_XJ4JCR5GNR], and no heap data or log names what grows, so no file can be named. Steps: 1. Check coredns, and check events-broker queue depth, consumer lag and redeliveries for notifications. The fast refill after each restart hints at state reloaded at startup, e.g. a backlog or unacked messages redelivered in bulk. 2. Profile the notifications heap (e.g. tracemalloc or memray) right after a restart to find which objects grow. 3. Review config/flag history, traffic and anything else that changed between -162m and -144m, when the climb began. 4. v1.4.2 ran with flat memory from -360m to -162m, so the image is a weak suspect; compare it with v1.4.1 before any rollback. 5. Meanwhile, raising the 2Gi limit or adding replicas may cut errors but only buys time. 6. Once the code path is found, raise a code_fix in services/**/*.py. Check it worked: notifications memory_usage_ratio stays flat near 0.40 for hours, container_restarts_total stops rising, no new OOMKilled lines appear, and http_error_ratio returns to ~0.002."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 4416,
+            "output": 39616,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 9758,
+          "max_output_tokens": 64000,
+          "latency_ms": 442873,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.809984
+    },
+    {
+      "scenario": "noisy-neighbor-2",
+      "triage": "5a4e19c502ef29e26b780fef922c2be7c74a1f53a937d209164f439be4528e6b",
+      "bound": 9968,
+      "plan": {
+        "kind": "none",
+        "target": "ml-trainer",
+        "files": [],
+        "rationale": "Likely cause (triage confidence 0.60): noisy neighbour on node-3. ml-trainer CPU ramped from ~0.01 at -15m to ~0.96 by -5m [tc_AVMWE7JKAT], node-3 reached 100% CPU at -5m [tc_J9KR5ZA0K8], checkout's own CPU then fell from ~0.55 to ~0.15 from -4m30s [tc_QHVR75JE02][tc_ACXD3P30JR] while its p99 rose from ~0.25s to ~3.2s between -6m and -3m [tc_VEJ8HJ2X6R]. Checkout is starved of CPU, not broken. Why none: ml-trainer is up and busy; no failing health check or down/unhealthy/killed container is in evidence (no snapshot exists), so a restart is not allowed, and it would likely just restart a load whose trigger is unknown. Restarting checkout cannot help while node-3 is saturated. No code defect is shown: ml-trainer's last deploy was 2026-10-20T18:41Z, ~19h before the alert [tc_6S8XS2V7TT]; checkout's was 2026-10-20T09:06Z [tc_5H9E62JBS6]. The payments v2.16.0 deploy at 13:48:50Z [tc_5H9E62JBS6] came ~1.5 min after checkout's CPU began dropping and payments CPU stayed flat [tc_ACXD3P30JR], so it is unlikely but not ruled out. Steps: 1) Find what started ml-trainer's load near 13:37Z (its logs, job schedule or queue) and whether that run is expected. 2) Mitigate: pause or scale down the job, move it off node-3, or cap ml-trainer's CPU (limit/quota or lower shares); or move checkout to another node. 3) Close the gaps: cpu_throttled_ratio, memory and restarts for checkout and ml-trainer, and checkout's upstream latency/errors to payments, cart and coredns (payments latency is not in the cited results). 4) Verify: node_cpu_usage_ratio for node-3 falls well below 1, checkout cpu_usage_ratio returns to ~0.55 and http_latency_p99_seconds to ~0.25s, and the alert clears. 5) Prevent: give ml-trainer CPU limits or anti-affinity with checkout, or run training off-peak."
+      },
+      "target_kind": "worker",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 4958,
+            "output": 14621,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 9968,
+          "max_output_tokens": 64000,
+          "latency_ms": 118670,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.312252
+    },
+    {
+      "scenario": "noisy-neighbor-4",
+      "triage": "42aeb1a77d0de4cc82b513c3a617ddb94f215a396f3c8853c5d017d431104980",
+      "bound": 9007,
+      "plan": {
+        "kind": "none",
+        "target": "payments",
+        "files": [],
+        "rationale": "Likely cause (triage confidence 0.5): CPU starvation of payments by an unidentified workload on its node, node-2. Node-2 CPU was flat at ~0.46-0.49 from -20m to -16m, then climbed from 0.44 at -15m to 1.0 by -5m and stayed ~0.97-1.0 [tc_XVBGZW9NN8][tc_KB4JSDF9CB]. Payments' own CPU held ~0.37-0.43 during that climb, so payments is not the consumer. It fell to ~0.12-0.17 from -4m, once the node saturated [tc_78NHX9579K]. Its p99 jumped from ~0.30s at -6m to ~3.2s at -3m [tc_HTFNPG8CRQ]. Error ratio (~0.2%) and request rate (~166-182 rps) stayed normal [tc_RG9FR0R607][tc_XZANSYJGVR], and card-network latency stayed ~0.27-0.33s [tc_A6XZ8MTAR0]. There was no payments deploy in the window (last v1.6.9 ~20h earlier), so no code defect is shown. Why none: no snapshot or health check shows payments down or unhealthy, and a restart would not free node-2's CPU. The CPU consumer is unidentified and payments-db was not ruled out, so nothing can safely be restarted or changed. This plan changes nothing. The target is payments as the affected service, because node-2 is not in the catalog. Human steps: 1) On node-2, list containers and processes by CPU (e.g. docker stats, top) to find what grew from about -15m. Check whether report-builder, payments-db or coredns run there, since none of them was measured. 2) If it is a runaway job or process, stop it, CPU-limit it or reschedule it. If it is payments-db (e.g. a heavy query), handle it as a database issue, not a blind restart. 3) Check payments-db and coredns health and latency, since the DB path had no series. Verify: node-2 CPU is back near 0.45-0.5, payments cpu_usage_ratio is back near 0.4, payments p99 is back near 0.3s and PaymentsHighLatency has resolved, with error ratio still ~0.2%."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 4146,
+            "output": 10590,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 9007,
+          "max_output_tokens": 64000,
+          "latency_ms": 125751,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.228384
+    },
+    {
+      "scenario": "slow-dependency-3",
+      "triage": "d330f572bdaf3c80785f592bf17ee6e2be74e661ddd8ee4dd0e7bec5085c3191",
+      "bound": 8285,
+      "plan": {
+        "kind": "none",
+        "target": "feature-store",
+        "files": [],
+        "rationale": "Cause: feature-store (storage) became slow, and recommendations waits on it. feature-store's own p99 went from ~0.03s to 1.21s at ~13:51Z and has held at ~2.40s since ~13:52Z [tc_HFNWBXACSP]. recommendations' p99 to feature-store rose from ~0.04s to ~2.60s [tc_K7E2QTEK6Z], and its own p99 from ~0.12s to ~2.91s [tc_P5RECH03X2], so almost all of its added latency is the wait on feature-store. No change was found near onset: feature-store's last deploy (v1.0.2, base image update) was ~18.6h earlier [tc_665NDFAWXT], and a search of its logs for error/timeout/config/flag/warn lines found none [tc_MWTH6MCYZ5]. Why none: feature-store is storage, which a plan must not restart. Restarting recommendations would not help, since its errors and logs are clean and it only waits on feature-store. No code defect is shown, so no code_fix. The cause inside feature-store is unconfirmed: its CPU, memory, pool, rate and error metrics returned no series. Steps for a human: 1) Check the feature-store container and its node around 13:48-13:52Z: state, restarts, CPU, memory, disk I/O latency, free disk, noisy neighbours. 2) Check its request rate for a surge, and whether a batch job (e.g. nightly-backup), compaction or snapshot started then. 3) Read its unfiltered logs and internal stats (slow queries, locks, timeouts, throttling). 4) Fix what you find (stop or move the job, free disk, add capacity). If nothing else fits, consider rolling feature-store back to v1.0.1. Restart feature-store only by hand, once its data is known safe. 5) Restore the missing feature-store metrics and logs. Verify: http_latency_p99_seconds{service=\"feature-store\"} is back near 0.03s, recommendations' p99 to feature-store is near 0.04s and its own near 0.12s, and RecommendationsHighLatency resolves."
+      },
+      "target_kind": "storage",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 3627,
+            "output": 19045,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 8285,
+          "max_output_tokens": 64000,
+          "latency_ms": 154596,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.395408
+    },
+    {
+      "scenario": "slow-dependency-4",
+      "triage": "1f8ac7cec5880b5e3df916eb949f9d2c9829e0270cf5cbe3dd2a7e6176ed14b1",
+      "bound": 17489,
+      "plan": {
+        "kind": "none",
+        "target": "checkout",
+        "files": [],
+        "rationale": "Cause: checkout's dependency tax-service is slow. Every tax-service POST /v1/quote call in the cited checkout logs took 6930-7412ms against a 2000ms budget [tc_RYW8JVZ3V0] (that page spans ~2.5 min around the alert; more pages exist). tax-service is used only by checkout [tc_G9T21RC8VB] but is not in this app's catalog, so nothing here can restart or change it; checkout is named as the alerting service and its only consumer. tax-service returned no logs [tc_E07QN5Q7R9], so its internal cause is unknown. Checkout shows no fault of its own: no error logs [tc_F0RJ0FEKVB] and its last deploy (v1.5.3, log formatting) was ~14.7h before the alert [tc_M1JT3BCZ0V]. Its logged requests still return 200 in 40-863ms [tc_RYW8JVZ3V0], metrics were down [tc_VEMS8VRT17][tc_D544G6QW56] and no snapshot exists, so the latency the alert fired on is unconfirmed. Restarting checkout or changing its code would not make tax-service faster, so no action is planned. Steps for a human: (1) Contact tax-service's owner or provider; check its health, POST /v1/quote latency, CPU/memory, recent deploys (the report names v1.8.6) and config changes, and roll back, scale or restart it there. (2) Find out why tax-service has no logs in the log store. (3) Restore the metrics backend; read checkout's p99 latency and upstream_latency_p99_seconds for checkout->tax-service to see when the slowdown began. (4) Confirm checkout's catalog dependencies payments, cart and coredns are healthy; the triage did not check them. (5) Optional follow-up: the warnings suggest checkout does not cut the call off at its 2s budget; a separate, approved change could enforce a hard timeout with a fallback. Check it worked: checkout's 'tax-service responded in ... (budget 2000ms)' warnings stop, POST /v1/quote returns under 2s, and CheckoutHighLatency resolves, with checkout latency back under threshold once metrics are readable."
+      },
+      "target_kind": "app",
+      "refused": null,
+      "calls": [
+        {
+          "role": "planner",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "outcome": "ok",
+          "usage": {
+            "input": 7815,
+            "output": 26383,
+            "cached": 0,
+            "thoughts": 0,
+            "cache_writes": 0
+          },
+          "input_bound": 17489,
+          "max_output_tokens": 64000,
+          "latency_ms": 201957,
+          "error": null,
+          "prompt_sha": "04fbbe4f2089a9833aa831768b89ee43f0dcafc6d1515915ed559ddbc9bba92f"
+        }
+      ],
+      "cost": 0.55892
+    }
+  ]
+}

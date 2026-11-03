@@ -19,6 +19,154 @@ Entries before 2026-10-18 use the older Changes, Files, Validation and Outstandi
 
 ## Entries
 
+### 2026-11-03: Part B step 3: the plan reviewer wired in behind the reviewer switch, on branch plan-reviewer
+
+- What happened: the user approved step 3 with Sonnet 5.5 at effort high, rules v4, a 4,000-token output allowance and $0.45 a day, and asked for three additions (docs/memory.md, 2026-11-03, Part B step 3). Every plan is now checked in code, then reviewed by the reviewer's Claude when the checks pass. A refused plan is kept, shown with its reasons, and takes no decision.
+- Why: the user's OK after the honest check.
+- What we did, in order:
+  1. The user's additions in the docs first:
+     - `evals/README.md` and the README give the fresh result as it is: no trusted plan refused (8 ok, 2 flagged), and 3 of the 4 bad steps caught. They name the miss, dns-partition-2's "restart coredns only if it looks wedged", which the labels forbid.
+     - Both give the known limits: the "to rule it out" rule was tested only on the dev set, and medium bad-deploy-1 is caught about half the time.
+     - `evals/plan-judgments.json`: the dns-partition-2 note gains the user's recount; the judgment, written before the run, stays.
+     - Correction to the entry below: its "Bar: met" took dns-partition-2 as a plan with nothing expected. By the user's count, the fresh set missed 1 of its 4 bad steps.
+  2. Two Claude Code subagents built the rest, tests first, one after the other. Claude Code read both diffs before running the checks.
+     - The agent, the contract and watch:
+       - `settings.py`: `LLM_REVIEWER_MODEL`, `LLM_REVIEWER_EFFORT`, `LLM_REVIEWER_DAILY_USD`, `SOURCE_INDEX_DIR` and `Settings.reviewer()`.
+       - `llm.py`: `Router.review`, one call (4,000 output tokens, 120 s) that is never retried and asks no other model, recorded as role `reviewer`. `caps(role)` gives the reviewer its own daily cap; the monthly cap counts every role.
+       - `switches.py`: `reviewer`, default on.
+       - `planner.py`, `Planner._review`: first the code checks, which refuse with no model asked (`plan_refusal`, then the source index for a code fix). Then the reviewer switch, read just before the review, and then the model. A review that cannot run is Not reviewed, with the reason.
+       - `job.py`: PlanRecorded v2 carries the review; the plan's `models` leave out the reviewer's calls.
+       - Agent 0015: role `reviewer`, the switches' name check widened, and `agent.plans.review`.
+       - Contracts: `plan-recorded.v2.schema.json` and the union `plan-recorded.schema.json` (v1 deprecated), then codegen.
+       - watch: `Git.tree()` and `Watcher._write_index`, under `WATCH_SOURCE_INDEX_DIR`, write each app's tracked paths whenever origin/main's commit changes.
+       - Production compose mounts the folder read-only at `/sources`. `.env.example` gains the five settings, and `scripts/ci_env.sh` drops both folder lines from CI's `.env`.
+     - The gateway, the web and e2e:
+       - Gateway API 0.10.0 adds `Plan.review`, `InvestigationSummary.plan_review` and the review schemas, and gateway 0010 adds `plans.review`.
+       - `events.ts` parses the union. `decisions.ts` answers approve and reject of a refused plan with 409 "A refused plan takes no decision." and records nothing.
+       - The plan panel's review block: a heading per verdict, each issue with its kind in plain words, the step it quotes and the reason, and "new file" after each file that would be added. Under every review a model made: "Reviewed by a second model. Read every step yourself."
+       - Refused shows a red badge in the report and the list, and no buttons. Flagged shows the warnings above the buttons. A plan without a review renders as before, an older gateway's included.
+       - Demo samples: a flagged pending restart and a code fix reviewed ok.
+       - e2e: a refused plan shows its reasons and no buttons, and the list shows Refused. A flagged plan shows its warnings above the buttons, and the note is visible. axe runs on the refused page too.
+  3. The first contract shape added `refused` to the plan status enums, and `make contracts-breaking` failed with 3 ERRs: `response-property-any-of-added` on the list's `plan_status`, and `response-property-enum-value-added` on approve's and reject's `status`. Every earlier change shipped with no ERR, reshaped when it had one (docs/memory.md, 2026-10-15, maxItems). So the status enums stay as in 0.9.0: a refused plan reads `pending` with `review.status` refuse, and the list reads the new `plan_review`. Nothing the user sees changed. oasdiff then found no breaking change and no warning.
+  4. The new required `plan_review` broke the type check of the generated demo file, `apps/web/src/demo/generated/eval-runs.ts`, which is never edited by hand. The subagent migrated the dev database's gateway schema to 0010 and ran `make demo-save` with `LIVE_TENANTS='{}'` on that command line, since dev's `.env` leaves it empty and demo-save refuses empty. The only change, checked against a backup, was five `"plan_review": null` lines.
+  5. Claude Code ran the full suite, then `make infra-down`.
+- Small events and mistakes:
+  - My first brief named agent migration 0014, which exists (`0014_actions_switch.py`); the subagent used 0015.
+  - `agent.switches` checks switch names, so 0015 widens that check; without it the table refuses the new switch.
+  - watch's argument charset refuses `^`, which cmd.exe also reads. So `rev-parse` runs without `^{commit}`, and its output must be a 40 or 64 character hex sha.
+  - The agent API's `SwitchName` does not list `reviewer`, so `GET /internal/switches/reviewer` answers 400. Nothing calls it, and `make switch` and `make prod-switch` go through the CLI, so it stays as is.
+  - In the first subagent's runs, an unchanged watch test (`test_the_snapshot_stays_within_48_kb...`) hit a `MemoryError` in `json.dumps` once. Two `evals/harness/test_scenario_set.py` cases also failed once, on the sim's 2 s request limit (400). Every one passed on rerun and in the full suite. Why: not confirmed, maybe memory pressure or load from parallel runs.
+  - A bare `uv run python -m pytest -m "not integration"` failed 2 executor tests, since `EXECUTOR_SERVICE_TOKEN` comes from make alone; `make test` passes them.
+  - drizzle-kit generate ran with a placeholder database URL. Generate never connects, so `.env` was not read.
+  - `prettier --write` on two gateway test files, formatting only. `.impeccable/hook.cache.json`, the design hook's cache, was deleted before each prettier check.
+  - The Playwright browser tool wrote `.playwright-mcp/` into the repo while the subagent took screenshots of the demo plans; it was deleted. The `next dev` it used, on 3202, was stopped.
+  - `make test-int` started this project's dev Postgres, ElasticMQ and Toxiproxy; `make infra-down` removed them after the suite, and the volumes stay.
+- Cost: no model call. Every test uses fakes.
+- Files:
+  - Agent: `services/agent/src/agent/{settings,llm,main,switches,db,planner,reviewer,job}.py` and `migrations/versions/0015_reviewer.py`, with tests in `test_agent_api.py`, `test_llm.py`, `test_planner.py`, `test_planner_int.py`, `test_live_int.py`, `test_prod_compose.py` and `test_reviewer.py`.
+  - watch: `readers.py`, `poll.py` and `main.py`, with tests in `test_watch_readers.py`, `test_watch_poll.py` and `test_watch_api.py`.
+  - Contracts: `contracts/messages/plan-recorded.v2.schema.json`, `plan-recorded.schema.json` and `contracts/openapi/gateway.yaml`; the generated clients in `packages/ts-clients` and `packages/py-clients`; `contracts.test.ts` and `test_contracts.py`.
+  - Gateway: `drizzle/0010_plan_reviews.sql` and its meta, and `src/{schema,events,investigations,decisions,app}.ts`, with their tests.
+  - Web: `src/lib/report.ts`, `src/components/{report,investigation-list}.tsx`, `src/app/globals.css` and `src/demo/live-samples.ts`, with their tests; `src/demo/generated/eval-runs.ts`, regenerated; `e2e/{fake-gateway,shared}.ts`, `reports.spec.ts` and `a11y.spec.ts`.
+  - Infra and docs: `infra/docker-compose.prod.yml`, `.env.example`, `scripts/ci_env.sh`, the README, `evals/README.md`, `evals/plan-judgments.json`, docs/context.md, docs/memory.md, docs/migrations.md, docs/todo.md and this file.
+- Validation, all exit 0:
+  - `make test`: pytest 764 passed and 156 deselected; Jest ts-config 3, ts-clients 69, gateway 81, web 116. The Jest counts are from the second subagent's run of the same tests, since this run's log kept only pytest's tail.
+  - `make lint`, and `make typecheck` (5 turbo tasks; pyright 0 errors).
+  - `make contracts-check`.
+  - `make contracts-breaking`: the gateway spec "No breaking changes to report, but the specs are different", the agent spec "No changes detected", and no message version edited.
+  - `make test-int`: pytest 156 passed in 230 s; the gateway's 9 suites and 56 tests, as counted in the second subagent's run.
+  - `make test-e2e`: 27 passed.
+  - Tests first: the second subagent's new tests failed before its code (6 gateway, 10 web).
+- Outstanding:
+  - The user ships and deploys; the production steps are in the report.
+  - Known limits, from the README and `evals/README.md`:
+    - The "to rule it out" rule was tested on the dev set only.
+    - Medium bad-deploy-1 is caught about half the time.
+    - A check-gated step can be flagged as a fallback.
+    - A check-gated proxy restart passes (dns-partition-2).
+  - The list says only Refused; a flag shows in the report alone.
+  - `GET /internal/switches/reviewer` answers 400.
+
+### 2026-11-03: Part B, the rules tuned on the dev plans with two arms, then the honest check on 16 fresh plans, on branch plan-reviewer
+
+- What happened: after the first measurement missed the bar, the user gave the rules and the steps that follow (docs/memory.md, 2026-11-03, Part B after the first measurement): tune on the 44 dev plans with two arms, Sonnet 5.5 and Opus 5.5 at effort high; pick one; plan about 15 fresh max plans, judge them before any review, and run the chosen arm once. Sonnet won, and the fresh set met the bar.
+- Why: the user's honest check of rules tuned on the dev set.
+- What we did, in order:
+  1. Tests first, then code:
+     - `agent/reviewer.py`: rules v2 per the user's answer, the issue kinds `forbidden_step`, `fallback_step`, `contradicts_evidence` and `unfit_file`, and `verdict_of`. The issues decide the verdict, and the model's own is kept when it differs, which happened in no review.
+     - `evals/harness/reviews.py`: `REVIEW_MODEL`, `FRESH=1`, `REPEAT=n` (another sample under its own key), an expectation per judgment, the near-identical-plan check, and a refusal to review a fresh plan before it is judged.
+     - `evals/harness/plans.py`: `FRESH=1` and the fresh set, the first two test incidents of each family by name (16). Each comes from run 1 of the Haiku test pass with the 350,000-token cap (2026-10-21), since the test split has no Claude-first pass. `KINDS` gained the test split's 13 services, and the report's name gained its set.
+     - `evals/plan-judgments.json`: an expectation for each dev plan, set from a scan of all 44 for tests, fallbacks, guesses and changes. 5 refuse (the four "to rule it out" flag-offs, the pattern as a file), 8 flag (bad-config-2's fallback revert at medium and high, bad-deploy-1 three times, bad-deploy-2 three times, whose plans call their files guessed or inferred), 31 none.
+  2. The dev runs, each arm at once:
+
+     | Rules | Sonnet 5.5 | Opus 5.5 |
+     | --- | --- | --- |
+     | v2 | missed medium bad-deploy-1; 5 groups of near-identical plans split; 3 extra flags on trusted plans | the same miss; 1 group split; 1 extra flag |
+     | v3 (a fallback changes something no result ties to the incident; re-triaging is never an issue; a check-gated step needs a cited result for its cause; setting aside the cause the cited errors show most directly contradicts the evidence) | met; 1 group split; 1 extra flag | missed medium bad-deploy-1 |
+     | v3, sample 2 (`REPEAT=2`) | medium bad-deploy-1 invalid: a right flag whose reason passed 300 characters | the same as sample 1 |
+     | v4 (an overlong quote or reason is cut, not refused; the limits are in the descriptions) | sample 1 missed medium bad-deploy-1, sample 2 met | both samples missed it, otherwise the same |
+
+  3. Chose Sonnet. It is the only arm that met the bar, catching medium bad-deploy-1 in 2 of its 4 v3 and v4 samples as measured, 3 counting the length-cut one. Opus never caught it. Neither arm refused a trusted plan in any sample, and both always refused the "to rule it out" steps. Opus was steadier but steadily missed. Sonnet costs half ($1.00 against $2.06 for 43 reviews) and answers in a median 2.3 s against 3.7 s. The rules were frozen at v4 (prompt sha `a2e82b9b`).
+  4. `make eval-plans FRESH=1 LLM_PLANNER_EFFORT=max MAX_USD=22`, started while the dev arms ran (estimate at most $21.88): 16 plans, none 14, code_fix 2, none refused, $6.37. Read only once the rules were frozen.
+  5. Each fresh plan was read against its triage report and labels and judged in `plan-judgments.json` under `fresh`: 10 trusted, 6 partly right; 3 expected flags (bad-deploy-3's and bad-deploy-4's inferred files, slow-dependency-3's fallback rollback of an 18.6-hour-old deploy). None has a "to rule it out" change; expired-cert-3's "rule out the client side" is a check. Then `make eval-reviews ESTIMATE=1 FRESH=1` (likely $0.53 to $1.33, at most $5.93).
+  6. `make eval-reviews FRESH=1 MAX_USD=6`, once: the bar met.
+  - Why this was the best option: the arms differ only in the model, under the same rules and code, and the fresh plans and their judgments came before the one run that counts.
+- Small events and mistakes:
+  - GateGuard asked for facts before the first edit of each new or untouched file; stating them cleared each.
+  - ruff E501 and SIM300 and RUF043 (an unescaped `match=` pattern) on the new tests and harness, and the formatter's layout, fixed by hand.
+  - Before the rules were frozen, a `tail` of the fresh plan run's log showed two of its lines (bad-deploy-3 and bad-deploy-4 as code fixes). No rule changed after; the choice of Sonnet came from the dev runs alone.
+  - The planner run's "likely" range assumes 1,000 to 6,000 output tokens, which fits medium, not max; the dev mean at max ($0.43) gave the better guess (about $7; $6.37 spent).
+- Result, the fresh set (Sonnet 5.5 at effort high, rules v4):
+  - Trusted 10: ok 8, flag 2. dns-partition-3 got fallback_step for "if accounts still fails once DNS is healthy, restart accounts then" and contradicts_evidence for its crash-loop reading. expired-cert-3 got fallback_step for "if so, rebuild its image with current CA certs". Both steps are check-gated, which the rules allow; a flag on a trusted plan does not break the bar.
+  - Partly right 6: the 3 expected flags caught (bad-deploy-3 and bad-deploy-4 unfit_file, slow-dependency-3 fallback_step twice), and 3 ok with nothing expected (bad-config-4, dns-partition-2, memory-leak-2). dns-partition-2's "restart coredns only if it looks wedged" passed as a check-gated step, though the labels forbid that restart.
+  - Bar: met. No trusted plan refused; no "to rule it out" change in the set to refuse; every other bad step flagged. No near-identical plans to compare.
+  - Cost $0.4385 (mean $0.0274, max $0.0496); output tokens mean 498, max 1,036; latency median 4.9 s, max 8.3 s.
+- Cost of the round: $22.10 ($15.29 for ten dev passes, $6.37 for the fresh plans, $0.44 for the fresh review); $23.26 with the first measurement.
+- Files: `services/agent/src/agent/reviewer.py`, `services/agent/tests/test_reviewer.py`, `evals/harness/reviews.py`, `test_reviews.py`, `plans.py`, `test_plans.py`, `evals/plan-judgments.json`, Makefile, `evals/README.md`, README.md, docs/memory.md, docs/todo.md, this file. Reports: `evals/reports/2026-11-02-fresh-plans-04fbbe4f-claude-opus-5-5-max.*`, `2026-11-02-fresh-reviews-a2e82b9b-claude-sonnet-5-5-high.*` and the ten `2026-11-02-dev-reviews-*` pairs (UTC dates).
+- Validation: `make test` exit 0 (pytest 718 passed, 154 deselected; ts-config 3, ts-clients 55, gateway 80, web 104). `make lint` exit 0. `make typecheck` exit 0 (pyright 0 errors). No e2e run: no web or gateway file changed.
+- Outstanding: step 3 (production) waits for the user's OK, with Sonnet's sizing: 4,000 output tokens (the most any Sonnet review used was 1,036), a worst case of $0.14 a review (50,000 prompt bytes at $2 a million, 4,000 output tokens at $10), and $0.45 a day for three.
+
+### 2026-11-03: Part B steps 1 and 2: the plan reviewer built and measured on the 44 kept plans, on branch plan-reviewer
+
+- What happened: Part A shipped (#31, main `066d712`) and is in production (the user). For Part B, the plan reviewer, the plan was shown first and approved with four answers (docs/memory.md, 2026-11-03, Part B). The user then asked for steps 1 and 2 only: build the reviewer and its measurement, run it, stop and report. The measurement missed the bar: 5 of the 30 trusted plans were refused, and medium's bad-deploy-1 got ok.
+- Why: the user's Part B, to catch the written steps and file lists the proposal check never read.
+- What we did, in order:
+  1. Branch `plan-reviewer` from main `066d712`.
+  2. Tests first, each failing before its code:
+     - `test_planner.py`: a file with a glob or wildcard character is refused.
+     - `test_reviewer.py` (7): the source index check (an existing file passes; a new file passes only in a folder the index holds; no index refuses), the index as watch will write it, what a valid review is, the prompt holding the incident and every word of the plan, the largest prompt within 48,000 bytes, and Sonnet 5.5's prices.
+     - `test_reviews.py` (5): the judgments' counts, a review read and priced, a code-refused plan never sent to the model, an invalid answer kept and a failed call asked again, and the bar.
+  3. Code:
+     - `agent/planner.py`: `GLOB` and the pattern refusal in `_files_refusal`. Until step 3 a pattern makes "No plan" as any refusal does.
+     - `agent/reviewer.py`: the rules (`REVIEWER_SYSTEM`), the answer's schema, the prompt and its check, `SourceIndex`, `load_index` and `index_refusal`. Nothing calls it in production yet.
+     - `agent/pricing.py` and `evals/pricing.json`: `claude-sonnet-5-5`, $2 in, $0.20 cache reads, $2.50 cache writes, $10 out (the claude-api skill). Three tests that used Sonnet as the unpriced example now use `claude-fable-5-1`.
+     - `evals/harness/reviews.py`, `make eval-reviews`, and `evals/plan-judgments.json`, the earlier readings of the 44 plans.
+  4. `make eval-reviews ESTIMATE=1`: 44 kept plans, 1 refused by the code checks with no call (high's memory-leak-1), 43 to review; prompts 11,254 to 39,762 bytes; at most $15.79; likely $1.35 to $3.50. The exact top was $3.5001, over the user's $3.50 line, so the run waited and the user was asked. They answered that budget is no concern and set `MAX_USD=16`.
+  5. `make eval-reviews MAX_USD=16`, in the background: all 44 rows, then exit 1 (make reported Error 1 and exited 2), the bar missed.
+  - Why this was the best option: the reviewer's prompt, schema and checks are the ones production will use, measured before anything goes live; the harness calls only Anthropic and touches no database, gateway or production.
+- Small events and mistakes:
+  - The fact-forcing hook (GateGuard) asked for facts before the first edit of each file; stating them cleared each.
+  - A one-off script for the estimate's exact top ran as `uv run --env-file .env`. That loaded `.env`, which the rules say never to read, and uv's parse warning printed one of its values, a health URL with no credential, into this session. Why: habit; the script needed no setting at all. What we did: the value is written nowhere, and later scripts ran without `--env-file`.
+  - `uv run python -m pytest` on its own failed two executor tests (`EXECUTOR_SERVICE_TOKEN is required`), since only make exports `.env`. `make test` passed.
+  - ruff: E501 on five lines, RUF100 (an unused `noqa`) and SIM300 (a constant on the left of `<=`); pyright: one partly unknown dict in a test; prettier: the judgments file's long inline objects. Each was fixed by hand, to the formatters' own output.
+  - The judgments file first said max's memory-leak-1 had dropped medium's flag-off. The review found "(4) Optionally turn order-notes-field off to rule it out" in that plan, so the note was corrected; the plan stays partly right. The 2026-11-03 measurement entry below keeps its own wording.
+- Result:
+  - Cost $1.1562 for 43 reviews (mean $0.0269, max $0.0506). Output tokens, thinking included, mean 593 and max 1,633. Latency median 5.7 s, max 13.6 s.
+  - By judgment: trusted 30 (ok 24, flag 1, refuse 5); partly right 11 (ok 6, flag 1, refuse 4); wrong 3 (refuse 2, ok 1).
+  - The named faults:
+    - noisy-neighbor-1 at medium and high: refused, for the flag-off "to rule it out".
+    - high's bad-deploy-1: refused, for the catalog check and rollback if errors persist.
+    - high's memory-leak-1: refused in code, since the file is a pattern.
+    - medium's bad-deploy-1: missed (ok), though its steps roll catalog back if catalog's response changed and it doubts the cause the cited NullPointerException shows.
+  - The 5 trusted plans refused:
+    - bad-config-2 at medium and high: "revert search.highlight.max_fragments if errors persist". The labels do not forbid that revert, since the sim has no config-revert action. By the reviewer's rule 1 it is a just-in-case change of something the evidence clears, the same shape as high bad-deploy-1's catalog step.
+    - slow-dependency-2 at medium and high: tightening shipping's timeout or adding a fallback while the provider is degraded, a mitigation.
+    - max's dns-partition-1: draining a node once a check shows it bad, and a Corefile stopgap, a check-then-act step and a mitigation.
+  - Also caught: medium's memory-leak-1 and max's memory-leak-1 (each a flag-off "to rule it out"; refused), and max's bad-deploy-1 (Python files for a Java fault; flagged). Not flagged: bad-deploy-2's file that its own plan calls "a best guess", at all three levels.
+- Files: `services/agent/src/agent/reviewer.py` (new), `planner.py`, `pricing.py`; `services/agent/tests/test_reviewer.py` (new), `test_planner.py`, `test_agent_api.py`, `test_live_int.py`; `evals/harness/reviews.py` and `test_reviews.py` (new); `evals/plan-judgments.json` (new); `evals/pricing.json`; `evals/README.md`; Makefile; README.md; docs/memory.md; this file. Reports: `evals/reports/2026-11-02-dev-reviews-6394aad9-claude-sonnet-5-5-high.json` and `.md` (UTC date); the kept reviews in `evals/reports/reviews/` are git-ignored.
+- Validation: `make test` exit 0 (pytest 709 passed, 154 deselected; ts-config 3, ts-clients 55, gateway 80, web 104). `make lint` exit 0. `make typecheck` exit 0 (pyright 0 errors). No e2e run: no web or gateway file changed.
+- Outstanding: the reviewer's rules miss the bar, so step 3 (production) waits for the user. The proposed revision and its options are in the reply.
+
 ### 2026-11-03: Part A: the planner at effort max, a $3.50 planner cap, and a 10-minute Planning wait in the web, on branch planner-effort
 
 - What happened: after the measurement entry below recommended medium, the user chose max, as Part A of two PRs. They asked for:

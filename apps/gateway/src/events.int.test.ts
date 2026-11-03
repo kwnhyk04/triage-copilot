@@ -417,6 +417,72 @@ describe('agent events against Postgres and ElasticMQ', () => {
     expect((await mirror(live)).actions).toHaveLength(1);
   });
 
+  it('stores a v2 plan with its review, a refused one with its plan, and a v1 plan with none', async () => {
+    const plan = {
+      kind: 'restart_service',
+      target: 'postgres',
+      files: [],
+      rationale: 'Postgres restarts with exit 137 [tc_01J9ZK3Q7M]. Restart it.',
+    };
+    const refusal = {
+      status: 'refuse',
+      by: 'check',
+      model: null,
+      issues: [
+        {
+          kind: 'code_check',
+          quote: 'restart_service of postgres',
+          reason: 'postgres is a database: a plan never restarts or changes a database',
+        },
+      ],
+      reason: null,
+      new_files: [],
+    };
+    const v1 = (investigationId: string) => ({
+      schema_version: 1,
+      plan_id: randomUUID(),
+      investigation_id: investigationId,
+      plan,
+      problem: null,
+      models: [
+        {
+          part: 'plan',
+          provider: 'anthropic',
+          model: 'claude-opus-5-5',
+          calls: 1,
+          failed: 0,
+          reason: null,
+        },
+      ],
+      recorded_at: '2026-11-03T11:02:15Z',
+    });
+    const [refused, empty, old] = [
+      (await group()).investigationId,
+      (await group()).investigationId,
+      (await group()).investigationId,
+    ];
+    const none = { plan: null, problem: 'No model gave a plan: gemini 429', review: null };
+    for (const message of [
+      { ...v1(refused), schema_version: 2, review: refusal },
+      { ...v1(empty), schema_version: 2, ...none },
+      v1(old),
+    ]) {
+      expect(await put(['plan-recorded', message])).toBe('stored');
+    }
+    const stored = async (id: string) =>
+      (
+        await db.sql<{ kind: string | null; problem: string | null; review: unknown }[]>`
+          SELECT kind, problem, review FROM gateway.plans WHERE investigation_id = ${id}`
+      )[0];
+    expect(await stored(refused)).toEqual({
+      kind: 'restart_service',
+      problem: null,
+      review: refusal,
+    });
+    expect(await stored(empty)).toEqual({ kind: null, problem: none.problem, review: null });
+    expect(await stored(old)).toEqual({ kind: 'restart_service', problem: null, review: null });
+  });
+
   it('keeps the first report: a second, different one adds no actions and moves no group', async () => {
     const { investigationId: id } = await group();
     const [, , , , report] = investigation(id);

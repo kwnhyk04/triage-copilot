@@ -1,0 +1,1 @@
+ALTER TABLE "gateway"."plans" ADD COLUMN "review" jsonb;

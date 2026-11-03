@@ -35,6 +35,15 @@
       "cache_write": 5.0,
       "output": 20.0,
       "note": "The live planner's model (P2.1). It marks nothing for the cache, so its worst case bills input at $4."
+    },
+    "claude-sonnet-5-5": {
+      "source": "the claude-api skill's model table and its Sonnet 5.5 migration notes (2026-11-03): $2 in and $10 out per million tokens, cache reads $0.20, 5-minute cache writes $2.50",
+      "billing": "credits",
+      "input": 2.0,
+      "cached_input": 0.2,
+      "cache_write": 2.5,
+      "output": 10.0,
+      "note": "The plan reviewer's model (Part B). It marks nothing for the cache, so its worst case bills input at $2."
     }
   }
 }

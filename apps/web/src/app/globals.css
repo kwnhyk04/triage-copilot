@@ -844,7 +844,30 @@ p.illustrative {
   border-radius: var(--radius);
   background: var(--sunken);
 }
+/* A plan's review: tinted red when it refused the plan, amber when it warns, else a plain line. */
+.review {
+  display: grid;
+  gap: 8px;
+}
+.review.bad,
+.review.warn {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+}
+.review.bad {
+  background: var(--bad-tint);
+}
+.review.warn {
+  background: var(--warn-tint);
+}
+.review.bad h3 {
+  color: var(--bad);
+}
+.review.warn h3 {
+  color: var(--warn);
+}
 .files,
+.issues,
 .others {
   display: grid;
   gap: 6px;

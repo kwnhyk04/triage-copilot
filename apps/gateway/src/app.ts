@@ -34,12 +34,12 @@ export type Decide = (
   decision: Schemas['Decision'],
 ) => Promise<Schemas['ProposedAction'] | 'not_found' | 'already_decided'>;
 
-/** Records a human decision on a plan that holds a proposal; nothing runs from it. */
+/** Records a human decision on a plan that holds a proposal its review did not refuse. */
 export type DecidePlan = (
   planId: string,
   verdict: 'approved' | 'rejected',
   decision: Schemas['Decision'],
-) => Promise<Schemas['Plan'] | 'not_found' | 'already_decided' | 'no_proposal'>;
+) => Promise<Schemas['Plan'] | 'not_found' | 'already_decided' | 'no_proposal' | 'refused'>;
 
 export interface AppDeps {
   config: Pick<
@@ -344,6 +344,9 @@ export async function buildApp({
       }
       if (result === 'no_proposal') {
         return problem(reply, 409, 'Conflict', 'The plan holds no proposal to decide.');
+      }
+      if (result === 'refused') {
+        return problem(reply, 409, 'Conflict', 'A refused plan takes no decision.');
       }
       return result;
     });

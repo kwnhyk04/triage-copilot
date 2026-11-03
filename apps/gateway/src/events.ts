@@ -11,6 +11,7 @@ import {
 } from '@aws-sdk/client-sqs';
 import {
   parseMessage,
+  type PlanRecorded,
   type ReportRecorded,
   type StepRecorded,
   type ToolCall,
@@ -147,7 +148,7 @@ export function toolOutcome(
 }
 
 /** A message body checked against its contract; any failure is an InvalidEvent. */
-function parse<K extends 'step-recorded' | 'report-recorded' | 'plan-recorded.v1'>(
+function parse<K extends 'step-recorded' | 'report-recorded' | 'plan-recorded'>(
   name: K,
   body: string,
 ) {
@@ -239,14 +240,10 @@ export async function storeEvent(
     });
   }
   if (type === 'plan-recorded') {
-    const {
-      plan_id,
-      investigation_id: id,
-      plan,
-      problem,
-      models,
-      recorded_at,
-    } = parse('plan-recorded.v1', body);
+    const message: PlanRecorded = parse('plan-recorded', body);
+    const { plan_id, investigation_id: id, plan, problem, models, recorded_at } = message;
+    // v1 carries no review.
+    const review = message.schema_version === 2 ? message.review : null;
     return sql.begin(async (tx) => {
       const tenantId = await tenantOf(tx, id);
       if (tenantId === undefined) return 'unknown_investigation';
@@ -254,10 +251,11 @@ export async function storeEvent(
       await tx`
         INSERT INTO gateway.plans
           (id, tenant_id, investigation_id, kind, target, files, rationale, problem, models,
-           recorded_at)
+           review, recorded_at)
         VALUES (${plan_id}, ${tenantId}, ${id}, ${plan?.kind ?? null}, ${plan?.target ?? null},
                 ${JSON.stringify(plan?.files ?? [])}::text::jsonb, ${plan?.rationale ?? null},
-                ${problem}, ${JSON.stringify(models)}::text::jsonb, ${recorded_at})
+                ${problem}, ${JSON.stringify(models)}::text::jsonb,
+                ${review === null ? null : JSON.stringify(review)}::text::jsonb, ${recorded_at})
         ON CONFLICT DO NOTHING`;
       return 'stored';
     });

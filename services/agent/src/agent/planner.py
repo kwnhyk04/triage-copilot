@@ -4,17 +4,20 @@ to approve or reject; nothing runs from it in phase 2.
 The planner is told the triage's report, the results it cites, the app's catalog and source paths,
 and the newest snapshot watch attached to the group's alerts. It answers one plan: none,
 restart_service or code_fix, a target from the catalog, allowlisted files, and free text only in the
-rationale. The chain is the planner's Claude, then the free models (agent.llm.Router.plan). The
-check here (proposal check version 2 on real targets, P2.3) then refuses in code a plan the evidence
-does not allow: safety never rests on the prompt.
+rationale. The chain is the planner's Claude, then the free models (agent.llm.Router.plan). Then the
+plan's review (Part B): the check here (proposal check version 2 on real targets, P2.3) and watch's
+source index refuse in code a plan the evidence does not allow, and the reviewer's Claude reads
+what code cannot (agent.reviewer): safety never rests on the prompt. A refused plan is kept, with
+its review.
 """
 
 import asyncio
 import fnmatch
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, cast
 from uuid import UUID
 
@@ -23,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from agent.live import render
 from agent.model import PROMPT_OVERHEAD, ModelCall, PlanRequest, ToolSpec
+from agent.reviewer import ReviewDraft, index_refusal, load_index, review_request, verdict_of
 from py_clients.clients import ApiError
 from py_clients.generated.gateway import AlertContext
 from watch.catalog import CATALOGS, RESTARTABLE, AppName, Catalog
@@ -41,6 +45,8 @@ SOURCES: dict[AppName, tuple[str, ...]] = {
 }
 # Folders a source path may still not cross: migrations, generated code and dependencies.
 NOT_SOURCE = frozenset({"migrations", "drizzle", "generated", "node_modules"})
+# A glob's or wildcard's characters: a plan names files, never patterns, which SOURCES would match.
+GLOB = frozenset("*?[]{}")
 
 PLANNER_SYSTEM = """You are Triage Copilot's planner. A triage of an alert group from a real app \
 that runs on this PC (freight-audit or filing-lens) found a real incident. Plan its fix for a \
@@ -293,6 +299,8 @@ def _files_refusal(files: Sequence[str], app: AppName) -> str | None:
         return "a code fix names the files it changes"
     patterns = SOURCES[app]
     for path in files:
+        if GLOB & set(path):
+            return f"{path} is a pattern, not a file: name each file it changes"
         parts = path.split("/")
         if "\\" in path or ":" in path or path.startswith("/") or {"", ".", ".."} & set(parts):
             return f"{path} is no plain path inside the repo"
@@ -350,13 +358,49 @@ class PlanModel(Protocol):
     ) -> tuple[dict[str, Any] | None, Sequence[ModelCall]]: ...
 
 
-class Planner:
-    """Makes one real incident's plan: its prompt, the plan's chain, and the check on the answer.
-    `read` is the gateway's alert context (AlertContextClient.get), where the snapshots are."""
+class ReviewModel(Protocol):
+    async def review(
+        self, request: PlanRequest
+    ) -> tuple[dict[str, Any] | None, Sequence[ModelCall], str | None]: ...
 
-    def __init__(self, model: PlanModel, read: Callable[[UUID], AlertContext]) -> None:
+
+def _review_of(
+    status: str,
+    by: str | None,
+    model: str | None,
+    issues: list[dict[str, Any]],
+    reason: str | None = None,
+    new_files: Collection[str] = (),
+) -> dict[str, Any]:
+    """A plan's review as PlanRecorded v2 holds it."""
+    why = None if reason is None else reason[:500]
+    return {
+        "status": status,
+        "by": by,
+        "model": model,
+        "issues": issues,
+        "reason": why,
+        "new_files": list(new_files),
+    }
+
+
+class Planner:
+    """Makes one real incident's plan: its prompt, the plan's chain, then the plan's review: the
+    code checks, and the reviewer's Claude on a plan they pass. `read` is the gateway's alert
+    context (AlertContextClient.get), where the snapshots are; `sources` is the folder of watch's
+    source index, without which every code fix is refused."""
+
+    def __init__(
+        self,
+        model: PlanModel,
+        read: Callable[[UUID], AlertContext],
+        reviewer: ReviewModel,
+        sources: Path | None,
+    ) -> None:
         self.model = model
         self.read = read
+        self.reviewer = reviewer
+        self.sources = sources
 
     async def plan(
         self,
@@ -365,8 +409,10 @@ class Planner:
         report: Mapping[str, Any],
         evidence: Mapping[str, str],
         fired_at: datetime,
-    ) -> tuple[PlanDraft | None, str | None, Sequence[ModelCall]]:
-        """The plan, or None and why there is none, and every model call made for it."""
+        reviewing: Callable[[], bool],
+    ) -> tuple[PlanDraft | None, str | None, dict[str, Any] | None, Sequence[ModelCall]]:
+        """The plan, or None and why there is none; its review, None with no plan; and every model
+        call made for both. `reviewing` reads the reviewer switch, just before the review."""
         catalog = next(c for c in CATALOGS.values() if c.app == app)
         snapshot, unread = await asyncio.to_thread(newest_snapshot, self.read, inv)
         text = planner_text(catalog, report, evidence, snapshot, unread, fired_at)
@@ -378,11 +424,38 @@ class Planner:
         if answer is None:
             failed = next((call for call in reversed(calls) if call.outcome != "ok"), None)
             why = f"{failed.model}: {failed.error}" if failed else "no model could be asked"
-            return None, f"No model gave a plan: {why}"[:1000], calls
+            return None, f"No model gave a plan: {why}"[:1000], None, calls
         draft = parse_plan(answer, catalog)
-        refused = plan_refusal(draft, catalog, snapshot)
+        review, reviewed = await self._review(draft, catalog, snapshot, text, reviewing)
+        return draft, None, review, [*calls, *reviewed]
+
+    async def _review(
+        self,
+        draft: PlanDraft,
+        catalog: Catalog,
+        snapshot: Mapping[str, Any] | None,
+        text: str,
+        reviewing: Callable[[], bool],
+    ) -> tuple[dict[str, Any], Sequence[ModelCall]]:
+        """The code checks' refusal, with no model asked; else the reviewer's issues and the
+        verdict they give, or why no model reviewed the plan. The reviewer reads the planner's
+        view of the incident (`text`), then the plan."""
+        app, folder = catalog.app, self.sources
+        refused, new = plan_refusal(draft, catalog, snapshot), ()
+        if refused is None and draft.kind == "code_fix":
+            index = None if folder is None else await asyncio.to_thread(load_index, folder, app)
+            refused, new = index_refusal(draft.files, app, index)
         if refused is not None:
-            by = calls[-1].model if calls else "the planner"
-            problem = f"The agent's check refused {by}'s {draft.kind} of {draft.target}: {refused}"
-            return None, problem[:1000], calls
-        return draft, None, calls
+            quote = f"{draft.kind} of {draft.target}"
+            issue = {"kind": "code_check", "quote": quote[:300], "reason": refused[:1000]}
+            return _review_of("refuse", "check", None, [issue]), []
+        if not await asyncio.to_thread(reviewing):
+            off = "the reviewer is switched off"
+            return _review_of("not_reviewed", None, None, [], off, new), []
+        answer, calls, why = await self.reviewer.review(review_request(text, draft, new))
+        model = calls[-1].model if calls else None
+        if answer is None:
+            return _review_of("not_reviewed", None, model, [], why, new), calls
+        issues = ReviewDraft.model_validate(answer).issues
+        found = [issue.model_dump() for issue in issues]
+        return _review_of(verdict_of(issues), "model", model, found, None, new), calls

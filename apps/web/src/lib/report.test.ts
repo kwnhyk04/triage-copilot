@@ -3,11 +3,15 @@ import {
   ago,
   causeName,
   fallbackNotes,
+  ISSUE_KINDS,
   percent,
   PLAN_STATES,
+  planBadge,
   planning,
   planNote,
   progressLine,
+  REVIEW_NOTE,
+  reviewHeading,
   STATUSES,
   statusBadge,
   stillChanging,
@@ -90,6 +94,50 @@ describe('labels', () => {
       approved: { label: 'Approved', tone: 'ok' },
       rejected: { label: 'Rejected', tone: 'neutral' },
     });
+  });
+
+  it('shows a plan its review refused as Refused, in red, and any other by its decision', () => {
+    expect(planBadge('pending', 'refuse')).toEqual({ label: 'Refused', tone: 'bad' });
+    // A flag leaves the decision to a person; an older gateway sends no review at all.
+    for (const review of ['flag', 'ok', 'not_reviewed', null, undefined] as const) {
+      expect([review, planBadge('pending', review)]).toEqual([review, PLAN_STATES.pending]);
+    }
+    expect(planBadge('approved', 'flag')).toEqual(PLAN_STATES.approved);
+  });
+
+  it("names each kind of issue a plan's review raises in plain words", () => {
+    expect(ISSUE_KINDS).toEqual({
+      forbidden_step: 'Forbidden step',
+      fallback_step: 'Fallback step',
+      contradicts_evidence: 'Contradicts the evidence',
+      unfit_file: "File doesn't fit",
+      code_check: 'Code check',
+    });
+  });
+
+  it("heads a plan's review with its verdict, and who refused a refused plan", () => {
+    const review = { status: 'ok', by: 'model', reason: null } as const;
+    expect(reviewHeading(review, true)).toBe('Reviewed: no issues');
+    const unreviewed = { status: 'not_reviewed', by: null } as const;
+    expect(reviewHeading({ ...unreviewed, reason: 'its daily cap is spent' }, true)).toBe(
+      'Not reviewed: its daily cap is spent',
+    );
+    expect(reviewHeading({ ...unreviewed, reason: null }, true)).toBe(
+      'Not reviewed: no reason was recorded',
+    );
+    // Warnings ask to be read before a decision, and stay once one is made.
+    expect(reviewHeading({ ...review, status: 'flag' }, true)).toBe(
+      'Read these warnings before deciding',
+    );
+    expect(reviewHeading({ ...review, status: 'flag' }, false)).toBe('Warnings from the review');
+    expect(reviewHeading({ ...review, status: 'refuse' }, false)).toBe('Refused by the review');
+    expect(reviewHeading({ ...review, status: 'refuse', by: 'check' }, false)).toBe(
+      "Refused by the agent's checks",
+    );
+  });
+
+  it('notes that a second model reviewed the plan, never that the plan is safe', () => {
+    expect(REVIEW_NOTE).toBe('Reviewed by a second model. Read every step yourself.');
   });
 
   it('says what approving does: a restart runs once while the actions switch is on', () => {

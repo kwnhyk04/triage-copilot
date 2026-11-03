@@ -9,10 +9,12 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from sqlalchemy import create_engine
 
+from agent.llm import REVIEW_OUTPUT_CAP
 from agent.main import create_app, make_routers
 from agent.planner import PLAN_INPUT_BYTES
 from agent.pricing import RATES, worst
 from agent.providers import plan_limits
+from agent.reviewer import REVIEW_INPUT_BYTES
 from agent.settings import Settings
 from py_config import ConfigError, load_settings
 
@@ -111,8 +113,8 @@ def test_every_claude_role_has_the_daily_and_monthly_caps_and_needs_a_priced_mod
     assert (gemini.daily_usd, gemini.monthly_usd) == (None, None)
     lower: dict[str, Any] = {**keyed, "llm_claude_monthly_usd": 5}
     assert Settings(**lower).role("small").monthly_usd == 5
-    unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-sonnet-5-5"}
-    with pytest.raises(ValidationError, match=r"claude-sonnet-5-5 has no prices in agent/"):
+    unpriced: dict[str, Any] = {**keyed, "llm_small_model": "claude-fable-5-1"}
+    with pytest.raises(ValidationError, match=r"claude-fable-5-1 has no prices in agent/"):
         Settings(**unpriced)
 
 
@@ -141,10 +143,59 @@ def test_the_planner_is_opus_at_max_effort_under_its_own_daily_cap(
     assert most == pytest.approx(1.44)
     assert 2 * 0.98 + most <= (planner.daily_usd or 0.0)
     assert planner.api_key == "sk-ant-test"
-    for bad in ({"llm_planner_model": "claude-sonnet-5-5"}, {"llm_planner_effort": "extreme"}):
+    for bad in ({"llm_planner_model": "claude-fable-5-1"}, {"llm_planner_effort": "extreme"}):
         changed: dict[str, Any] = {**keyed, **bad}
         with pytest.raises(ValidationError):
             Settings(**changed)
+
+
+def test_the_reviewer_is_sonnet_at_high_effort_under_its_own_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The defaults, whatever a developer's .env sets (make exports it).
+    for name in ("LLM_REVIEWER_MODEL", "LLM_REVIEWER_EFFORT", "LLM_REVIEWER_DAILY_USD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("SOURCE_INDEX_DIR", raising=False)
+    assert offline().reviewer() is None
+    assert offline().source_index_dir is None
+    keyed: dict[str, Any] = {**offline().model_dump(), "anthropic_api_key": SecretStr("sk-ant-k")}
+    reviewer = Settings(**keyed).reviewer()
+    assert reviewer is not None
+    assert (reviewer.name, reviewer.provider, reviewer.model, reviewer.effort) == (
+        "reviewer",
+        "anthropic",
+        "claude-sonnet-5-5",
+        "high",
+    )
+    # $0.45 a UTC day of its own, inside TC's $15 a month, until Claude's credits end.
+    caps = (reviewer.daily_usd, reviewer.monthly_usd, reviewer.until)
+    assert caps == (0.45, 15.0, date(2026, 11, 10))
+    # Three reviews a day fit at their worst case: the largest prompt and the whole allowance.
+    most = worst(RATES["claude-sonnet-5-5"], REVIEW_INPUT_BYTES, REVIEW_OUTPUT_CAP, caches=False)
+    assert 3 * most <= (reviewer.daily_usd or 0.0) < 4 * most
+    assert reviewer.api_key == "sk-ant-k"
+    for bad in (
+        {"llm_reviewer_model": "claude-fable-5-1"},
+        {"llm_reviewer_effort": "extreme"},
+        {"llm_reviewer_daily_usd": -1},
+    ):
+        changed: dict[str, Any] = {**keyed, **bad}
+        with pytest.raises(ValidationError):
+            Settings(**changed)
+
+
+def test_only_live_triage_s_router_reviews_plans() -> None:
+    free: dict[str, Any] = {**OFFLINE.model_dump(), **KEYS}
+    keyed: dict[str, Any] = {**free, "anthropic_api_key": SecretStr("k")}
+    # Nothing connects: the routers only hold the engine for their limiter's checks.
+    engine = create_engine(OFFLINE.agent_database_url)
+    sim, live = make_routers(Settings(**keyed), engine)
+    assert sim.reviewer is None
+    assert live.reviewer is not None
+    assert live.reviewer.role == Settings(**keyed).reviewer()
+    # Without Claude's key there is no reviewer, and every review says so.
+    _, unkeyed = make_routers(Settings(**free), engine)
+    assert unkeyed.reviewer is None
 
 
 def test_live_tenants_map_each_tenant_to_its_app(monkeypatch: pytest.MonkeyPatch) -> None:

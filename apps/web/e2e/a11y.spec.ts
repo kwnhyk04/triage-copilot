@@ -14,8 +14,10 @@ const SIGNED_IN = [
   `/demo/investigations/${EVAL_RUNS[0]?.id ?? ''}`,
   '/investigations',
   '/investigations?source=sim',
+  // A flagged plan's warnings, a reviewed one's note, and a refused one's reasons.
   `/investigations/${WORKER_OUT_OF_MEMORY.id}`,
   `/investigations/${ANSWERS_AFTER_RENAME.id}`,
+  `/investigations/${E2E.refusedId}`,
   // Still planning on the first visit, then with its plan.
   `/investigations/${E2E.planningId}`,
   '/no-such-page',

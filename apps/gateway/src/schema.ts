@@ -3,6 +3,7 @@ import type {
   ActionApprovedV2,
   InvestigationRequestedV2,
   PlanRecordedV1,
+  PlanRecordedV2,
   ReportRecordedV2,
 } from '@triage/ts-clients/messages';
 import { sql } from 'drizzle-orm';
@@ -264,7 +265,7 @@ export const investigationReports = gateway.table(
   ],
 );
 
-// The agent's plan for a real incident's fix (PlanRecorded v1, src/events.ts), one per
+// The agent's plan for a real incident's fix (PlanRecorded, src/events.ts), one per
 // investigation. Without a proposal (kind null), problem says why.
 export const plans = gateway.table(
   'plans',
@@ -280,6 +281,8 @@ export const plans = gateway.table(
     rationale: text('rationale'),
     problem: text('problem'),
     models: jsonb('models').$type<PlanRecordedV1['models']>().notNull(),
+    // From PlanRecorded v2 (gateway 0010); null for a v1 plan and for one without a proposal.
+    review: jsonb('review').$type<NonNullable<PlanRecordedV2['review']>>(),
     recordedAt: timestamptz('recorded_at').notNull(),
     createdAt: createdAt(),
   },

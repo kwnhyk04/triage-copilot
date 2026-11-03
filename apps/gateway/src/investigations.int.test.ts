@@ -288,6 +288,7 @@ describe('investigation list against Postgres', () => {
       source: 'live',
       cause: { root_cause_class: 'database', service: 'postgres', confidence: 0.8 },
       plan_status: null,
+      plan_review: null,
       summary,
       // The turns' tokens, the report's included.
       tokens_used: 18_460,
@@ -457,9 +458,28 @@ describe('investigation list against Postgres', () => {
       models: MODELS,
       recorded_at: '2026-10-26T10:01:30Z',
     });
-  /** A PlanRecorded v1; without a proposal it carries its problem. Returns the plan id. */
-  const plan = async (investigationId: string, proposal: boolean) => {
+  /**
+   * A PlanRecorded v1, or v2 with a review of this status; without a proposal it carries its
+   * problem. Returns the plan id.
+   */
+  const plan = async (investigationId: string, proposal: boolean, review?: 'refuse' | 'flag') => {
     const planId = randomUUID();
+    const issue = {
+      kind: review === 'refuse' ? 'forbidden_step' : 'fallback_step',
+      quote: 'If it exits again, restart redis.',
+      reason: 'Nothing cited implicates redis.',
+    };
+    const reviewed = {
+      schema_version: 2,
+      review: {
+        status: review,
+        by: 'model',
+        model: 'claude-sonnet-5-5',
+        issues: [issue],
+        reason: null,
+        new_files: [],
+      },
+    };
     expect(
       await storeEvent(
         db.sql,
@@ -474,6 +494,7 @@ describe('investigation list against Postgres', () => {
           problem: proposal ? null : 'No model gave a plan: claude-opus-5-5: Refused',
           models: [{ ...MODELS[1], part: 'plan', calls: 1 }],
           recorded_at: '2026-10-26T10:03:10Z',
+          ...(review === undefined ? {} : reviewed),
         }),
       ),
     ).toBe('stored');
@@ -481,11 +502,16 @@ describe('investigation list against Postgres', () => {
   };
 
   it('lists the top cause and the plan status the detail holds', async () => {
-    const [pending = '', approved = '', empty = '', unreported = '', causeless = ''] = await insert(
-      live,
-      5,
-    );
-    for (const id of [pending, approved, empty]) {
+    const [
+      pending = '',
+      approved = '',
+      empty = '',
+      unreported = '',
+      causeless = '',
+      refused = '',
+      flagged = '',
+    ] = await insert(live, 7);
+    for (const id of [pending, approved, empty, refused, flagged]) {
       await report(id, [
         ['resource_exhaustion', 'worker', 0.7],
         ['database', 'postgres', 0.2],
@@ -498,25 +524,38 @@ describe('investigation list against Postgres', () => {
       INSERT INTO gateway.plan_decisions (plan_id, approver, decision)
       VALUES (${decided}, 'operator', 'approved')`;
     await plan(empty, false);
+    await plan(refused, true, 'refuse');
+    await plan(flagged, true, 'flag');
 
     const top = { root_cause_class: 'resource_exhaustion', service: 'worker', confidence: 0.7 };
+    const none = { plan_review: null };
     const expected = {
-      [pending]: { cause: top, plan_status: 'pending' },
-      [approved]: { cause: top, plan_status: 'approved' },
+      [pending]: { cause: top, plan_status: 'pending', ...none },
+      [approved]: { cause: top, plan_status: 'approved', ...none },
       // A plan without a proposal takes no decision.
-      [empty]: { cause: top, plan_status: null },
-      [unreported]: { cause: null, plan_status: null },
-      [causeless]: { cause: null, plan_status: null },
+      [empty]: { cause: top, plan_status: null, ...none },
+      [unreported]: { cause: null, plan_status: null, ...none },
+      [causeless]: { cause: null, plan_status: null, ...none },
+      // A refused plan takes no decision, so it reads pending; its review says why.
+      [refused]: { cause: top, plan_status: 'pending', plan_review: 'refuse' },
+      [flagged]: { cause: top, plan_status: 'pending', plan_review: 'flag' },
     };
     const listed = (await page('source=live')).items;
     expect(
       Object.fromEntries(
-        listed.map((item) => [item.id, { cause: item.cause, plan_status: item.plan_status }]),
+        listed.map(({ id, cause, plan_status, plan_review }) => [
+          id,
+          { cause, plan_status, plan_review },
+        ]),
       ),
     ).toEqual(expected);
     for (const [id, brief] of Object.entries(expected)) {
       expect(await detail(id)).toMatchObject(brief);
     }
+    expect((await detail(refused)).plan).toMatchObject({
+      status: 'pending',
+      review: { status: 'refuse', by: 'model' },
+    });
   });
 
   it('reads running while the newest step is fresh, queued once it is stale or with none', async () => {

@@ -76,16 +76,20 @@ def switch(engine: Engine, name: Switch, on: bool) -> None:
 
 def test_live_and_the_planner_start_off_claude_on_and_the_cli_flips_them(engine: Engine) -> None:
     with engine.connect() as conn:
-        names: list[Switch] = ["live", "claude", "planner", "actions"]
-        assert [is_on(conn, name) for name in names] == [False, True, False, False]
+        names: list[Switch] = ["live", "claude", "planner", "actions", "reviewer"]
+        assert [is_on(conn, name) for name in names] == [False, True, False, False, True]
 
     assert run(engine, ["set", "live", "on"]) == "live: on"
-    assert run(engine, ["show"]) == "live: on\nclaude: on\nplanner: off\nactions: off"
+    shown = "live: on\nclaude: on\nplanner: off\nactions: off\nreviewer: on"
+    assert run(engine, ["show"]) == shown
     assert run(engine, ["set", "planner", "on"]) == "planner: on"
+    # The table's check takes the reviewer switch (0015).
+    assert run(engine, ["set", "reviewer", "off"]) == "reviewer: off"
     with pytest.raises(SystemExit):
         run(engine, ["set", "coder", "on"])
     with engine.connect() as conn:
         assert is_on(conn, "live") and is_on(conn, "planner")
+        assert not is_on(conn, "reviewer")
 
 
 def test_the_internal_api_serves_each_switch_behind_the_service_token(engine: Engine) -> None:
@@ -410,10 +414,10 @@ def test_the_triage_cap_counts_today_s_claude_spend_and_each_call_s_worst_case(
     with engine.connect() as conn:
         # Yesterday's spend (UTC) no longer counts.
         assert spent(conn, TRIAGE, 0.02) is None
-    claude_spend(engine, "claude-sonnet-5-5", 1)
+    claude_spend(engine, "claude-fable-5-1", 1)
     with engine.connect() as conn:
         # A model without a price cannot be checked against the cap, so Claude waits.
-        assert "claude-sonnet-5-5" in (spent(conn, TRIAGE, 0.0) or "")
+        assert "claude-fable-5-1" in (spent(conn, TRIAGE, 0.0) or "")
 
 
 # A Claude role with TC's monthly cap and no daily one, as an eval's Claude has.
@@ -464,6 +468,32 @@ def test_the_planner_cap_counts_today_s_plans_only_and_the_monthly_cap_counts_bo
     claude_spend(engine, "claude-opus-5-5", 699_500, role="planner")  # $13.99 more of plans
     with engine.connect() as conn:
         # TC's $15 a month counts plans and triage alike: $14.98 spent.
+        assert "TC's monthly Claude cap" in (spent(conn, MONTHLY, 0.03) or "")
+
+
+# The reviewer's Claude: Sonnet at effort high, capped at $0.45 a UTC day.
+REVIEWER = replace(
+    PLANNER, name="reviewer", model="claude-sonnet-5-5", daily_usd=0.45, effort="high"
+)
+
+
+def test_the_reviewer_cap_counts_today_s_reviews_only_and_the_monthly_cap_counts_them(
+    engine: Engine,
+) -> None:
+    claude_spend(engine, "claude-sonnet-5-5", 40_000, role="reviewer")  # $0.40 at $10 per million
+    with engine.connect() as conn:
+        assert "reviewer cap of $0.45" in (spent(conn, REVIEWER, 0.14) or "")
+        assert spent(conn, REVIEWER, 0.04) is None
+        # Reviews never use up the triage cap or the planner's.
+        assert spent(conn, TRIAGE, 0.39) is None
+        assert spent(conn, PLANNER, 0.99) is None
+    claude_spend(engine, "claude-opus-5-5", 30_000, role="planner")  # $0.60 of plans
+    with engine.connect() as conn:
+        # Nor do plans use up the reviewer's.
+        assert spent(conn, REVIEWER, 0.04) is None
+    claude_spend(engine, "claude-haiku-5-5", 27_960_000)  # $13.98 of triage
+    with engine.connect() as conn:
+        # TC's $15 a month counts reviews too: $0.40, $0.60 and $13.98 spent.
         assert "TC's monthly Claude cap" in (spent(conn, MONTHLY, 0.03) or "")
 
 
