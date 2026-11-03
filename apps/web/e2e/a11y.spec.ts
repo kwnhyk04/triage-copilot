@@ -5,8 +5,8 @@ import { ANSWERS_AFTER_RENAME, EVAL_RUNS, WORKER_OUT_OF_MEMORY } from '../src/de
 import { E2E } from './shared.ts';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
-// A session skips the landing and sign-in, so those two are checked after the cookies are cleared.
-const SIGNED_OUT = ['/', '/login'];
+// A session skips the landing and sign-in, so those are checked after the cookies are cleared.
+const SIGNED_OUT = ['/', '/?signed-out=1', '/login'];
 const SIGNED_IN = [
   '/demo',
   '/demo?source=sim',

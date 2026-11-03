@@ -73,6 +73,48 @@ describe('safeNext', () => {
     expect(safeNext('/demo/../investigations')).toBe('/investigations');
   });
 
+  it('keeps each real page', () => {
+    for (const next of [
+      '/',
+      '/investigations',
+      '/investigations/3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68?tab=steps',
+      '/demo',
+      '/demo?source=eval',
+      '/demo/investigations/worker-out-of-memory',
+    ]) {
+      expect([next, safeNext(next)]).toEqual([next, next]);
+    }
+  });
+
+  it('sends sign-out, API routes, probes, assets and unknown paths to the list', () => {
+    for (const next of [
+      '/logout',
+      '/logout/',
+      '/logout?next=/investigations',
+      '/LOGOUT',
+      '/api',
+      '/api/investigations',
+      '/api/auth/signout?x=1',
+      '/healthz',
+      '/readyz',
+      '/_next/static/chunks/main.js',
+      '/icon.svg',
+      '/apple-icon.png',
+      '/favicon.ico',
+      '/graphql',
+      '/v1/actions/a1/approve',
+      '/nowhere',
+      '/investigations/',
+      '/investigations/a1/actions',
+      '/demo/x',
+      '/demo/investigations',
+      '/investigations/%2e%2e/logout',
+      '/demo/investigations/..%2f..%2flogout',
+    ]) {
+      expect([next, safeNext(next)]).toEqual([next, '/investigations']);
+    }
+  });
+
   it('sends anything else to the list', () => {
     for (const next of [
       undefined,

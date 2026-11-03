@@ -60,8 +60,35 @@ test('says a wrong password is wrong, returns to the page asked for, and signs o
   expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
   // Sign out takes no extra sign-in attempt, so the limiter's count stays as it was.
   await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page).toHaveURL(`${E2E.webUrl}/login`);
+  await expect(page).toHaveURL(`${E2E.webUrl}/?signed-out=1`);
+  await expect(page.getByRole('status')).toHaveText("You're signed out.");
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'Is this alert a real incident?',
+  );
   expect(await sessions()).toEqual([]);
+});
+
+test('shows the signed-out note only after signing out', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText("You're signed out.")).toHaveCount(0);
+});
+
+test('links the sign-in page back to the landing', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByRole('main').getByRole('link', { name: 'Back to home' }).click();
+  await expect(page).toHaveURL(`${E2E.webUrl}/`);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'Is this alert a real incident?',
+  );
+});
+
+test('signs in from a next that is not a page to Live incidents', async ({ page }) => {
+  for (const next of ['/logout', '/api/investigations', '/healthz', '/nowhere']) {
+    await page.context().clearCookies();
+    await page.goto(`/login?next=${encodeURIComponent(next)}`);
+    await signIn(page);
+    await expect(page).toHaveURL(`${E2E.webUrl}/investigations`);
+  }
 });
 
 test('stops the 6th attempt within 15 minutes', async ({ page }) => {
@@ -83,7 +110,7 @@ test('signs out with 303, Clear-Site-Data and no cookie left', async ({ page }) 
     maxRedirects: 0,
   });
   expect([answer.status(), answer.headers()['clear-site-data'], answer.headers().location]).toEqual(
-    [303, '"cache"', '/login'],
+    [303, '"cache"', '/?signed-out=1'],
   );
   expect((await page.context().cookies()).map((c) => c.name)).not.toContain(
     '__Host-triage_session',
@@ -127,6 +154,9 @@ test.describe('signed in', () => {
       ['/login', '/investigations'],
       [`/login?next=${encodeURIComponent(REPORT)}`, REPORT],
       ['/login?next=//evil.example/x', '/investigations'],
+      ['/login?next=/logout', '/investigations'],
+      ['/login?next=/api/investigations', '/investigations'],
+      ['/login?next=/readyz', '/investigations'],
     ] as const) {
       await page.goto(path);
       const url = new URL(page.url());

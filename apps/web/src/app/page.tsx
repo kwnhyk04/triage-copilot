@@ -6,15 +6,25 @@ import { signedIn } from '../lib/auth.ts';
 import { HOME } from '../lib/guards.ts';
 
 /**
- * The public landing: what Triage Copilot does, sign-in, and the demo. A signed-in reader goes on
- * to the live incidents. It reads nothing from the gateway.
+ * The public landing: what Triage Copilot does, sign-in, and the demo, with a note after signing
+ * out. A signed-in reader goes on to the live incidents. It reads nothing from the gateway.
  */
-export default async function Landing() {
+export default async function Landing({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   if (await signedIn()) redirect(HOME);
+  const signedOut = (await searchParams)['signed-out'] !== undefined;
   return (
     <>
       <SiteHeader />
       <main id="main" className="page narrow landing">
+        {signedOut && (
+          <p className="muted" role="status">
+            You&apos;re signed out.
+          </p>
+        )}
         <h1>Is this alert a real incident?</h1>
         <p className="lede">
           Triage Copilot reads the logs, metrics and recent changes behind an alert. It says whether

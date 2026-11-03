@@ -80,6 +80,12 @@ describe('signIn', () => {
     await expect(attempt('the right password', 'https://evil.example/')).resolves.toEqual({
       redirect: '/investigations',
     });
+    // So does a next on this site that is not a page.
+    for (const next of ['/logout', '/api/investigations', '/healthz']) {
+      await expect(attempt('the right password', next)).resolves.toEqual({
+        redirect: '/investigations',
+      });
+    }
   });
 
   it('refuses the 6th attempt in 15 minutes before checking the password', async () => {

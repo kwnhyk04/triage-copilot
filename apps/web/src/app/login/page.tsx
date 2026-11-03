@@ -41,6 +41,9 @@ export default async function SignIn({
         <p>
           No password? <Link href="/demo">Open the demo</Link> to read saved reports.
         </p>
+        <p>
+          <Link href="/">Back to home</Link>
+        </p>
       </main>
     </>
   );

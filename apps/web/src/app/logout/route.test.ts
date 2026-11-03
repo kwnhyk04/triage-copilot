@@ -4,14 +4,14 @@ const signOut = (headers: Record<string, string>) =>
   POST(new Request('http://127.0.0.1:3200/logout', { method: 'POST', headers }));
 
 describe('POST /logout', () => {
-  it('expires the cookie, clears the cache and goes to sign-in for this site', () => {
+  it('expires the cookie, clears the cache and goes to the landing with a note', () => {
     for (const headers of [
       { 'sec-fetch-site': 'same-origin' },
       { origin: 'http://127.0.0.1:3200', host: '127.0.0.1:3200' },
     ]) {
       const response = signOut(headers);
       expect(response.status).toBe(303);
-      expect(response.headers.get('location')).toBe('/login');
+      expect(response.headers.get('location')).toBe('/?signed-out=1');
       expect(response.headers.get('clear-site-data')).toBe('"cache"');
       expect(response.headers.get('cache-control')).toBe('no-store');
       expect(response.headers.get('set-cookie')).toBe(
