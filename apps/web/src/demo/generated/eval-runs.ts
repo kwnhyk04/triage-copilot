@@ -18,6 +18,7 @@ export const EVAL_RUNS = [
       "confidence": 0.95
     },
     "plan_status": null,
+    "plan_review": null,
     "summary": "The checkout service experienced a sudden increase in error rates due to version v1.8.0 introducing a NullPointerException (Cannot invoke 'BundlePrice.amount()' because 'line.bundle' is null at CartTotal.compute(CartTotal.java:88)). Rolling back to v1.7.3 will resolve the issue.",
     "tokens_used": 36056,
     "hypotheses": [
@@ -209,6 +210,7 @@ export const EVAL_RUNS = [
       "confidence": 0.6
     },
     "plan_status": null,
+    "plan_review": null,
     "summary": "The search service experienced a high error rate due to version v5.2.0 introducing a QueryParseException on search queries containing '&'.",
     "tokens_used": 34347,
     "hypotheses": [
@@ -407,6 +409,7 @@ export const EVAL_RUNS = [
       "confidence": 0.85
     },
     "plan_status": null,
+    "plan_review": null,
     "summary": "The checkout service experienced a high error rate due to TaxEngineV2Exception indicating missing nexus configuration for state WA.",
     "tokens_used": 117780,
     "hypotheses": [
@@ -797,6 +800,7 @@ export const EVAL_RUNS = [
       "confidence": 0.85
     },
     "plan_status": null,
+    "plan_review": null,
     "summary": "CheckoutHighErrorRate on checkout is caused by the feature flag new-tax-engine being raised from 5% to 100% by maria.g about 4 minutes before the alert. Checkout's error ratio was steady around 0.002 and jumped to about 0.17 within about 3 minutes. The logs show TaxEngineV2Exception \"no nexus configuration for state=WA\" errors starting right after the flag change. The flag change is the only config change in the window; no checkout deploy happened in the relevant time (last deploy 2026-10-16T10:31Z). A disable_feature_flag action for new-tax-engine has been proposed for human approval.",
     "tokens_used": 80545,
     "hypotheses": [
@@ -1045,6 +1049,7 @@ export const EVAL_RUNS = [
       "confidence": 0.95
     },
     "plan_status": null,
+    "plan_review": null,
     "summary": "The PaymentsHighLatency alert on the payments service was triggered by a recent code deploy (v1.6.9, 'Tune request timeouts') which caused p99 latency to jump from ~0.3s to over 3.2s. Rolling back to v1.6.8 is proposed to resolve the issue.",
     "tokens_used": 85271,
     "hypotheses": [

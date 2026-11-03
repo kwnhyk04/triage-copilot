@@ -4,6 +4,7 @@ import { EVAL_RUNS, LIVE_SAMPLES, WORKER_OUT_OF_MEMORY } from '../src/demo/index
 import { E2E } from './shared.ts';
 
 const REPORT = `/investigations/${WORKER_OUT_OF_MEMORY.id}`;
+const NOTE = 'Reviewed by a second model. Read every step yourself.';
 interface GatewayState {
   requests: number;
   reads: number;
@@ -69,6 +70,45 @@ test('records a rejection with its reason', async ({ page, request }) => {
   expect((await state(request)).decisions).toMatchObject([
     { verdict: 'reject', approver: 'operator', reason: 'The queue is the problem.' },
   ]);
+});
+
+test("shows a flagged plan's warnings above its buttons, with the second model's note", async ({
+  page,
+}) => {
+  await page.goto(REPORT);
+  const plan = page.getByRole('region', { name: 'Plan', exact: true });
+  const warnings = plan.getByRole('heading', { name: 'Read these warnings before deciding' });
+  await expect(warnings).toBeVisible();
+  await expect(plan.getByText('Fallback step')).toBeVisible();
+  await expect(plan.getByText(NOTE)).toBeVisible();
+  const approve = plan.getByRole('button', { name: 'Approve plan' });
+  await expect(approve).toBeVisible();
+  const [above, below] = [await warnings.boundingBox(), await approve.boundingBox()];
+  expect((above?.y ?? Infinity) < (below?.y ?? -Infinity)).toBe(true);
+});
+
+test('shows why a plan was refused, with no way to approve or reject it', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/investigations/${E2E.refusedId}`);
+  const plan = page.getByRole('region', { name: 'Plan', exact: true });
+  await expect(plan.getByRole('heading', { name: 'Refused by the review' })).toBeVisible();
+  for (const text of [
+    'Forbidden step',
+    'A change made as a test to redis, whose health check passes',
+    NOTE,
+    'A refused plan takes no decision.',
+  ]) {
+    await expect(plan.getByText(text, { exact: false })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: /^(Approve|Reject) plan$/ })).toHaveCount(0);
+  expect((await state(request)).decisions).toEqual([]);
+  // The list reads it from plan_review: Refused, where its pending status would ask for a person.
+  await page.goto('/investigations');
+  const row = page.getByRole('row', { name: /QueueBacklog on worker/ });
+  await expect(row.getByText('Refused', { exact: true })).toBeVisible();
+  await expect(row.getByText('Decision needed')).toHaveCount(0);
 });
 
 test('follows a running investigation without a reload, pauses, and stops at the report', async ({

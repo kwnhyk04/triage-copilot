@@ -145,7 +145,7 @@ export interface paths {
         put?: never;
         /**
          * Records a human approval of a plan. Nothing runs from it yet.
-         * @description One decision per plan. A plan that holds no proposal, because no model gave one, takes no decision. In phase 2 an approval only records the human's answer; no action is queued.
+         * @description One decision per plan. A plan that holds no proposal, because no model gave one, takes no decision, and neither does a plan its review refused. In phase 2 an approval only records the human's answer; no action is queued.
          */
         post: operations["approvePlan"];
         delete?: never;
@@ -165,7 +165,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Records a human rejection of a plan; it never runs. */
+        /**
+         * Records a human rejection of a plan; it never runs.
+         * @description One decision per plan. A plan without a proposal, or one its review refused, takes no decision.
+         */
         post: operations["rejectPlan"];
         delete?: never;
         options?: never;
@@ -385,8 +388,10 @@ export interface components {
             source: components["schemas"]["InvestigationSource"];
             /** @description The report's top hypothesis; null until the report, and when it names none. */
             cause: components["schemas"]["Cause"] | null;
-            /** @description The plan's status, as plan.status gives it; null while no plan holds a proposal to decide. */
+            /** @description The plan's status, as plan.status gives it; null while no plan holds a proposal to decide. A plan its review refused reads pending, and plan_review says refuse. */
             plan_status: components["schemas"]["ActionStatus"] | null;
+            /** @description The plan's review, as plan.review.status gives it; null while there is no plan or no review. */
+            plan_review: components["schemas"]["PlanReviewStatus"] | null;
         };
         /**
          * @description Whether a live alert shows an incident a human must look at.
@@ -429,7 +434,7 @@ export interface components {
          * @enum {string}
          */
         ModelPart: "triage" | "summary" | "plan";
-        /** @description The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. */
+        /** @description The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review refused takes no decision. */
         Plan: {
             /** Format: uuid */
             id: string;
@@ -437,6 +442,9 @@ export interface components {
             proposal: components["schemas"]["PlanProposal"] | null;
             /** @description Why there is no proposal; null when there is one. */
             problem: string | null;
+            /** @description The plan's review, as PlanRecorded v2 carries it; null for a plan recorded before reviews (PlanRecorded v1) and for a plan without a proposal. */
+            review: components["schemas"]["PlanReview"] | null;
+            /** @description The human decision, pending while none is recorded. A plan its review refused (review.status refuse) stays pending and takes no decision. */
             status: components["schemas"]["ActionStatus"];
             /** Format: date-time */
             recorded_at: string;
@@ -460,6 +468,42 @@ export interface components {
          * @enum {string}
          */
         PlanKind: "none" | "restart_service" | "code_fix";
+        /** @description First the agent's code checks, then, on a plan they pass, the reviewer's model. Nothing it finds runs anything; a human reads it before deciding. */
+        PlanReview: {
+            status: components["schemas"]["PlanReviewStatus"];
+            /** @description Who reviewed the plan; null when it was not reviewed. */
+            by: components["schemas"]["PlanReviewer"] | null;
+            /** @description The reviewer's model when one was asked, also when it could not answer. */
+            model: string | null;
+            /** @description Every issue behind a flag or a refusal; empty for ok and not_reviewed. */
+            issues: components["schemas"]["PlanIssue"][];
+            /** @description not_reviewed only, why no model reviewed the plan; null otherwise. */
+            reason: string | null;
+            /** @description A code fix's files that are not in its app's repo yet but whose folder is: files it would add. */
+            new_files: string[];
+        };
+        /**
+         * @description ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and a human decides it unreviewed.
+         * @enum {string}
+         */
+        PlanReviewStatus: "ok" | "flag" | "refuse" | "not_reviewed";
+        /**
+         * @description check: the agent's code checks refused the plan, and no model was asked; model: the reviewer's model reviewed it.
+         * @enum {string}
+         */
+        PlanReviewer: "check" | "model";
+        PlanIssue: {
+            kind: components["schemas"]["PlanIssueKind"];
+            /** @description The step or claim as the plan words it; for code_check, its kind and target. */
+            quote: string;
+            /** @description Why, naming the evidence or the check. */
+            reason: string;
+        };
+        /**
+         * @description forbidden_step refuses the plan; fallback_step, contradicts_evidence and unfit_file are the reviewer's warnings; code_check is a refusal by the agent's code checks.
+         * @enum {string}
+         */
+        PlanIssueKind: "forbidden_step" | "fallback_step" | "contradicts_evidence" | "unfit_file" | "code_check";
         Hypothesis: {
             /** @description 1 is the most likely root cause. */
             rank: number;
@@ -676,7 +720,7 @@ export interface components {
                 "application/json": components["schemas"]["Plan"];
             };
         };
-        /** @description The plan was already approved or rejected, or it holds no proposal to decide. */
+        /** @description The plan was already approved or rejected, it holds no proposal to decide, or its review refused it. */
         PlanNotDecidable: {
             headers: {
                 [name: string]: unknown;

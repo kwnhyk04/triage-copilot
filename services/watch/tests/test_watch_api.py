@@ -21,7 +21,12 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for app in ("FA", "FL"):
         for name in ("TOKEN", "STACK", "HEALTH_URLS", "REPO", "PROMETHEUS_URL"):
             monkeypatch.delenv(f"WATCH_{app}_{name}", raising=False)
-    for name in ("WATCH_INTERVAL_SECONDS", "WATCH_GATEWAY_URL", "GATEWAY_URL"):
+    for name in (
+        "WATCH_INTERVAL_SECONDS",
+        "WATCH_GATEWAY_URL",
+        "GATEWAY_URL",
+        "WATCH_SOURCE_INDEX_DIR",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -87,6 +92,17 @@ def test_posts_to_the_production_gateway_unless_told_otherwise(
     assert load_settings(Settings).watch_gateway_url == "http://127.0.0.1:4200"
 
 
+def test_every_watched_app_writes_its_source_index_to_the_one_folder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for app in ("FA", "FL"):
+        monkeypatch.setenv(f"WATCH_{app}_TOKEN", PLANTED)
+    assert {target.sources for target in load_settings(Settings).targets()} == {None}
+    monkeypatch.setenv("WATCH_SOURCE_INDEX_DIR", "H:/.cache/triage-copilot/sources")
+    folders = {target.sources for target in load_settings(Settings).targets()}
+    assert folders == {Path("H:/.cache/triage-copilot/sources")}
+
+
 def test_tokens_stay_out_of_every_printout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WATCH_FA_TOKEN", PLANTED)
     settings = load_settings(Settings)
@@ -104,6 +120,7 @@ def test_tokens_stay_out_of_every_printout(monkeypatch: pytest.MonkeyPatch) -> N
         ("WATCH_FA_HEALTH_URLS", f'{{"api": "https://h.example/r?key={PLANTED}"}}', "query"),
         ("WATCH_FL_PROMETHEUS_URL", f"ftp://{PLANTED}.example/", "plain http or https"),
         ("WATCH_FL_REPO", f"H:/repos/{PLANTED}&calc", "path of letters"),
+        ("WATCH_SOURCE_INDEX_DIR", f"H:/.cache/{PLANTED};calc", "path of letters"),
         ("WATCH_FA_TOKEN", "short", "at least 32"),
     ],
 )

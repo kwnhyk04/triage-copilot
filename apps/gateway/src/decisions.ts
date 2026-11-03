@@ -85,19 +85,23 @@ export function createDecide(sql: Sql, onQueued: () => void, apps: LiveApps): De
 /**
  * Records a human decision on a plan in gateway.plan_decisions, whose primary key allows one per
  * plan: a second decision inserts nothing and gets already_decided. A plan without a proposal takes
- * none. An approved restart (phase 3) queues ActionApproved v2 in the same transaction, as the
- * plan's kind and target alone: its rationale, the steps it writes for a human, never reaches the
- * executor. A code fix's approval queues nothing until the coder exists (phase 4).
+ * none, and neither does one its review refused (PlanRecorded v2); the review never changes once
+ * stored, and this is the only writer of plan_decisions. An approved restart (phase 3) queues
+ * ActionApproved v2 in the same transaction, as the plan's kind and target alone: its rationale,
+ * the steps it writes for a human, never reaches the executor. A code fix's approval queues nothing
+ * until the coder exists (phase 4).
  */
 export function createDecidePlan(sql: Sql, onQueued: () => void, apps: LiveApps): DecidePlan {
   return async (planId, verdict, { approver, reason }) => {
     const outcome = await sql.begin(async (tx) => {
       const [plan] = await tx<(PlanRow & { tenant_id: string; investigation_id: string })[]>`
         SELECT id, tenant_id, investigation_id, kind, target, files, rationale, problem, models,
-               recorded_at, NULL AS decision, NULL AS approver, NULL AS decided_at, NULL AS reason
+               review, recorded_at, NULL AS decision, NULL AS approver, NULL AS decided_at,
+               NULL AS reason
         FROM gateway.plans WHERE id = ${planId}`;
       if (plan === undefined) return 'not_found';
       if (plan.kind === null) return 'no_proposal';
+      if (plan.review?.status === 'refuse') return 'refused';
       // No conflict target, as for actions: a concurrent second decision inserts nothing.
       const [decided] = await tx<{ decided_at: Date }[]>`
         INSERT INTO gateway.plan_decisions (plan_id, approver, decision, reason)

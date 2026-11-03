@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlanRecordedV2",
+  "description": "Agent to gateway on agent-events.fifo: the plan for a real incident's fix, as in v1, plus its review. A plan the agent's code checks refuse is kept, with review.status refuse, so plan is null only when no model gave one. Nothing runs from a plan until a human approves it, and a refused plan cannot be approved. Sent once after the transaction that stored it; MessageGroupId is the investigation id and MessageDeduplicationId plan-<investigation_id>, as in v1. Producers emit this version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "investigation_id",
+    "plan",
+    "problem",
+    "review",
+    "models",
+    "recorded_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "plan_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The plan's id, which a human's decision names."
+    },
+    "investigation_id": { "type": "string", "format": "uuid" },
+    "plan": {
+      "description": "The plan, kept whatever its review says; null when no model gave one, and problem says why.",
+      "anyOf": [{ "$ref": "plan-recorded.v1.schema.json#/$defs/Plan" }, { "type": "null" }]
+    },
+    "problem": {
+      "type": ["string", "null"],
+      "maxLength": 1000,
+      "description": "Why there is no plan, such as every model failing or the planner switched off; null when there is one."
+    },
+    "review": {
+      "description": "The plan's review: first the agent's code checks, then, on a plan they pass, the reviewer's Claude. Null exactly when plan is null.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "by", "model", "issues", "reason", "new_files"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["ok", "flag", "refuse", "not_reviewed"],
+              "description": "ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: a human cannot approve the plan; not_reviewed: the code checks passed but no model reviewed it, and reason says why, so a human decides it unreviewed."
+            },
+            "by": {
+              "description": "check: the agent's code checks refused the plan, and no model was asked; model: the reviewer's Claude reviewed it, and its issues decide the status. Null when it was not reviewed.",
+              "anyOf": [{ "type": "string", "enum": ["check", "model"] }, { "type": "null" }]
+            },
+            "model": {
+              "type": ["string", "null"],
+              "maxLength": 200,
+              "description": "The reviewer's model when one was asked, also when it could not answer; null otherwise."
+            },
+            "issues": {
+              "type": "array",
+              "maxItems": 6,
+              "description": "Every issue behind a flag or a refusal, each once; empty for ok and not_reviewed.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "quote", "reason"],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "forbidden_step",
+                      "fallback_step",
+                      "contradicts_evidence",
+                      "unfit_file",
+                      "code_check"
+                    ],
+                    "description": "forbidden_step refuses the plan; fallback_step, contradicts_evidence and unfit_file are the reviewer's warnings; code_check is the refusal of the agent's code checks."
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": "The step or claim as the plan words it; for code_check, the plan's kind and target."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "Why, in one sentence that names the evidence or the check."
+                  }
+                }
+              }
+            },
+            "reason": {
+              "type": ["string", "null"],
+              "maxLength": 500,
+              "description": "not_reviewed only: why no model reviewed the plan, such as the reviewer switched off, its daily cap reached or the call's error; null otherwise."
+            },
+            "new_files": {
+              "type": "array",
+              "maxItems": 10,
+              "items": { "type": "string", "minLength": 1, "maxLength": 300 },
+              "description": "A code fix's files that are not in its app's repo at origin/main but whose folder is: files it would add. Empty for every other plan, and when the code checks refuse."
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "models": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Every model asked for the plan, in the order first asked; the reviewer's model is in review.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["part", "provider", "model", "calls", "failed", "reason"],
+        "properties": {
+          "part": { "type": "string", "enum": ["plan"] },
+          "provider": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "calls": { "type": "integer", "minimum": 0, "description": "Requests it answered." },
+          "failed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Requests it did not answer or answered with no plan, and requests the agent skipped before they reached it."
+          },
+          "reason": {
+            "type": ["string", "null"],
+            "maxLength": 500,
+            "description": "Why the last of those failed or was skipped; null when it answered every request."
+          }
+        }
+      }
+    },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  },
+  "examples": [
+    {
+      "schema_version": 2,
+      "plan_id": "9a3e5c7b-2d4f-4b6a-8c1e-3f5a7b9c1d2e",
+      "investigation_id": "4e8a2c6f-1d3b-4f7a-9e2c-6b8d0f2a4c6e",
+      "plan": {
+        "kind": "code_fix",
+        "target": "api",
+        "files": ["services/api/src/app/search.py", "services/api/src/app/badges.py"],
+        "rationale": "Search answers 500 since commit 9c1d2e3 added an unguarded badge lookup [tc_01JA0GIT01] [tc_01JA0LOGS1]. Guard the lookup in search.py and move it to a new badges.py, then check that /search answers 200 and the KeyError lines stop. If errors persist, roll back the api's last deploy."
+      },
+      "problem": null,
+      "review": {
+        "status": "flag",
+        "by": "model",
+        "model": "claude-sonnet-5-5",
+        "issues": [
+          {
+            "kind": "fallback_step",
+            "quote": "If errors persist, roll back the api's last deploy.",
+            "reason": "The cited results tie the errors to commit 9c1d2e3 alone [tc_01JA0GIT01]; nothing cited implicates the api's last deploy."
+          }
+        ],
+        "reason": null,
+        "new_files": ["services/api/src/app/badges.py"]
+      },
+      "models": [
+        {
+          "part": "plan",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "failed": 0,
+          "reason": null
+        }
+      ],
+      "recorded_at": "2026-11-03T10:12:40Z"
+    },
+    {
+      "schema_version": 2,
+      "plan_id": "2c4e6a8b-0d1f-4a3c-9e5b-7d9f1b3d5e7a",
+      "investigation_id": "6a8c0e2f-4b6d-4f8a-b1c3-5e7a9c1e3b5d",
+      "plan": {
+        "kind": "restart_service",
+        "target": "postgres",
+        "files": [],
+        "rationale": "Postgres restarts with exit 137 at 09:51 [tc_01J9ZK3Q7M]. Restart it, then check that the api's readiness check passes."
+      },
+      "problem": null,
+      "review": {
+        "status": "refuse",
+        "by": "check",
+        "model": null,
+        "issues": [
+          {
+            "kind": "code_check",
+            "quote": "restart_service of postgres",
+            "reason": "postgres is a database: a plan never restarts or changes a database, queue, cache, storage or proxy; plan none, and name the step a human must take"
+          }
+        ],
+        "reason": null,
+        "new_files": []
+      },
+      "models": [
+        {
+          "part": "plan",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "failed": 0,
+          "reason": null
+        }
+      ],
+      "recorded_at": "2026-11-03T11:02:15Z"
+    },
+    {
+      "schema_version": 2,
+      "plan_id": "7e9a1c3e-5f7b-4d9f-a2b4-6c8e0a2c4e6f",
+      "investigation_id": "8c0e2a4c-6e8a-4c0e-92a4-6c8e0a2c4e6a",
+      "plan": {
+        "kind": "none",
+        "target": "postgres",
+        "files": [],
+        "rationale": "Postgres refuses connections: its disk is full [tc_01JA0DISK1]. A human must free space on its volume, then check that the api's readiness check passes."
+      },
+      "problem": null,
+      "review": {
+        "status": "not_reviewed",
+        "by": null,
+        "model": "claude-sonnet-5-5",
+        "issues": [],
+        "reason": "its credits ended on 2026-11-10 (UTC)",
+        "new_files": []
+      },
+      "models": [
+        {
+          "part": "plan",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "calls": 0,
+          "failed": 1,
+          "reason": "claude-opus-5-5 skipped: its credits ended on 2026-11-10 (UTC)"
+        },
+        {
+          "part": "plan",
+          "provider": "gemini",
+          "model": "gemini-3.5-flash-lite",
+          "calls": 1,
+          "failed": 0,
+          "reason": null
+        }
+      ],
+      "recorded_at": "2026-11-11T08:30:00Z"
+    },
+    {
+      "schema_version": 2,
+      "plan_id": "8e2f4a6b-1c3d-4e5f-a7b8-9c0d1e2f3a4b",
+      "investigation_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "plan": null,
+      "problem": "No model gave a plan: gemini-3.5-flash-lite: RateLimited: gemini 429: rate limited",
+      "review": null,
+      "models": [
+        {
+          "part": "plan",
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "calls": 0,
+          "failed": 1,
+          "reason": "Refused: anthropic declined the request (category cyber)"
+        },
+        {
+          "part": "plan",
+          "provider": "gemini",
+          "model": "gemini-3.5-flash-lite",
+          "calls": 0,
+          "failed": 1,
+          "reason": "RateLimited: gemini 429: rate limited"
+        }
+      ],
+      "recorded_at": "2026-11-03T11:20:00Z"
+    }
+  ]
+}

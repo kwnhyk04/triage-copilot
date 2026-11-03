@@ -113,6 +113,38 @@ class PlanKind(StrEnum):
     code_fix = "code_fix"
 
 
+class PlanReviewStatus(StrEnum):
+    """
+    ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and a human decides it unreviewed.
+    """
+
+    ok = "ok"
+    flag = "flag"
+    refuse = "refuse"
+    not_reviewed = "not_reviewed"
+
+
+class PlanReviewer(StrEnum):
+    """
+    check: the agent's code checks refused the plan, and no model was asked; model: the reviewer's model reviewed it.
+    """
+
+    check = "check"
+    model = "model"
+
+
+class PlanIssueKind(StrEnum):
+    """
+    forbidden_step refuses the plan; fallback_step, contradicts_evidence and unfit_file are the reviewer's warnings; code_check is a refusal by the agent's code checks.
+    """
+
+    forbidden_step = "forbidden_step"
+    fallback_step = "fallback_step"
+    contradicts_evidence = "contradicts_evidence"
+    unfit_file = "unfit_file"
+    code_check = "code_check"
+
+
 class RootCauseClass(StrEnum):
     """
     Fixed root-cause classes, so evals compare classes instead of free text.
@@ -313,7 +345,13 @@ class InvestigationSummary(BaseModel):
     plan_status: Annotated[
         ActionStatus | None,
         Field(
-            description="The plan's status, as plan.status gives it; null while no plan holds a proposal to decide."
+            description="The plan's status, as plan.status gives it; null while no plan holds a proposal to decide. A plan its review refused reads pending, and plan_review says refuse."
+        ),
+    ]
+    plan_review: Annotated[
+        PlanReviewStatus | None,
+        Field(
+            description="The plan's review, as plan.review.status gives it; null while there is no plan or no review."
         ),
     ]
 
@@ -356,6 +394,17 @@ class PlanProposal(BaseModel):
         Field(description="code_fix only, the repo paths to change; empty for the other kinds."),
     ]
     rationale: Annotated[str, Field(description="The plan's only free text.")]
+
+
+class PlanIssue(BaseModel):
+    kind: PlanIssueKind
+    quote: Annotated[
+        str,
+        Field(
+            description="The step or claim as the plan words it; for code_check, its kind and target."
+        ),
+    ]
+    reason: Annotated[str, Field(description="Why, naming the evidence or the check.")]
 
 
 class Hypothesis(BaseModel):
@@ -447,24 +496,36 @@ class InvestigationPage(BaseModel):
     ]
 
 
-class Plan(BaseModel):
+class PlanReview(BaseModel):
     """
-    The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2.
+    First the agent's code checks, then, on a plan they pass, the reviewer's model. Nothing it finds runs anything; a human reads it before deciding.
     """
 
-    id: UUID
-    proposal: Annotated[
-        PlanProposal | None,
-        Field(description="The plan itself; null when no model gave one, and problem says why."),
+    status: PlanReviewStatus
+    by: Annotated[
+        PlanReviewer | None,
+        Field(description="Who reviewed the plan; null when it was not reviewed."),
     ]
-    problem: Annotated[
-        str | None, Field(description="Why there is no proposal; null when there is one.")
+    model: Annotated[
+        str | None,
+        Field(
+            description="The reviewer's model when one was asked, also when it could not answer."
+        ),
     ]
-    status: ActionStatus
-    recorded_at: AwareDatetime
-    decided_by: Annotated[str | None, Field(description="Approver identity; null while pending.")]
-    decided_at: AwareDatetime | None
-    decision_reason: str | None
+    issues: Annotated[
+        list[PlanIssue],
+        Field(description="Every issue behind a flag or a refusal; empty for ok and not_reviewed."),
+    ]
+    reason: Annotated[
+        str | None,
+        Field(description="not_reviewed only, why no model reviewed the plan; null otherwise."),
+    ]
+    new_files: Annotated[
+        list[str],
+        Field(
+            description="A code fix's files that are not in its app's repo yet but whose folder is: files it would add."
+        ),
+    ]
 
 
 class Step(BaseModel):
@@ -479,6 +540,37 @@ class Step(BaseModel):
         ToolCall | None, Field(description="Set on tool_call steps once the call has returned.")
     ]
     recorded_at: AwareDatetime
+
+
+class Plan(BaseModel):
+    """
+    The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review refused takes no decision.
+    """
+
+    id: UUID
+    proposal: Annotated[
+        PlanProposal | None,
+        Field(description="The plan itself; null when no model gave one, and problem says why."),
+    ]
+    problem: Annotated[
+        str | None, Field(description="Why there is no proposal; null when there is one.")
+    ]
+    review: Annotated[
+        PlanReview | None,
+        Field(
+            description="The plan's review, as PlanRecorded v2 carries it; null for a plan recorded before reviews (PlanRecorded v1) and for a plan without a proposal."
+        ),
+    ]
+    status: Annotated[
+        ActionStatus,
+        Field(
+            description="The human decision, pending while none is recorded. A plan its review refused (review.status refuse) stays pending and takes no decision."
+        ),
+    ]
+    recorded_at: AwareDatetime
+    decided_by: Annotated[str | None, Field(description="Approver identity; null while pending.")]
+    decided_at: AwareDatetime | None
+    decision_reason: str | None
 
 
 class Investigation(InvestigationSummary):

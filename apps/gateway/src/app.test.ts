@@ -44,7 +44,7 @@ const HEALTH_QUERY = {
   headers: { 'x-api-key': API_KEY },
   payload: { query: '{ health { status } }' },
 } as const;
-/** A live triage as the store returns it: Claude skipped, Gemini answered. */
+/** A live triage as the store returns it: Claude skipped, Gemini answered, the plan refused. */
 const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
   id: '3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68',
   group_id: ACCEPTED.group_id,
@@ -55,7 +55,9 @@ const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
   updated_at: '2026-10-25T09:54:10.000Z',
   source: 'live',
   cause: { root_cause_class: 'database', service: 'postgres', confidence: 0.8 },
-  plan_status: null,
+  // A refused plan takes no decision: it reads pending, and its review says refuse.
+  plan_status: 'pending',
+  plan_review: 'refuse',
   summary: "freight-audit's api fails its readiness check: postgres restarts.",
   tokens_used: 6240,
   hypotheses: [
@@ -89,7 +91,35 @@ const DETAIL: NonNullable<Awaited<ReturnType<GetInvestigation>>> = {
     },
   ],
   proposed_actions: [],
-  plan: null,
+  plan: {
+    id: '5b1c9d2e-7f3a-4e8b-9c6d-1a2b3c4d5e6f',
+    proposal: {
+      kind: 'restart_service',
+      target: 'postgres',
+      files: [],
+      rationale: 'Postgres restarts with exit 137 [tc_01J9ZK3Q7M]. Restart it.',
+    },
+    problem: null,
+    review: {
+      status: 'refuse',
+      by: 'check',
+      model: null,
+      issues: [
+        {
+          kind: 'code_check',
+          quote: 'restart_service of postgres',
+          reason: 'postgres is a database: a plan never restarts or changes a database',
+        },
+      ],
+      reason: null,
+      new_files: [],
+    },
+    status: 'pending',
+    recorded_at: '2026-10-25T09:55:20.000Z',
+    decided_by: null,
+    decided_at: null,
+    decision_reason: null,
+  },
   steps: [
     {
       seq: 1,
@@ -134,6 +164,7 @@ const decidePlan: DecidePlan = (planId, verdict, decision) =>
             rationale: 'A human must look.',
           },
           problem: null,
+          review: null,
           status: verdict,
           recorded_at: '2026-10-26T10:03:10.000Z',
           decided_by: decision.approver,
@@ -213,6 +244,16 @@ describe('gateway', () => {
       expect(approved.statusCode).toBe(200);
       expect(approved.json()).toMatchObject({ id: PLAN_ID, status: 'approved' });
       expect((await post(approver, 'reject')).json()).toMatchObject({ status: 'rejected' });
+    });
+
+    it('answer 409 to approve and reject of a plan its review refused', async () => {
+      await start({ decidePlan: () => Promise.resolve('refused') });
+      for (const route of ['approve', 'reject']) {
+        const refused = await post(approver, route);
+        expect([route, refused.statusCode]).toEqual([route, 409]);
+        expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+        expect(refused.json<{ detail: string }>().detail).toBe('A refused plan takes no decision.');
+      }
     });
 
     it('map a bad id, an unknown plan, a decided one, one without a proposal and a failure', async () => {

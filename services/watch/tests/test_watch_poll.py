@@ -276,6 +276,91 @@ def test_the_snapshot_lists_recent_commits_and_recreated_containers(
     assert "--since=2026-10-24T09:55:00Z" in git["argv"]
 
 
+SHA, NEXT = "4f1c2a9e0b7d5c3a1e9f7b5d3c1a9e7f5b3d1c9a", "9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d"
+TREE = ["apps/api/src/app.ts", "apps/worker/src/extract.ts", "package.json"]
+
+
+def _origin(tools: FakeTools, sha: str, paths: list[str]) -> None:
+    """FreightAudit's containers up and healthy, and origin/main at `sha` with these paths."""
+    _stack(tools)
+    scenario = json.loads((tools.folder / "scenario.json").read_text(encoding="utf-8"))
+    tree = "".join(f"{path}\0" for path in paths)
+    scenario["git"] = {"rev-parse": {"stdout": f"{sha}\n"}, "ls-tree": {"stdout": tree}}
+    tools.scenario(scenario)
+
+
+def _indexing(server: FakeServer, gateway: FakeServer, repo: Path, sources: Path) -> Watcher:
+    server.route("/readyz", Route(200))
+    health = {"api": server.url + "/readyz"}
+    target = Target(FA, "prod", BEARER, health, repo=repo, sources=sources)
+    return Watcher(target, gateway.url)
+
+
+def test_the_source_index_is_written_at_the_first_poll_and_each_new_origin_main(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    sources = tmp_path / "sources"
+    index = sources / "freight-audit.json"
+    _origin(tools, SHA, TREE)
+    watcher = _indexing(server, gateway, tmp_path / "repo", sources)
+    watcher.poll(NOW)
+    assert json.loads(index.read_text("utf-8")) == {
+        "app": "freight-audit",
+        "commit": SHA,
+        "files": TREE,
+    }
+    # Written whole beside it, then moved over it: no temp file is left behind.
+    assert [path.name for path in sources.iterdir()] == ["freight-audit.json"]
+    # The same commit is not written again, whatever the file holds now.
+    index.write_text("kept", encoding="utf-8")
+    watcher.poll(NOW + timedelta(seconds=30))
+    assert index.read_text("utf-8") == "kept"
+    _origin(tools, NEXT, [*TREE, "apps/api/src/retry.ts"])
+    watcher.poll(NOW + timedelta(seconds=60))
+    assert json.loads(index.read_text("utf-8"))["commit"] == NEXT
+    assert "apps/api/src/retry.ts" in json.loads(index.read_text("utf-8"))["files"]
+    # watch never fetches: git only resolved and listed origin/main.
+    subcommands = {call["argv"][10] for call in tools.calls() if call["tool"] == "git"}
+    assert subcommands == {"rev-parse", "ls-tree"}
+    assert watcher.ok
+
+
+def test_a_source_index_that_cannot_be_written_is_logged_and_the_poll_goes_on(
+    tools: FakeTools,
+    server: FakeServer,
+    gateway: FakeServer,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, "watch")
+    _origin(tools, SHA, TREE)
+    blocked = tmp_path / "a-file"
+    blocked.write_text("not a folder", encoding="utf-8")
+    watcher = _indexing(server, gateway, tmp_path / "repo", blocked)
+    watcher.poll(NOW)
+    assert watcher.ok
+    [record] = [r for r in caplog.records if r.getMessage() == "source index not written"]
+    assert record.__dict__["app"] == "freight-audit"
+    # A later poll tries again.
+    blocked.unlink()
+    watcher.poll(NOW + timedelta(seconds=30))
+    assert json.loads((blocked / "freight-audit.json").read_text("utf-8"))["commit"] == SHA
+
+
+def test_no_source_index_without_a_repo_or_a_folder(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _origin(tools, SHA, TREE)
+    server.route("/readyz", Route(200))
+    health = {"api": server.url + "/readyz"}
+    for repo, sources in ((None, tmp_path), (tmp_path, None)):
+        Watcher(Target(FA, "prod", BEARER, health, repo=repo, sources=sources), gateway.url).poll(
+            NOW
+        )
+    assert [call for call in tools.calls() if call["tool"] == "git"] == []
+    assert list(tmp_path.iterdir()) == [tmp_path / "bin"]
+
+
 class Running:
     """docker in process: every listed container up, no new log lines."""
 

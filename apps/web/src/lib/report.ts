@@ -90,6 +90,44 @@ export const PLAN_STATES: Record<Schemas['ActionStatus'], BadgeState> = {
   rejected: { label: 'Rejected', tone: 'neutral' },
 };
 
+/**
+ * A plan's badge: red Refused once its review refused it, which leaves it pending for good, else
+ * its decision. An older gateway sends no review, so its plans show their decision as before.
+ */
+export const planBadge = (
+  status: Schemas['ActionStatus'],
+  review: Schemas['PlanReviewStatus'] | null | undefined,
+): BadgeState => (review === 'refuse' ? { label: 'Refused', tone: 'bad' } : PLAN_STATES[status]);
+
+/** Each kind of issue a plan's review raises, in plain words. */
+export const ISSUE_KINDS: Record<Schemas['PlanIssueKind'], string> = {
+  forbidden_step: 'Forbidden step',
+  fallback_step: 'Fallback step',
+  contradicts_evidence: 'Contradicts the evidence',
+  unfit_file: "File doesn't fit",
+  code_check: 'Code check',
+};
+
+/** Under every review a model made: a second opinion, never a promise that the plan is safe. */
+export const REVIEW_NOTE = 'Reviewed by a second model. Read every step yourself.';
+
+/** What a plan's review says first: its verdict, or why there is none, and who refused it. */
+export function reviewHeading(
+  { status, by, reason }: Pick<Schemas['PlanReview'], 'status' | 'by' | 'reason'>,
+  pending: boolean,
+): string {
+  switch (status) {
+    case 'ok':
+      return 'Reviewed: no issues';
+    case 'not_reviewed':
+      return `Not reviewed: ${reason ?? 'no reason was recorded'}`;
+    case 'flag':
+      return pending ? 'Read these warnings before deciding' : 'Warnings from the review';
+    case 'refuse':
+      return by === 'check' ? "Refused by the agent's checks" : 'Refused by the review';
+  }
+}
+
 /** A step's tool outcome as a badge; a call that answered stays quiet. */
 export const OUTCOMES: Record<Schemas['ToolCallStatus'], BadgeState> = {
   ok: { label: 'OK', tone: 'neutral' },

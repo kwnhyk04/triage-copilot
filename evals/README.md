@@ -115,6 +115,26 @@ make eval-plans MAX_USD=7
 make eval-plans LLM_PLANNER_EFFORT=medium
 ```
 
+The plan reviewer (Part B) has its own pass too, `make eval-reviews`, also without a stack. It takes every plan `make eval-plans` kept at efforts medium, high and max and gives each what a live plan gets: the code checks (`plan_refusal`; the sim has no repo, so not the source index), then, if they pass, one structured-output call to `claude-sonnet-5-5` at effort high with the planner's view of the incident, the plan and TC's rules (`services/agent/src/agent/reviewer.py`). A review may answer 32,000 output tokens, so none is cut off. The reviewer never sees the labels or `plan-judgments.json`, the earlier reading of each plan, which the report shows beside its verdict. Answered reviews are kept in `reports/reviews/` (git-ignored); the finished pass writes `reports/<date>-dev-reviews-<reviewer sha, first 8>-<model>-<effort>.json` and `.md`, and exits 1 when a trusted plan is refused or one of the five named faults (bad-deploy-1 and noisy-neighbor-1 at medium and high, high's pattern-as-file memory-leak-1) gets neither a flag nor a refusal.
+
+`REVIEW_MODEL=claude-opus-5-5` runs the Opus arm instead of Sonnet, both at effort high, and the verdict comes from the issues' kinds (a forbidden step refuses, any other issue flags). Each judgment in `plan-judgments.json` may say what it expects: `refuse` for a step that changes something to rule it out, or a pattern as a file; `flag` for any other bad step. A trusted plan must never be refused; the report also lists near-identical plans (one scenario's with one expectation) that got different verdicts.
+
+The honest check: `make eval-plans FRESH=1` plans the fresh set at effort max: the first two test incidents of each family (`FRESH` in `harness/plans.py`), from run 1 of the Haiku test pass with the 350,000-token cap. Then `make eval-reviews FRESH=1` reviews them, and refuses to run until every fresh plan has its judgment under `fresh` in `plan-judgments.json`.
+
+Results (2026-11-03; docs/activity-log.md), with `claude-sonnet-5-5` at effort high and the rules frozen at prompt sha `a2e82b9b`:
+
+- Dev set, where the rules were tuned (44 plans; two samples each of Sonnet 5.5 and Opus 5.5): neither arm refused a trusted plan, and both refused every "to rule it out" step in every sample. Sonnet caught medium bad-deploy-1 in about half its samples (2 of 4 as measured) and Opus in none, so Sonnet was chosen.
+- Fresh set, the honest check (16 max plans on test incidents, judged before one run): no trusted plan refused (8 ok, 2 flagged). 3 of the 4 bad steps were caught: bad-deploy-3's and bad-deploy-4's inferred files, and slow-dependency-3's fallback rollback. The miss was dns-partition-2's "restart coredns only if it looks wedged", which passed as a check-gated step though the labels forbid that restart (counted as a miss at the user's call; the judgment written before the run expected nothing).
+- Known limits: the "to rule it out" rule was only tested on the dev set, since no fresh plan had such a step; medium bad-deploy-1 is caught about half the time; a check-gated step is sometimes flagged as a fallback (2 trusted fresh plans); and a check-gated restart of a proxy passes.
+
+```sh
+make eval-reviews ESTIMATE=1
+make eval-reviews MAX_USD=16
+make eval-reviews MAX_USD=32 REVIEW_MODEL=claude-opus-5-5
+make eval-plans FRESH=1 LLM_PLANNER_EFFORT=max MAX_USD=22
+make eval-reviews FRESH=1 REVIEW_MODEL=<the chosen arm> MAX_USD=8
+```
+
 ## Runs and scores
 
 - Order: runs go one at a time, since the sim serves one scenario, with every first run before any second, 60 s apart. Each run gets its own tenant with an opaque name.

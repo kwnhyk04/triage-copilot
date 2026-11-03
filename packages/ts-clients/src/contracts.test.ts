@@ -8,6 +8,7 @@ import {
   type ActionProposedV1,
   type Messages,
   type PlanRecordedV1,
+  type PlanRecordedV2,
   type ReportRecordedV1,
   type ReportRecordedV2,
   type StepRecordedV1,
@@ -32,6 +33,8 @@ const [reportV2] = schemas['report-recorded.v2'].examples;
 if (reportV2 === undefined) throw new Error('report-recorded.v2 has no example');
 const [planV1] = schemas['plan-recorded.v1'].examples;
 if (planV1 === undefined) throw new Error('plan-recorded.v1 has no example');
+const [planV2] = schemas['plan-recorded.v2'].examples;
+if (planV2 === undefined) throw new Error('plan-recorded.v2 has no example');
 
 type Rest = GatewayComponents['schemas'];
 type Reported = ReportRecordedV1['report'];
@@ -67,13 +70,18 @@ const enumsAgree: [
   Equal<Omit<PlanModelUse, 'part'>, Omit<ModelUse, 'part'>>,
   Equal<Rest['PlanKind'], Planned['kind']>,
   Equal<Rest['PlanProposal'], Planned>,
-  // A listed investigation's plan status and cause (0.8.0) are the detail's, in brief.
+  // The detail serves a plan's review (0.10.0) as PlanRecorded v2 carried it.
+  Equal<Rest['PlanReview'], NonNullable<PlanRecordedV2['review']>>,
+  // A listed investigation's plan status and cause (0.8.0) and review (0.10.0) are the detail's.
   Equal<Rest['InvestigationSummary']['plan_status'], Rest['Plan']['status'] | null>,
+  Equal<Rest['InvestigationSummary']['plan_review'], Rest['PlanReview']['status'] | null>,
   Equal<
     Rest['InvestigationSummary']['cause'],
     Pick<Rest['Hypothesis'], 'root_cause_class' | 'service' | 'confidence'> | null
   >,
 ] = [
+  true,
+  true,
   true,
   true,
   true,
@@ -262,6 +270,38 @@ describe('message contracts', () => {
   ])('PlanRecorded v1 rejects %s', (_, change) => {
     expect(() => parseMessage('plan-recorded.v1', { ...planV1, ...change })).toThrow(
       /invalid plan-recorded.v1/,
+    );
+  });
+
+  it('accepts PlanRecorded v1 and v2 wherever plans are consumed, and marks v1 deprecated', () => {
+    for (const name of ['plan-recorded.v1', 'plan-recorded.v2'] as const) {
+      for (const example of schemas[name].examples) {
+        expect(parseMessage('plan-recorded', example)).toEqual(example);
+      }
+    }
+    const deprecated = schemas['plan-recorded'].oneOf.map((branch) => 'deprecated' in branch);
+    expect(deprecated).toEqual([true, false]);
+  });
+
+  // The same cases run against the Python models in packages/py-clients/tests/test_contracts.py.
+  const review = planV2.review;
+  if (review === null) throw new Error("plan-recorded.v2's first example has a review");
+  const [issue] = review.issues;
+  const reviewWith = (change: object) => ({ review: { ...review, ...change } });
+  const issueWith = (change: object) => reviewWith({ issues: [{ ...issue, ...change }] });
+  it.each([
+    ['an unknown status', reviewWith({ status: 'maybe' })],
+    ['an unknown reviewer', reviewWith({ by: 'human' })],
+    ['more than 6 issues', reviewWith({ issues: Array.from({ length: 7 }, () => issue) })],
+    ['an unknown issue kind', issueWith({ kind: 'style' })],
+    ['a quote over 300 characters', issueWith({ quote: 'x'.repeat(301) })],
+    ['a reason over 1,000 characters', issueWith({ reason: 'x'.repeat(1001) })],
+    ['a review reason over 500 characters', reviewWith({ reason: 'x'.repeat(501) })],
+    ['more than 10 new files', reviewWith({ new_files: Array.from({ length: 11 }, () => 'a.py') })],
+    ['a free-text field in the review', reviewWith({ note: 'approve it' })],
+  ])('PlanRecorded v2 rejects %s', (_, change) => {
+    expect(() => parseMessage('plan-recorded.v2', { ...planV2, ...change })).toThrow(
+      /invalid plan-recorded.v2/,
     );
   });
 

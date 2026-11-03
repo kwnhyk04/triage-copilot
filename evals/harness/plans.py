@@ -1,7 +1,10 @@
 """P2.5: the planner (agent.planner) on the dev split's triage reports, before the planner switch
 goes on in production (docs/todo.md).
 
-    make eval-plans [ESTIMATE=1]
+    make eval-plans [ESTIMATE=1] [MAX_USD=n] [FRESH=1]
+
+FRESH=1 plans the fresh set instead (FRESH below): 16 test-split incidents for Part B's honest
+check of the plan reviewer, each from run 1 of the Haiku test pass with the 350,000-token cap.
 
 The reports come from P0's Claude-first pass of 2026-11-01 (Haiku 5.5 first, 350,000-token cap),
 one cached run per dev scenario in evals/reports/runs/. Each plan gets what a live one gets: the
@@ -72,20 +75,25 @@ NO_SNAPSHOT = "no alert of the group has a snapshot"
 TOKENIZER = 1.35
 # A guess at a plan's output, thinking included, for the estimate's range.
 OUTPUT_GUESS = (1_000, 6_000)
-# Every service of the dev split's worlds as a catalog would kind it. External providers (None)
-# are left out, as FreightAudit's and FilingLens's catalogs list no model provider.
+# Every service of the dev and test splits' worlds as a catalog would kind it. External providers
+# (None: no metrics of their own in the sim) are left out, as FreightAudit's and FilingLens's
+# catalogs list no model provider.
 _GROUPS: tuple[tuple[Kind | None, str], ...] = (
     (
         "app",
-        "accounts cart catalog checkout frontend inventory notifications orders payments pricing "
-        "recommendations search shipping web",
+        "accounts cart cart-legacy catalog checkout frontend inventory notifications orders "
+        "payments pricing recommendations search shipping web",
     ),
-    ("worker", "log-compactor nightly-backup nightly-reindex"),
-    ("database", "inventory-db orders-db payments-db"),
+    (
+        "worker",
+        "image-resizer log-compactor ml-trainer nightly-backup nightly-reindex report-builder",
+    ),
+    ("database", "accounts-db catalog-db inventory-db orders-db payments-db"),
     ("queue", "events-broker"),
+    ("cache", "redis-cart"),
     ("storage", "feature-store search-index"),
-    ("proxy", "coredns"),
-    (None, "card-network shipping-api"),
+    ("proxy", "api-gateway coredns egress-gateway nat-gateway"),
+    (None, "card-network carrier-api geo-api shipping-api tax-service"),
 )
 KINDS: dict[str, Kind | None] = {name: kind for kind, names in _GROUPS for name in names.split()}
 
@@ -197,6 +205,43 @@ def triage_runs() -> list[Run]:
     return [(scenarios[job.scenario].scenario, harness.load(job.result)) for job in jobs]
 
 
+# The fresh set (Part B, 2026-11-03), fixed before any of its plans was made: the first two test
+# incidents of each family by name, for an honest check of rules tuned on the dev plans.
+FRESH = (
+    "bad-config-3",
+    "bad-config-4",
+    "bad-deploy-3",
+    "bad-deploy-4",
+    "db-pool-exhaustion-2",
+    "db-pool-exhaustion-4",
+    "dns-partition-2",
+    "dns-partition-3",
+    "expired-cert-2",
+    "expired-cert-3",
+    "memory-leak-2",
+    "memory-leak-4",
+    "noisy-neighbor-2",
+    "noisy-neighbor-4",
+    "slow-dependency-3",
+    "slow-dependency-4",
+)
+HAIKU = ["primary=claude-haiku-5-5"]
+
+
+def fresh_runs() -> list[Run]:
+    """Each fresh incident with run 1 of the newer Haiku pass on the test split (2026-10-21, the
+    350,000-token cap, as P0's triage had); the test split has no Claude-first pass."""
+    scenarios = load_scenarios(harness.SET)
+    runs: list[Run] = []
+    for sid in FRESH:
+        paths = sorted(harness.CACHE.glob(f"{sid}-run1-*.json"), key=lambda p: p.stat().st_mtime)
+        found = [run for run in map(harness.load, paths) if run["models"] == HAIKU]
+        if not found or found[-1]["report"] is None:
+            raise harness.Setup(f"no cached Haiku run 1 with a report of {sid} in {harness.CACHE}")
+        runs.append((scenarios[sid].scenario, found[-1]))
+    return runs
+
+
 def kept_name(model: str, effort: str | None, scenario: Scenario, triage: Json) -> str:
     key = {"prompt": PLANNER_PROMPT_SHA, "model": model, "effort": effort, "triage": triage["key"]}
     return f"{scenario.id}-{harness.sha(json.dumps(key, sort_keys=True))[:16]}.json"
@@ -240,9 +285,9 @@ def fits(limit: float | None, spent: float, worst_usd: float) -> bool:
     return limit is None or spent + worst_usd <= limit
 
 
-def report_name(today: str, model: str, effort: str | None) -> str:
-    """The report's name; the effort keeps two passes of one day apart."""
-    return f"{today}-dev-plans-{PLANNER_PROMPT_SHA[:8]}-{model}-{effort}"
+def report_name(today: str, model: str, effort: str | None, scope: str = "dev") -> str:
+    """The report's name; the set and the effort keep two passes of one day apart."""
+    return f"{today}-{scope}-plans-{PLANNER_PROMPT_SHA[:8]}-{model}-{effort}"
 
 
 async def make(
@@ -287,12 +332,19 @@ def markdown(report: Json, runs: Sequence[Run]) -> str:
     total = report["summary"]
     worlds = {scenario.id: scenario for scenario, _ in runs}
     reports = {scenario.id: triage["report"] for scenario, triage in runs}
+    fresh = report.get("set") == "fresh"
+    source = (
+        "run 1 of the Haiku test-split pass of 2026-10-21 (350,000-token cap), one per fresh "
+        "incident"
+        if fresh
+        else "P0's Claude-first triage runs of 2026-11-01 (claude-haiku-5-5 first, 350,000-token "
+        "cap), one per dev scenario"
+    )
     lines = [
-        f"# Planner on the dev split ({report['date']})",
+        f"# Planner on the {'fresh test incidents' if fresh else 'dev split'} ({report['date']})",
         "",
         f"Planner {report['planner']['model']} at effort {report['planner']['effort']}, prompt sha "
-        f"{report['planner']['prompt_sha'][:16]}, on P0's Claude-first triage runs of 2026-11-01 "
-        "(claude-haiku-5-5 first, 350,000-token cap), one per dev scenario.",
+        f"{report['planner']['prompt_sha'][:16]}, on {source}.",
         "",
         f"- Plans: {total['plans']}; answered {total['answered']}; kept {total['kept']}; refused "
         f"by the check {len(total['refused'])}.",
@@ -360,10 +412,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="P2.5: the planner on the dev split's reports.")
     parser.add_argument("--estimate", action="store_true", help="print the cost; call nothing")
     parser.add_argument("--max-usd", type=float, help="stop before a plan could pass this spend")
+    parser.add_argument("--fresh", action="store_true", help="plan the fresh test incidents")
     args = parser.parse_args()
+    scope = "fresh" if args.fresh else "dev"
     try:
         settings = load_settings(Settings)
-        runs = triage_runs()
+        runs = fresh_runs() if args.fresh else triage_runs()
         if args.estimate:
             estimate(settings, runs)
             return 0
@@ -382,12 +436,13 @@ def main() -> int:
     today = datetime.now(UTC).date().isoformat()
     report: Json = {
         "date": today,
+        "set": scope,
         "planner": {"model": role.model, "effort": role.effort, "prompt_sha": PLANNER_PROMPT_SHA},
-        "triage": {"models": TRIAGE, "token_cap": harness.CLAUDE_CAP},
+        "triage": {"models": HAIKU if args.fresh else TRIAGE, "token_cap": harness.CLAUDE_CAP},
         "summary": summary(rows),
         "plans": rows,
     }
-    name = report_name(today, role.model, role.effort)
+    name = report_name(today, role.model, role.effort, scope)
     harness.save(harness.REPORTS / f"{name}.json", report)
     (harness.REPORTS / f"{name}.md").write_text(markdown(report, runs), encoding="utf-8")
     harness.say(f"report: evals/reports/{name}.md")

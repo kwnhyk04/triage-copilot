@@ -12,7 +12,9 @@ from py_clients.generated.gateway import AlertmanagerWebhook
 from py_clients.generated.messages.action_approved_schema import ActionApproved
 from py_clients.generated.messages.action_approved_v2_schema import ActionApprovedV2
 from py_clients.generated.messages.investigation_requested_schema import InvestigationRequested
+from py_clients.generated.messages.plan_recorded_schema import PlanRecorded
 from py_clients.generated.messages.plan_recorded_v1_schema import PlanRecordedV1
+from py_clients.generated.messages.plan_recorded_v2_schema import PlanRecordedV2
 from py_clients.generated.messages.report_recorded_schema import ReportRecorded
 from py_clients.generated.messages.report_recorded_v1_schema import ReportRecordedV1
 from py_clients.generated.messages.report_recorded_v2_schema import ReportRecordedV2
@@ -113,6 +115,53 @@ PLAN: dict[str, Any] = PLAN_EXAMPLE["plan"]
 def test_plan_recorded_v1_rejects_bad_plans_and_models(change: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         PlanRecordedV1.model_validate({**PLAN_EXAMPLE, **change})
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_every_plan_recorded_version_validates_as_the_union(version: int) -> None:
+    schema_file = CONTRACTS / f"messages/plan-recorded.v{version}.schema.json"
+    for example in json.loads(schema_file.read_bytes())["examples"]:
+        assert isinstance(PlanRecorded.model_validate(example).root, model_for(schema_file))
+
+
+PLAN_V2_EXAMPLES: list[dict[str, Any]] = json.loads(
+    (CONTRACTS / "messages/plan-recorded.v2.schema.json").read_bytes()
+)["examples"]
+PLAN_V2 = PLAN_V2_EXAMPLES[0]
+REVIEW: dict[str, Any] = PLAN_V2["review"]
+ISSUE: dict[str, Any] = REVIEW["issues"][0]
+
+
+def test_plan_recorded_v1_is_deprecated_and_v2_adds_a_review_to_v1_s_plan() -> None:
+    union = json.loads((CONTRACTS / "messages/plan-recorded.schema.json").read_bytes())
+    assert [branch.get("deprecated") for branch in union["oneOf"]] == [True, None]
+    v1, v2 = PlanRecordedV1.model_validate(PLAN_EXAMPLE), PlanRecordedV2.model_validate(PLAN_V2)
+    assert type(v2.plan) is type(v1.plan)
+    with pytest.raises(ValidationError):
+        PlanRecordedV2.model_validate({k: v for k, v in PLAN_V2.items() if k != "review"})
+    # The examples show each review: by the model, by the code checks, none, and no plan at all.
+    shown = [None if e["review"] is None else e["review"]["status"] for e in PLAN_V2_EXAMPLES]
+    assert shown == ["flag", "refuse", "not_reviewed", None]
+
+
+# The same cases run against ajv in packages/ts-clients/src/contracts.test.ts.
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"review": {**REVIEW, "status": "maybe"}},
+        {"review": {**REVIEW, "by": "human"}},
+        {"review": {**REVIEW, "issues": [ISSUE] * 7}},
+        {"review": {**REVIEW, "issues": [{**ISSUE, "kind": "style"}]}},
+        {"review": {**REVIEW, "issues": [{**ISSUE, "quote": "x" * 301}]}},
+        {"review": {**REVIEW, "issues": [{**ISSUE, "reason": "x" * 1001}]}},
+        {"review": {**REVIEW, "reason": "x" * 501}},
+        {"review": {**REVIEW, "new_files": ["services/api/src/a.py"] * 11}},
+        {"review": {**REVIEW, "note": "approve it"}},
+    ],
+)
+def test_plan_recorded_v2_rejects_bad_reviews(change: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        PlanRecordedV2.model_validate({**PLAN_V2, **change})
 
 
 @pytest.mark.parametrize("name", ["action-proposed.v1", "action-approved.v1"])

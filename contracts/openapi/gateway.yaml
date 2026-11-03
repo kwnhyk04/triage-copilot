@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.9.0
+  version: 0.10.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
@@ -221,7 +221,8 @@ paths:
       summary: Records a human approval of a plan. Nothing runs from it yet.
       description: >-
         One decision per plan. A plan that holds no proposal, because no model gave one, takes
-        no decision. In phase 2 an approval only records the human's answer; no action is queued.
+        no decision, and neither does a plan its review refused. In phase 2 an approval only
+        records the human's answer; no action is queued.
       security:
         - approverKey: []
       requestBody:
@@ -249,6 +250,9 @@ paths:
     post:
       operationId: rejectPlan
       summary: Records a human rejection of a plan; it never runs.
+      description: >-
+        One decision per plan. A plan without a proposal, or one its review refused, takes no
+        decision.
       security:
         - approverKey: []
       requestBody:
@@ -570,7 +574,8 @@ components:
             $ref: '#/components/schemas/Plan'
     PlanNotDecidable:
       description: >-
-        The plan was already approved or rejected, or it holds no proposal to decide.
+        The plan was already approved or rejected, it holds no proposal to decide, or its review
+        refused it.
       content:
         application/problem+json:
           schema:
@@ -842,6 +847,7 @@ components:
         - source
         - cause
         - plan_status
+        - plan_review
       properties:
         id:
           type: string
@@ -878,9 +884,16 @@ components:
         plan_status:
           description: >-
             The plan's status, as plan.status gives it; null while no plan holds a proposal to
-            decide.
+            decide. A plan its review refused reads pending, and plan_review says refuse.
           anyOf:
             - $ref: '#/components/schemas/ActionStatus'
+            - type: 'null'
+        plan_review:
+          description: >-
+            The plan's review, as plan.review.status gives it; null while there is no plan or no
+            review.
+          anyOf:
+            - $ref: '#/components/schemas/PlanReviewStatus'
             - type: 'null'
     Verdict:
       type: string
@@ -988,11 +1001,13 @@ components:
       type: object
       description: >-
         The agent's plan for a real incident's fix, made once after the triage's real verdict, for
-        a human to approve or reject. Nothing runs from a plan in phase 2.
+        a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review
+        refused takes no decision.
       required:
         - id
         - proposal
         - problem
+        - review
         - status
         - recorded_at
         - decided_by
@@ -1010,8 +1025,18 @@ components:
         problem:
           type: [string, 'null']
           description: Why there is no proposal; null when there is one.
+        review:
+          description: >-
+            The plan's review, as PlanRecorded v2 carries it; null for a plan recorded before
+            reviews (PlanRecorded v1) and for a plan without a proposal.
+          anyOf:
+            - $ref: '#/components/schemas/PlanReview'
+            - type: 'null'
         status:
           $ref: '#/components/schemas/ActionStatus'
+          description: >-
+            The human decision, pending while none is recorded. A plan its review refused
+            (review.status refuse) stays pending and takes no decision.
         recorded_at:
           type: string
           format: date-time
@@ -1049,6 +1074,69 @@ components:
         restart_service: restart one app or worker container; code_fix: change the app's source on
         a local branch.
       enum: [none, restart_service, code_fix]
+    PlanReview:
+      type: object
+      description: >-
+        First the agent's code checks, then, on a plan they pass, the reviewer's model. Nothing
+        it finds runs anything; a human reads it before deciding.
+      required: [status, by, model, issues, reason, new_files]
+      properties:
+        status:
+          $ref: '#/components/schemas/PlanReviewStatus'
+        by:
+          description: Who reviewed the plan; null when it was not reviewed.
+          anyOf:
+            - $ref: '#/components/schemas/PlanReviewer'
+            - type: 'null'
+        model:
+          type: [string, 'null']
+          description: The reviewer's model when one was asked, also when it could not answer.
+        issues:
+          type: array
+          description: Every issue behind a flag or a refusal; empty for ok and not_reviewed.
+          items:
+            $ref: '#/components/schemas/PlanIssue'
+        reason:
+          type: [string, 'null']
+          description: not_reviewed only, why no model reviewed the plan; null otherwise.
+        new_files:
+          type: array
+          description: >-
+            A code fix's files that are not in its app's repo yet but whose folder is: files it
+            would add.
+          items:
+            type: string
+    PlanReviewStatus:
+      type: string
+      description: >-
+        ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the
+        plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and
+        a human decides it unreviewed.
+      enum: [ok, flag, refuse, not_reviewed]
+    PlanReviewer:
+      type: string
+      description: >-
+        check: the agent's code checks refused the plan, and no model was asked; model: the
+        reviewer's model reviewed it.
+      enum: [check, model]
+    PlanIssue:
+      type: object
+      required: [kind, quote, reason]
+      properties:
+        kind:
+          $ref: '#/components/schemas/PlanIssueKind'
+        quote:
+          type: string
+          description: The step or claim as the plan words it; for code_check, its kind and target.
+        reason:
+          type: string
+          description: Why, naming the evidence or the check.
+    PlanIssueKind:
+      type: string
+      description: >-
+        forbidden_step refuses the plan; fallback_step, contradicts_evidence and unfit_file are
+        the reviewer's warnings; code_check is a refusal by the agent's code checks.
+      enum: [forbidden_step, fallback_step, contradicts_evidence, unfit_file, code_check]
     Hypothesis:
       type: object
       required: [rank, root_cause_class, service, summary, confidence, evidence]

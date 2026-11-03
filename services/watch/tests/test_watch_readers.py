@@ -219,6 +219,86 @@ def test_commits_come_from_origin_main_of_a_real_repo(tmp_path: Path) -> None:
     ]
 
 
+SHA = "4f1c2a9e0b7d5c3a1e9f7b5d3c1a9e7f5b3d1c9a"
+
+
+def test_the_source_index_lists_origin_main_s_tree_with_hooks_and_drivers_off(
+    tools: FakeTools,
+) -> None:
+    repo = Path("H:/repos/filing-lens")
+    tree = "services/api/src/app/main.py\0services/api/src/app/a b.py\0README.md\0"
+    tools.scenario({"git": {"rev-parse": {"stdout": f"{SHA}\n"}, "ls-tree": {"stdout": tree}}})
+    assert Git(repo).tree() == (
+        SHA,
+        ["services/api/src/app/main.py", "services/api/src/app/a b.py", "README.md"],
+    )
+    prefix = [
+        "-C",
+        str(repo),
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "log.showSignature=false",
+    ]
+    resolved, listed = tools.calls()
+    assert resolved["argv"] == [
+        *prefix,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        "refs/remotes/origin/main",
+    ]
+    assert listed["argv"] == [*prefix, "ls-tree", "-r", "--full-tree", "--name-only", "-z", SHA]
+    assert resolved["git_env"] == listed["git_env"] == Git.ENV
+
+
+def test_a_source_index_needs_a_commit_from_rev_parse(tools: FakeTools) -> None:
+    tools.scenario({"git": {"rev-parse": {"stdout": "--output=x\n"}}})
+    with pytest.raises(ReadError, match="git rev-parse printed no commit"):
+        Git(Path("repo")).tree()
+    # Nothing was listed for it.
+    assert [call["argv"][10] for call in tools.calls()] == ["rev-parse"]
+
+
+def test_the_source_index_comes_from_origin_main_of_a_real_repo(tmp_path: Path) -> None:
+    git = shutil.which("git")
+    assert git, "the real git, on a throwaway repo only"
+    repo = tmp_path / "repo"
+    identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+
+    def run(*argv: str) -> str:
+        # The test's own throwaway repo, never an app's.
+        done = subprocess.run(  # noqa: S603
+            [git, "-C", str(repo), *identity, *argv], check=True, capture_output=True, text=True
+        )
+        return done.stdout.strip()
+
+    repo.mkdir()
+    run("init", "-q", "-b", "main")
+    for name in ("services/api/src/app/main.py", "services/api/src/app/a b.py", "README.md"):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(name, encoding="utf-8")
+        run("add", name)
+    run("commit", "-q", "-m", "First: the api")
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "local.py").write_text("x", encoding="utf-8")
+    run("add", "local.py")
+    run("commit", "-q", "-m", "Local only: never on origin")
+    (repo / "untracked.py").write_text("x", encoding="utf-8")
+    # From a folder inside the repo, the whole tree is still listed from its root.
+    commit, paths = Git(repo / "services").tree()
+    assert commit == run("rev-parse", "refs/remotes/origin/main")
+    assert sorted(paths) == [
+        "README.md",
+        "services/api/src/app/a b.py",
+        "services/api/src/app/main.py",
+    ]
+
+
 def test_http_gets_only_its_configured_urls(server: FakeServer) -> None:
     url = server.route("/readyz", Route(200, b'{"status":"ok"}'))
     http = Http([url])

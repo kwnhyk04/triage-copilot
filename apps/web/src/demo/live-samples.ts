@@ -19,7 +19,7 @@ const ANSWER_LOGS = Array.from(
     `setting ANSWER_MODEL is empty (request ${String(4810 + i)})`,
 ).join('\n');
 
-/** FreightAudit's worker, killed out of memory: a real incident, its restart plan waiting. */
+/** FreightAudit's worker, out of memory: a real incident, its flagged restart plan waiting. */
 const WORKER_OUT_OF_MEMORY = {
   id: '7c2e4a10-5b3d-4f6e-8a9b-1c2d3e4f5a60',
   group_id: '0e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a41',
@@ -31,6 +31,7 @@ const WORKER_OUT_OF_MEMORY = {
   source: 'live',
   cause: { root_cause_class: 'resource_exhaustion', service: 'worker', confidence: 0.8 },
   plan_status: 'pending',
+  plan_review: 'flag',
   summary:
     "FreightAudit's worker exits with code 137 once its memory reaches the limit; the api and " +
     'its stores stay healthy.',
@@ -98,9 +99,26 @@ const WORKER_OUT_OF_MEMORY = {
       files: [],
       rationale:
         'The worker exited with 137 while its dependencies stay healthy [tc_01JB2SNAP01]. A ' +
-        'restart frees its memory while a person looks at the large invoices.',
+        'restart frees its memory while a person looks at the large invoices. If it exits ' +
+        'again, raise its memory limit.',
     },
     problem: null,
+    review: {
+      status: 'flag',
+      by: 'model',
+      model: 'claude-sonnet-5-5',
+      issues: [
+        {
+          kind: 'fallback_step',
+          quote: 'If it exits again, raise its memory limit.',
+          reason:
+            'The snapshot ties the exit to large invoices [tc_01JB2SNAP01]; nothing cited shows ' +
+            'that the limit itself is too low.',
+        },
+      ],
+      reason: null,
+      new_files: [],
+    },
     status: 'pending',
     recorded_at: '2026-10-26T09:55:20.000Z',
     decided_by: null,
@@ -156,7 +174,7 @@ const WORKER_OUT_OF_MEMORY = {
   ],
 } satisfies Investigation;
 
-/** FilingLens's api after a renamed setting: a real incident, its code fix approved. */
+/** FilingLens's api after a renamed setting: a real incident, its reviewed code fix approved. */
 const ANSWERS_AFTER_RENAME = {
   id: '2f8d6b4a-9c1e-4d3f-a5b7-c9e1f3a5b7d9',
   group_id: '6a8c0e2f-4b6d-4f8a-9c1e-3a5c7e9f1b2d',
@@ -168,6 +186,7 @@ const ANSWERS_AFTER_RENAME = {
   source: 'live',
   cause: { root_cause_class: 'bad_deploy', service: 'api', confidence: 0.75 },
   plan_status: 'approved',
+  plan_review: 'ok',
   summary:
     "FilingLens's api fails every answer since the change that renamed a setting: the old " +
     'name now reads as empty.',
@@ -226,6 +245,14 @@ const ANSWERS_AFTER_RENAME = {
       rationale: 'Read the setting under its new name in both files [tc_01JB1GIT02].',
     },
     problem: null,
+    review: {
+      status: 'ok',
+      by: 'model',
+      model: 'claude-sonnet-5-5',
+      issues: [],
+      reason: null,
+      new_files: [],
+    },
     status: 'approved',
     recorded_at: '2026-10-25T14:13:05.000Z',
     decided_by: 'operator',
@@ -283,6 +310,7 @@ const ONE_CLIENT_RETRYING = {
   source: 'live',
   cause: { root_cause_class: 'unknown', service: 'api', confidence: 0.6 },
   plan_status: null,
+  plan_review: null,
   summary:
     'One client retried a malformed upload ten times; every other request to the api succeeded.',
   tokens_used: 9_870,

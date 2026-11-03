@@ -17,6 +17,7 @@ class Rates:
 RATES: dict[str, Rates] = {
     "claude-haiku-5-5": Rates(0.10, 0.01, 0.125, 0.50),
     "claude-opus-5-5": Rates(4.00, 0.20, 5.00, 20.00),
+    "claude-sonnet-5-5": Rates(2.00, 0.20, 2.50, 10.00),
 }
 
 

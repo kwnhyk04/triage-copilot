@@ -23,7 +23,51 @@ const PROPOSAL = {
   kind: 'restart_service',
   target: 'worker',
   files: [] as string[],
-  rationale: 'The worker exited with 137 while its dependencies stay healthy [tc_01J9ZK3Q7M].',
+  rationale:
+    'The worker exited with 137 while its dependencies stay healthy [tc_01J9ZK3Q7M]. Restart ' +
+    'it. If it exits again, raise its memory limit.',
+};
+/** PlanRecorded v2's review. */
+interface Review {
+  status: string;
+  by: string | null;
+  model: string | null;
+  issues: { kind: string; quote: string; reason: string }[];
+  reason: string | null;
+  new_files: string[];
+}
+/** The reviewer's model refused the plan. */
+const REFUSED: Review = {
+  status: 'refuse',
+  by: 'model',
+  model: 'claude-sonnet-5-5',
+  issues: [
+    {
+      kind: 'forbidden_step',
+      quote: 'Restart it.',
+      reason: 'Nothing cited shows the worker failing now [tc_01J9ZK3Q7M].',
+    },
+  ],
+  reason: null,
+  new_files: [],
+};
+const FLAGGED: Review = {
+  ...REFUSED,
+  status: 'flag',
+  issues: [
+    {
+      kind: 'fallback_step',
+      quote: 'If it exits again, raise its memory limit.',
+      reason: 'Nothing cited shows that the memory limit is too low [tc_01J9ZK3Q7M].',
+    },
+  ],
+};
+const OK: Review = { ...REFUSED, status: 'ok', issues: [] };
+const NOT_REVIEWED: Review = {
+  ...OK,
+  status: 'not_reviewed',
+  by: null,
+  reason: "the reviewer's daily cap is spent",
 };
 
 describe('plans against Postgres', () => {
@@ -62,8 +106,8 @@ describe('plans against Postgres', () => {
     await scratch.drop();
   });
 
-  /** A live triage's alert group with its report, then its plan as the agent sent it. */
-  const planned = async (proposal: typeof PROPOSAL | null = PROPOSAL) => {
+  /** A live triage's alert group with its report, then its plan: v2 with a review, else v1. */
+  const planned = async (proposal: typeof PROPOSAL | null = PROPOSAL, review?: Review | null) => {
     const { tenantId } = await newTenant(db.sql);
     apps[tenantId] = 'freight-audit';
     const investigationId = randomUUID();
@@ -87,16 +131,21 @@ describe('plans against Postgres', () => {
       recorded_at: '2026-10-26T10:01:30Z',
     };
     expect(await storeEvent(db.sql, 'report-recorded', JSON.stringify(report))).toBe('stored');
-    const plan = message(investigationId, proposal);
+    const plan = message(investigationId, proposal, review);
     expect(await storeEvent(db.sql, 'plan-recorded', JSON.stringify(plan))).toBe('stored');
     return { tenantId, investigationId, planId: plan.plan_id, plan };
   };
-  const message = (investigationId: string, proposal: typeof PROPOSAL | null) => ({
-    schema_version: 1,
+  const message = (
+    investigationId: string,
+    proposal: typeof PROPOSAL | null,
+    review?: Review | null,
+  ) => ({
+    schema_version: review === undefined ? 1 : 2,
     plan_id: randomUUID(),
     investigation_id: investigationId,
     plan: proposal,
     problem: proposal === null ? 'No model gave a plan: claude-opus-5-5: Refused' : null,
+    ...(review === undefined ? {} : { review }),
     models: [model('plan', proposal === null ? 0 : 1)],
     recorded_at: '2026-10-26T10:03:10Z',
   });
@@ -134,6 +183,8 @@ describe('plans against Postgres', () => {
       id: planId,
       proposal: PROPOSAL,
       problem: null,
+      // PlanRecorded v1 carries no review.
+      review: null,
       status: 'pending',
       recorded_at: '2026-10-26T10:03:10.000Z',
       decided_by: null,
@@ -141,6 +192,61 @@ describe('plans against Postgres', () => {
       decision_reason: null,
     });
     expect(investigation.models.map((use) => use.part)).toEqual(['triage', 'plan']);
+  });
+
+  it('serves a v2 plan with its review, and one without a proposal with none', async () => {
+    const { investigationId, planId } = await planned(PROPOSAL, FLAGGED);
+    expect((await detail(investigationId)).plan).toEqual({
+      id: planId,
+      proposal: PROPOSAL,
+      problem: null,
+      review: FLAGGED,
+      status: 'pending',
+      recorded_at: '2026-10-26T10:03:10.000Z',
+      decided_by: null,
+      decided_at: null,
+      decision_reason: null,
+    });
+    const empty = await planned(null, null);
+    expect((await detail(empty.investigationId)).plan).toMatchObject({
+      proposal: null,
+      review: null,
+    });
+  });
+
+  it('takes no decision on a refused plan: approve and reject get 409 and record nothing', async () => {
+    const { investigationId, planId } = await planned(PROPOSAL, REFUSED);
+    const before = await queued();
+    // No decision is recorded, so it reads pending; its review says it is refused.
+    expect(await detail(investigationId)).toMatchObject({
+      plan_status: 'pending',
+      plan_review: 'refuse',
+      plan: { review: REFUSED, status: 'pending' },
+    });
+    for (const route of ['approve', 'reject'] as const) {
+      const answer = await decide(planId, route);
+      expect([route, answer.statusCode]).toEqual([route, 409]);
+      expect(answer.json<{ detail: string }>().detail).toBe('A refused plan takes no decision.');
+    }
+    const decisions = await db.sql`SELECT * FROM gateway.plan_decisions WHERE plan_id = ${planId}`;
+    expect([...decisions]).toEqual([]);
+    expect(await queued()).toBe(before);
+    expect((await detail(investigationId)).plan).toMatchObject({
+      status: 'pending',
+      decided_by: null,
+      decided_at: null,
+    });
+  });
+
+  it('decides a flagged, an unflagged and an unreviewed plan like any other', async () => {
+    for (const review of [FLAGGED, OK, NOT_REVIEWED]) {
+      const { planId } = await planned(PROPOSAL, review);
+      const approved = await decide(planId, 'approve');
+      expect([review.status, approved.statusCode]).toEqual([review.status, 200]);
+      expect(approved.json()).toMatchObject({ id: planId, review, status: 'approved' });
+      // An approved restart is queued for the executor, as without a review.
+      expect(await sent(planId)).toHaveLength(1);
+    }
   });
 
   it('serves a plan without a proposal with its problem, and drops an unknown one', async () => {

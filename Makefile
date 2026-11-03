@@ -27,7 +27,7 @@ PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	eval-plans scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
+	eval-plans eval-reviews scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
 	prod-env prod-up prod-down prod-token prod-switch prod-digest
 
 install:
@@ -160,7 +160,14 @@ eval:
 # stopped, so the same command goes on where it stopped.
 eval-plans: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
 eval-plans:
-	uv run python evals/harness/plans.py $(if $(ESTIMATE),--estimate) $(if $(MAX_USD),--max-usd $(MAX_USD))
+	uv run python evals/harness/plans.py $(if $(ESTIMATE),--estimate) $(if $(MAX_USD),--max-usd $(MAX_USD)) $(if $(FRESH),--fresh)
+
+# Part B: the plan reviewer on the plans eval-plans kept (evals/harness/reviews.py), one Claude call
+# a plan the code checks pass; ESTIMATE=1 prints the cost and calls nothing, and MAX_USD=n stops
+# before a review could pass n dollars. Exit 2: the pass stopped, so the same command goes on.
+eval-reviews: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
+eval-reviews:
+	uv run python evals/harness/reviews.py $(if $(ESTIMATE),--estimate) $(if $(MAX_USD),--max-usd $(MAX_USD)) $(if $(REVIEW_MODEL),--model $(REVIEW_MODEL)) $(if $(FRESH),--fresh) $(if $(REPEAT),--repeat $(REPEAT))
 
 # Every scenario set passes the validator, and a released set never changes: a file of a
 # v<N> set that exists at SCENARIOS_BASE (default HEAD; CI passes the target branch) must be

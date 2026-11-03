@@ -13,6 +13,32 @@ jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefin
 
 const NOW = Date.parse('2026-10-26T10:04:30Z');
 const decide = () => Promise.resolve();
+const NOTE = 'Reviewed by a second model. Read every step yourself.';
+type Plan = NonNullable<Investigation['plan']>;
+/** The worker's pending restart with another review, which the summary's plan_review repeats. */
+const reviewed = (review: Plan['review']): Investigation => ({
+  ...WORKER_OUT_OF_MEMORY,
+  plan_review: review?.status ?? null,
+  plan: { ...WORKER_OUT_OF_MEMORY.plan, review },
+});
+const OK = { status: 'ok', by: 'model', model: 'claude-sonnet-5-5' } as const;
+const NO_ISSUES = { issues: [], reason: null, new_files: [] };
+/** The worker's restart as the review refused it: pending for good, with no buttons. */
+const refused = (review: Partial<NonNullable<Plan['review']>> = {}): Investigation =>
+  reviewed({
+    ...OK,
+    status: 'refuse',
+    issues: [
+      {
+        kind: 'forbidden_step',
+        quote: 'Flush the queue in redis to rule it out.',
+        reason: 'A change made as a test to redis, which answers its health check.',
+      },
+    ],
+    reason: null,
+    new_files: [],
+    ...review,
+  });
 const shown = (investigation: Investigation, props: Partial<ReportProps> = {}) =>
   renderToStaticMarkup(<Report investigation={investigation} now={NOW} {...props} />);
 const count = (html: string, text: string) => html.split(text).length - 1;
@@ -116,6 +142,110 @@ describe('Report', () => {
     expect(html).not.toContain('name="approver"');
     // Without a way to decide, the plan stays read-only.
     expect(shown(WORKER_OUT_OF_MEMORY)).not.toContain('<form');
+  });
+
+  it("puts a flagged plan's warnings above Approve plan and Reject plan, with the model's note", () => {
+    const html = shown(WORKER_OUT_OF_MEMORY, { decide });
+    order(html, [
+      'id="plan"',
+      '<h3>Read these warnings before deciding</h3>',
+      'Fallback step',
+      '<q>If it exits again, raise its memory limit.</q>',
+      'nothing cited shows that the limit itself is too low.',
+      NOTE,
+      'Approving only records the decision',
+      '>Approve plan</button>',
+      '>Reject plan</button>',
+    ]);
+    // The demo's buttons stay too, disabled, under the same warnings.
+    const demo = shown(WORKER_OUT_OF_MEMORY, { demo: true });
+    order(demo, ['Read these warnings before deciding', NOTE, '>Approve plan</button>']);
+  });
+
+  it('shows a plan its review refused with every reason and the note, and no buttons', () => {
+    for (const html of [shown(refused(), { decide }), shown(refused(), { demo: true })]) {
+      order(html, [
+        '<span class="badge bad">Refused</span>',
+        '<h3>Refused by the review</h3>',
+        'Forbidden step',
+        '<q>Flush the queue in redis to rule it out.</q>',
+        'A change made as a test to redis, which answers its health check.',
+        NOTE,
+        'A refused plan takes no decision.',
+      ]);
+      // No buttons, and not the amber mark of a plan that waits for a person.
+      for (const text of [
+        '<button',
+        '<form',
+        'Approving only records',
+        'Decision needed',
+        'plan pending',
+      ]) {
+        expect([text, html.includes(text)]).toEqual([text, false]);
+      }
+    }
+  });
+
+  it("says when the agent's checks refused a plan, which no model reviewed", () => {
+    const checked = refused({
+      by: 'check',
+      model: null,
+      issues: [
+        {
+          kind: 'code_check',
+          quote: 'restart_service of redis',
+          reason: 'redis is a queue: a plan never restarts or changes a queue',
+        },
+      ],
+    });
+    const html = shown(checked, { decide });
+    order(html, [
+      '<h3>Refused by the agent&#x27;s checks</h3>',
+      'Code check',
+      '<q>restart_service of redis</q>',
+      'redis is a queue: a plan never restarts or changes a queue',
+      'A refused plan takes no decision.',
+    ]);
+    expect(html).not.toContain(NOTE);
+    expect(html).not.toContain('<button');
+  });
+
+  it('says a plan was reviewed with no issues, or not reviewed and why; both take a decision', () => {
+    const ok = shown(reviewed({ ...OK, ...NO_ISSUES }), { decide });
+    order(ok, ['Reviewed: no issues', NOTE, '>Approve plan</button>']);
+    expect(ok).not.toContain('class="issues"');
+    const reason = 'its credits ended on 2026-11-10 (UTC)';
+    const unreviewed = { ...OK, ...NO_ISSUES, status: 'not_reviewed', by: null, reason } as const;
+    const html = shown(reviewed(unreviewed), { decide });
+    order(html, [`Not reviewed: ${reason}`, '>Approve plan</button>', '>Reject plan</button>']);
+    expect(html).not.toContain(NOTE);
+    // The approved code fix keeps its review beside its decision.
+    order(shown(ANSWERS_AFTER_RENAME, { decide }), ['Reviewed: no issues', NOTE, 'Approved at']);
+  });
+
+  it("marks each of a code fix's files that the review found would be new", () => {
+    const review = { ...OK, ...NO_ISSUES, new_files: ['services/api/answers.py'] };
+    const html = shown({ ...ANSWERS_AFTER_RENAME, plan: { ...ANSWERS_AFTER_RENAME.plan, review } });
+    expect(html).toContain(
+      '<li><code>services/api/answers.py</code> <span class="muted">new file</span></li>',
+    );
+    expect(html).toContain('<li><code>services/api/settings.py</code></li>');
+    expect(count(html, 'new file')).toBe(1);
+  });
+
+  it('shows a plan without a review as before, whether the gateway sends null or none', () => {
+    const none = reviewed(null);
+    const html = shown(none, { decide });
+    // An older gateway, which Vercel may still be reading from, sends neither field at all.
+    const plan: Record<string, unknown> = { ...none.plan };
+    delete plan.review;
+    const older: Record<string, unknown> = { ...none, plan };
+    delete older.plan_review;
+    expect(shown(older as unknown as Investigation, { decide })).toBe(html);
+    for (const text of ['class="review', NOTE, 'new file', 'Refused', 'Reviewed', '<h3>Read']) {
+      expect([text, html.includes(text)]).toEqual([text, false]);
+    }
+    order(html, ['Restart worker', 'Approving only records', '>Approve plan</button>']);
   });
 
   it('says that approving a code fix runs nothing', () => {

@@ -430,6 +430,19 @@ def test_no_container_is_pointed_at_the_host_or_a_windows_path() -> None:
         assert (name, "127.0.0.1" in values or "H:" in values) == (name, False)
 
 
+def test_the_agent_reads_watch_s_source_index_read_only_at_a_fixed_path() -> None:
+    agent = PROD["services"]["agent"]
+    assert "${SOURCE_INDEX_DIR:?set SOURCE_INDEX_DIR in .env}:/sources:ro" in agent["volumes"]
+    assert _environment("agent")["SOURCE_INDEX_DIR"] == "/sources"
+    # Only the agent plans, so no other container gets the folder.
+    others = [
+        name
+        for name, service in PROD["services"].items()
+        if name != "agent" and "SOURCE_INDEX_DIR" in json.dumps(service)
+    ]
+    assert others == []
+
+
 def test_funnel_serves_only_the_gateways_public_port() -> None:
     tailscale = PROD["services"]["tailscale"]
     assert re.fullmatch(r"tailscale/tailscale:v[\d.]+@sha256:[0-9a-f]{64}", tailscale["image"])
