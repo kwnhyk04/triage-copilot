@@ -138,3 +138,72 @@ test('folds the links into a menu on a phone, and steps the theme with one butto
   await page.getByRole('button', { name: 'Theme: System. Switch to Light' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
+
+test.describe('the landing hero', () => {
+  const RUN = EVAL_RUNS.find((run) => run.id === '59787641-d31c-47d7-a1de-f06c7af65275');
+
+  test('opens the demo from its one button, and the saved report from its card', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    const main = page.getByRole('main');
+    await expect(main.locator('.button')).toHaveCount(1);
+    await main.getByRole('link', { name: 'Open the demo' }).click();
+    await expect(page).toHaveURL(`${E2E.webUrl}/demo`);
+    await page.goto('/');
+    await main.getByRole('link', { name: RUN?.title ?? '' }).click();
+    await expect(page).toHaveURL(`${E2E.webUrl}/demo/investigations/${RUN?.id ?? ''}`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(RUN?.title ?? '');
+  });
+
+  test('asks no other site for anything', async ({ page }) => {
+    const asked: string[] = [];
+    page.on('request', (request) => asked.push(request.url()));
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    expect(asked.filter((url) => !url.startsWith(E2E.webUrl))).toEqual([]);
+  });
+
+  test('sets the card above the horizon, so its whole frame can be clicked', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    const [card, horizon] = await Promise.all(
+      ['.hero-preview', '.hero-horizon'].map((selector) => page.locator(selector).boundingBox()),
+    );
+    // The curve's top passes behind the card's lower half.
+    expect(horizon?.y ?? 0).toBeLessThan((card?.y ?? 0) + (card?.height ?? 0));
+    const covered = await page.evaluate(
+      ([x, y]) => {
+        const hit = document.elementFromPoint(x ?? 0, y ?? 0);
+        return hit?.closest('.hero-preview') !== null;
+      },
+      [(card?.x ?? 0) + 24, (card?.y ?? 0) + (card?.height ?? 0) - 12],
+    );
+    expect(covered).toBe(true);
+  });
+
+  test('moves lightly on a wide screen, and stays still with reduced motion or on a phone', async ({
+    page,
+  }) => {
+    // The hero's parts and their animations; none means the part never moves.
+    const moving = () =>
+      page.evaluate(() =>
+        ['.hero h1', '.hero-sub', '.hero-cta', '.hero-preview', '.hero-horizon'].map((selector) => {
+          const part = document.querySelector(selector);
+          return part === null ? 'missing' : getComputedStyle(part).animationName;
+        }),
+      );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    expect(await moving()).not.toContain('none');
+    expect(await moving()).not.toContain('missing');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    expect(new Set(await moving())).toEqual(new Set(['none']));
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    expect(new Set(await moving())).toEqual(new Set(['none']));
+  });
+});

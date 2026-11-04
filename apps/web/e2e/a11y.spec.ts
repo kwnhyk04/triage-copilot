@@ -5,9 +5,11 @@ import { ANSWERS_AFTER_RENAME, EVAL_RUNS, WORKER_OUT_OF_MEMORY } from '../src/de
 import { E2E } from './shared.ts';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
-// A session skips the landing and sign-in, so those are checked after the cookies are cleared.
+// A session skips sign-in and changes the landing's button, so the signed-out pages come after the
+// cookies are cleared.
 const SIGNED_OUT = ['/', '/?signed-out=1', '/login'];
 const SIGNED_IN = [
+  '/',
   '/demo',
   '/demo?source=sim',
   `/demo/investigations/${WORKER_OUT_OF_MEMORY.id}`,
@@ -32,8 +34,8 @@ for (const scheme of ['light', 'dark'] as const) {
       test.setTimeout(120_000);
       await page.setViewportSize(viewport);
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
-      for (const path of [...SIGNED_IN, ...SIGNED_OUT]) {
-        if (path === SIGNED_OUT[0]) await page.context().clearCookies();
+      for (const [i, path] of [...SIGNED_IN, ...SIGNED_OUT].entries()) {
+        if (i === SIGNED_IN.length) await page.context().clearCookies();
         await page.goto(path);
         // AxeBuilder is built inline: the react-hooks lint flags a fixture's use().
         const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();

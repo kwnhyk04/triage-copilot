@@ -29,6 +29,10 @@ describe('Header', () => {
     expect(html).toContain('Triage Copilot</a>');
   });
 
+  it('links the logo to Live incidents once signed in, since the landing is for newcomers', () => {
+    expect(shown(true)).toMatch(/<a (?=[^>]*class="brand")(?=[^>]*href="\/investigations")/);
+  });
+
   it('links the two lists, marking the one shown, in the bar and in the phone menu', () => {
     mockAt.search = 'source=sim';
     const html = shown();
