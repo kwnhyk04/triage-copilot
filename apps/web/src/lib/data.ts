@@ -36,15 +36,13 @@ async function orDemo<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-/** One page of live incidents or eval runs, newest first. */
+/** One numbered page of live incidents or eval runs, newest first, with the list's total. */
 export async function readInvestigations(
   source: Source,
-  cursor?: string,
+  { offset, limit }: { offset: number; limit: number },
 ): Promise<InvestigationPage> {
   const config = await requireSession();
-  return orDemo(() =>
-    listInvestigations(config, cursor === undefined ? { source } : { source, cursor }),
-  );
+  return orDemo(() => listInvestigations(config, { source, offset, limit }));
 }
 
 /** One investigation, or undefined when none has the id. */

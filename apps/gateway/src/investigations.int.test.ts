@@ -435,6 +435,33 @@ describe('investigation list against Postgres', () => {
     );
   });
 
+  it('numbers pages by offset, each page carrying the total of the whole list', async () => {
+    const { tenantId } = await newTenant(db.sql);
+    const ids = await ordered(await insert(tenantId, 25));
+    const second = await page('limit=10&offset=10');
+    expect([second.items.map((item) => item.id), second.total]).toEqual([ids.slice(10, 20), 25]);
+    expect(second.next_cursor).not.toBeNull();
+    const last = await page('limit=10&offset=20');
+    expect([last.items.map((item) => item.id), last.next_cursor]).toEqual([ids.slice(20), null]);
+    // Past the end there is nothing, but the total still says where the last page is.
+    expect(await page('limit=10&offset=25')).toEqual({ items: [], next_cursor: null, total: 25 });
+    // Cursor pages carry it too.
+    expect((await page(`limit=10&cursor=${second.next_cursor ?? ''}`)).total).toBe(25);
+  });
+
+  it('counts only investigated groups, of the source asked for or of every tenant', async () => {
+    const { tenantId: simulated } = await newTenant(db.sql);
+    await insert(live, 2);
+    await insert(simulated, 3);
+    // A group kept from investigation is never listed, so it is never counted.
+    await db.sql`
+      INSERT INTO gateway.alert_groups (tenant_id, group_key, window_start, severity, status)
+      VALUES (${simulated}, 'kept-back', now(), 'warning', 'queued_not_investigated')`;
+    expect((await page('source=live')).total).toBe(2);
+    expect((await page('source=sim&limit=1&offset=2')).total).toBe(3);
+    expect((await page('')).total).toBe(5);
+  });
+
   /** A ReportRecorded v2 for a real incident with these hypotheses, best first. */
   const report = (investigationId: string, causes: [string, string, number][]) =>
     store('report-recorded', {

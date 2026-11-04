@@ -37,15 +37,11 @@ const gateway = (config: Gateway) =>
     timeoutMs: GATEWAY_TIMEOUT_MS,
   });
 
-/** One page of investigations, newest first. Server code only: it sends the API key. */
+/** One numbered page of investigations, newest first. Server code only: it sends the API key. */
 export async function listInvestigations(
   config: Gateway,
-  { source, cursor }: { source?: Source; cursor?: string },
+  query: { source: Source; offset: number; limit: number },
 ): Promise<InvestigationPage> {
-  const query = {
-    ...(source === undefined ? {} : { source }),
-    ...(cursor === undefined ? {} : { cursor }),
-  };
   const { data, response } = await sent(() =>
     gateway(config).GET('/v1/investigations', { params: { query } }),
   );

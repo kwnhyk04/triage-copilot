@@ -45,7 +45,7 @@ const ending = async (call: () => Promise<unknown>) => {
   return 'no redirect';
 };
 const calls = () => [
-  () => readInvestigations('live'),
+  () => readInvestigations('live', { offset: 0, limit: 20 }),
   () => readInvestigation(ID),
   () => recordPlanDecision(ID, PLAN_ID, decision({ verdict: 'approve' })),
 ];
@@ -73,17 +73,16 @@ describe('data access', () => {
   });
 
   it('reads a page of one source, and one report, for a signed-in reader', async () => {
+    const page = { items: [], next_cursor: null, total: 0 };
     gateway
-      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json(page))
       .mockResolvedValueOnce(Response.json(LIVE_TRIAGE));
-    await expect(readInvestigations('sim', 'abc')).resolves.toEqual({
-      items: [],
-      next_cursor: null,
-    });
+    await expect(readInvestigations('sim', { offset: 20, limit: 10 })).resolves.toEqual(page);
     const url = new URL(sent(gateway).url);
-    expect([url.searchParams.get('source'), url.searchParams.get('cursor')]).toEqual([
+    expect(['source', 'offset', 'limit'].map((name) => url.searchParams.get(name))).toEqual([
       'sim',
-      'abc',
+      '20',
+      '10',
     ]);
     expect(sent(gateway).headers.get('X-API-Key')).toBe(ENV.GATEWAY_API_KEY);
     await expect(readInvestigation(ID)).resolves.toEqual(LIVE_TRIAGE);
@@ -134,6 +133,8 @@ describe('data access', () => {
         Response.json({ title: 'Internal Server Error', status: 500 }, { status: 500 }),
       ),
     );
-    expect(await ending(() => readInvestigations('live'))).toBe('threw gateway answered 500');
+    expect(await ending(() => readInvestigations('live', { offset: 0, limit: 20 }))).toBe(
+      'threw gateway answered 500',
+    );
   });
 });

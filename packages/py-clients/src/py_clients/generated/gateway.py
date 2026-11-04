@@ -494,6 +494,13 @@ class InvestigationPage(BaseModel):
         str | None,
         Field(description="Pass as cursor to read the next page; null on the last page."),
     ]
+    total: Annotated[
+        int,
+        Field(
+            description="How many investigations the whole list holds (of the source asked for, if any), the same on every page, so a reader can number the pages.",
+            ge=0,
+        ),
+    ]
 
 
 class PlanReview(BaseModel):

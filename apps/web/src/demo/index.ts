@@ -17,12 +17,15 @@ export const EVAL_RUNS: readonly Investigation[] = RECORDED;
 export const ILLUSTRATIVE: ReadonlySet<string> = new Set(LIVE_SAMPLES.map((sample) => sample.id));
 const ALL: readonly Investigation[] = [...LIVE_SAMPLES, ...EVAL_RUNS];
 
-/** One source's investigations, newest first, as one page. */
-export function demoPage(source: Source): InvestigationPage {
+/** One page of a source's investigations, newest first, as the gateway numbers its pages. */
+export function demoPage(
+  source: Source,
+  { offset, limit }: { offset: number; limit: number },
+): InvestigationPage {
   const items = ALL.filter((item) => item.source === source).sort((a, b) =>
     b.created_at.localeCompare(a.created_at),
   );
-  return { items, next_cursor: null };
+  return { items: items.slice(offset, offset + limit), next_cursor: null, total: items.length };
 }
 
 /** One investigation, or undefined when none has the id. */

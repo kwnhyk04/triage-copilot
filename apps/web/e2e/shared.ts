@@ -27,4 +27,16 @@ export const E2E = {
   planningId: 'c0ffee00-0000-4000-8000-000000000003',
   // Its real incident whose plan the review refused.
   refusedId: 'c0ffee00-0000-4000-8000-000000000006',
+  // Older settled investigations it adds to each list, so each has several pages. Their alert
+  // names are their own, so no test's text finds one by chance.
+  liveFillers: 40,
+  simFillers: 80,
+  fillerTitles: [
+    ['DiskPressure', 'db-backup'],
+    ['CertExpiring', 'edge'],
+    ['SlowQueries', 'reports'],
+    ['CronMissed', 'billing-sync'],
+  ] as const,
+  fillerId: (source: 'live' | 'sim', i: number) =>
+    `c0ffee00-0000-4000-8${source === 'live' ? '1' : '2'}00-${String(i).padStart(12, '0')}`,
 };

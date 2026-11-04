@@ -14,6 +14,8 @@ const SIGNED_IN = [
   `/demo/investigations/${EVAL_RUNS[0]?.id ?? ''}`,
   '/investigations',
   '/investigations?source=sim',
+  // A page between two gaps in the page numbers.
+  '/investigations?source=sim&page=5&size=10',
   // A flagged plan's warnings, a reviewed one's note, and a refused one's reasons.
   `/investigations/${WORKER_OUT_OF_MEMORY.id}`,
   `/investigations/${ANSWERS_AFTER_RENAME.id}`,

@@ -29,6 +29,7 @@ docs/*
 !docs/alerts.md
 !docs/guide.md
 !docs/brand/
+!docs/third-party.md
 
 # Eval output: the dated reports are kept, the per-run cache (runs/) is not.
 evals/reports/*

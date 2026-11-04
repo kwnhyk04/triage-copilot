@@ -21,10 +21,16 @@ describe('demo data', () => {
     expect(EVAL_RUNS.filter((run) => ILLUSTRATIVE.has(run.id))).toEqual([]);
   });
 
-  it('pages each source newest first, and finds one by its id', () => {
-    expect(demoPage('live').next_cursor).toBeNull();
-    expect(demoPage('live').items.map((item) => item.id)).toEqual(newestFirst(LIVE_SAMPLES));
-    expect(demoPage('sim').items.map((item) => item.id)).toEqual(newestFirst(EVAL_RUNS));
+  it('pages each source newest first, with its total, and finds one by its id', () => {
+    const all = { offset: 0, limit: 20 };
+    expect(demoPage('live', all)).toMatchObject({ next_cursor: null, total: 3 });
+    expect(demoPage('live', all).items.map((item) => item.id)).toEqual(newestFirst(LIVE_SAMPLES));
+    expect(demoPage('sim', all).items.map((item) => item.id)).toEqual(newestFirst(EVAL_RUNS));
+    const second = demoPage('sim', { offset: 2, limit: 2 });
+    expect([second.items.map((item) => item.id), second.total]).toEqual([
+      newestFirst(EVAL_RUNS).slice(2, 4),
+      EVAL_RUNS.length,
+    ]);
     const [first] = EVAL_RUNS;
     expect(first && demoInvestigation(first.id)).toBe(first);
     expect(demoInvestigation('3d6f9a2c-1b4e-4c8d-9f7a-5e2b1c0d4a68')).toBeUndefined();

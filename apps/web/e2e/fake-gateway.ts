@@ -1,9 +1,9 @@
 // A stand-in gateway for the browser tests: node:http on 127.0.0.1 with no dependency. It serves the
 // demo's samples, whose pending plan the review flagged, plus one investigation that gains a step
 // on each read until its report lands, one real incident whose plan lands on its third read, and
-// one whose plan the review refused. It takes the same keys as the real one and records plan
-// decisions. /__e2e/* lets the tests reset and read its state; it is never part of the real
-// gateway.
+// one whose plan the review refused. Older fillers give each list several pages. It takes the same
+// keys as the real one, numbers its pages as the real one does, and records plan decisions.
+// /__e2e/* lets the tests reset and read its state; it is never part of the real gateway.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { EVAL_RUNS, LIVE_SAMPLES, WORKER_OUT_OF_MEMORY } from '../src/demo/index.ts';
@@ -118,8 +118,29 @@ function withDecision(investigation: Investigation): Investigation {
   };
 }
 
+/** Settled investigations older than every other, `count` of one source, newest first. */
+const fillers = (source: 'live' | 'sim', count: number): Investigation[] =>
+  Array.from({ length: count }, (_, i) => {
+    const [name, service] = E2E.fillerTitles[i % E2E.fillerTitles.length] ?? ['Alert', 'api'];
+    const base = source === 'live' ? WORKER_OUT_OF_MEMORY : (EVAL_RUNS[0] ?? WORKER_OUT_OF_MEMORY);
+    const at = new Date(Date.parse('2026-10-01T00:00:00Z') - i * 3_600_000).toISOString();
+    return {
+      ...base,
+      id: E2E.fillerId(source, i),
+      group_id: E2E.fillerId(source, i + 500),
+      title: `${name} on ${service}`,
+      created_at: at,
+      updated_at: at,
+      source,
+      plan: null,
+      plan_status: null,
+      plan_review: null,
+    };
+  });
+const FILLERS = [...fillers('live', E2E.liveFillers), ...fillers('sim', E2E.simFillers)];
+
 const all = () =>
-  [running(reads), planning(planningReads), REFUSED, ...LIVE_SAMPLES, ...EVAL_RUNS].map(
+  [running(reads), planning(planningReads), REFUSED, ...LIVE_SAMPLES, ...EVAL_RUNS, ...FILLERS].map(
     withDecision,
   );
 const send = (response: ServerResponse, status: number, body: unknown) =>
@@ -174,10 +195,16 @@ createServer((request, response) => {
       return send(response, 200, { data: { health: { status: 'ok' } } });
     if (url.pathname === '/v1/investigations') {
       const source = url.searchParams.get('source');
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      const limit = Number(url.searchParams.get('limit') ?? 25);
       const items = all()
         .filter((item) => source === null || item.source === source)
         .sort((a, b) => b.created_at.localeCompare(a.created_at));
-      return send(response, 200, { items, next_cursor: null });
+      return send(response, 200, {
+        items: items.slice(offset, offset + limit),
+        next_cursor: null,
+        total: items.length,
+      });
     }
     const id = /^\/v1\/investigations\/([^/]+)$/.exec(url.pathname)?.[1];
     if (id === E2E.runningId) reads++;

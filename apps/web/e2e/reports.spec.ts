@@ -148,6 +148,137 @@ test('shows a real incident still planning, then its plan as soon as it lands', 
   await expect(page.getByRole('status')).toHaveCount(0);
 });
 
+test.describe('numbered pages', () => {
+  // The fake gateway's live list: the samples, its three incidents and the fillers.
+  const LIVE_TOTAL = LIVE_SAMPLES.length + 3 + E2E.liveFillers;
+  const SIM_TOTAL = EVAL_RUNS.length + E2E.simFillers;
+  const of = (total: number, size: number) => Math.ceil(total / size);
+  const status = (page: import('@playwright/test').Page) => page.locator('.pager-status');
+  const pager = (page: import('@playwright/test').Page) =>
+    page.getByRole('navigation', { name: 'Pagination' });
+
+  test('pages by link, the ends disabled, and Back and a reload keep the page', async ({
+    page,
+  }) => {
+    await page.goto('/investigations?source=live');
+    await expect(status(page)).toHaveText(`Page 1 of ${String(of(LIVE_TOTAL, 20))}`);
+    await expect(page.locator('tbody tr')).toHaveCount(20);
+    await expect(pager(page).getByRole('button', { name: 'Previous page' })).toBeDisabled();
+    await pager(page).getByRole('link', { name: 'Next page' }).click();
+    await expect(page).toHaveURL(/\/investigations\?source=live&page=2&size=20$/);
+    await expect(status(page)).toHaveText('Page 2 of 3');
+    await expect(pager(page).getByRole('link', { name: 'Page 2', exact: true })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await pager(page).getByRole('link', { name: 'Page 3', exact: true }).click();
+    await expect(status(page)).toHaveText('Page 3 of 3');
+    await expect(page.locator('tbody tr')).toHaveCount(LIVE_TOTAL - 40);
+    await expect(pager(page).getByRole('button', { name: 'Next page' })).toBeDisabled();
+    await page.goBack();
+    await expect(status(page)).toHaveText('Page 2 of 3');
+    await page.reload();
+    await expect(status(page)).toHaveText('Page 2 of 3');
+  });
+
+  test('a new size keeps the first row on screen and is remembered; the tabs go to page 1', async ({
+    page,
+  }) => {
+    await page.goto('/investigations?source=live&page=3&size=10');
+    const id = (await page.locator('tbody tr').first().getAttribute('id')) ?? '';
+    await page.getByLabel('Results per page').selectOption('50');
+    await expect(page).toHaveURL(/\?source=live&page=1&size=50$/);
+    await expect(status(page)).toHaveText('Page 1 of 1');
+    // Row 21 leads no page of 50, so the list scrolls to it, clear of the sticky header.
+    const row = page.locator(`[id="${id}"]`);
+    await expect(row).toBeInViewport();
+    const [top, bar] = [await row.boundingBox(), await page.getByRole('banner').boundingBox()];
+    expect((top?.y ?? 0) >= (bar?.height ?? Infinity) - 1).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem('tc-page-size'))).toBe('50');
+    await page.getByRole('banner').getByRole('link', { name: 'Eval runs' }).click();
+    await expect(page).toHaveURL(/\/investigations\?source=sim&size=50$/);
+    await expect(status(page)).toHaveText(`Page 1 of ${String(of(SIM_TOTAL, 50))}`);
+    // A list opened without a size takes the remembered one, at the page holding its first row.
+    await page.goto('/investigations?source=sim&page=4');
+    await expect(page).toHaveURL(/\?source=sim&page=2&size=50$/);
+    await expect(page.locator('tbody tr')).toHaveCount(SIM_TOTAL - 50);
+  });
+
+  test('sends a page past the end to the last page', async ({ page }) => {
+    await page.goto('/investigations?source=live&page=99&size=20');
+    await expect(page).toHaveURL(/\?source=live&page=3&size=20$/);
+    await expect(status(page)).toHaveText('Page 3 of 3');
+  });
+
+  test('on a phone, keeps where the reader is, Previous, Next and the size, not the numbers', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/investigations?source=live&page=2&size=20');
+    await expect(status(page)).toHaveText('Page 2 of 3');
+    for (const name of ['Previous page', 'Next page']) {
+      await expect(pager(page).getByRole('link', { name })).toBeVisible();
+    }
+    await expect(pager(page).getByRole('link', { name: 'Page 1', exact: true })).toBeHidden();
+    await expect(page.getByLabel('Results per page')).toBeVisible();
+  });
+});
+
+test('fits the incidents table in its frame at 1100 px, cutting long text short', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.goto('/investigations?source=live');
+  const frame = page.locator('.table-wrap.list');
+  expect(await frame.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // Confidence, Status and Opened each keep to one line.
+  for (const column of [4, 6, 7]) {
+    const cells = page.locator(`tbody tr td:nth-child(${String(column)})`);
+    for (const height of await cells.evaluateAll((all) => all.map((td) => td.clientHeight))) {
+      expect([column, height <= 50]).toEqual([column, true]);
+    }
+  }
+  await expect(page.locator('tbody td.cause-cell .cut').first()).toHaveCSS(
+    'text-overflow',
+    'ellipsis',
+  );
+  // The cut is inside the cell, so the cells keep their row's borders.
+  const borders = await page
+    .locator('tbody tr:first-child td')
+    .evaluateAll((cells) => cells.map((td) => td.getBoundingClientRect().bottom));
+  expect(borders).toEqual(borders.map(() => borders[0]));
+});
+
+test("lines up the Plan card's head with the others, its state and tag on one line", async ({
+  page,
+}) => {
+  for (const width of [1440, 1100, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [REPORT, `/investigations/${E2E.refusedId}`]) {
+      await page.goto(path);
+      const heights = await page
+        .locator('.panel-head')
+        .evaluateAll((heads) => heads.map((head) => head.clientHeight));
+      expect([width, path, new Set(heights).size]).toEqual([width, path, 1]);
+      // Inside its card too, even with the longest tag a review can give.
+      const overflows = async () =>
+        page
+          .locator('.report .panel')
+          .evaluateAll(
+            (cards) => cards.filter((card) => card.scrollWidth > card.clientWidth).length,
+          );
+      expect([width, path, await overflows()]).toEqual([width, path, 0]);
+      if (path === REPORT) {
+        await page.locator('#plan ~ .panel-aside .panel-tag').evaluate((tag) => {
+          tag.textContent = 'Unreviewed';
+        });
+        expect([width, 'Unreviewed', await overflows()]).toEqual([width, 'Unreviewed', 0]);
+      }
+    }
+  }
+});
+
 test('sends a reader to the demo when the gateway does not answer', async ({ page }) => {
   await page.goto(`${E2E.isolatedUrl}/investigations`);
   await expect(page).toHaveURL(`${E2E.isolatedUrl}/demo?offline=1`);
