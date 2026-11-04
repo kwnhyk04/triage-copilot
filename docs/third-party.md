@@ -8,6 +8,9 @@ Designs and code that Triage Copilot's web app is built from. None is installed 
 | The investigations table's look and the pager: 44 px muted header, 12 px cells, row hover, 40 px outlined and ghost page buttons, the "Page N of M" line and the per-page select (`components/investigation-list.tsx`, `components/pager.tsx`). Row selection, column sorting, Radix Select and TanStack Table were left out. | [Numeric pagination made with TanStack Table](https://21st.dev/@originui/components/table/numeric-pagination-made-with-tan-stack-table) on 21st.dev, built on shadcn/ui's table, button, pagination and select | Origin UI (now coss.com); shadcn | MIT |
 | The report's cards: 16 px corners, a hairline, a glow from the top left, a shadow and a lift on hover, a round stroke icon, an uppercase title and a tag (`components/report.tsx`). The animated icons, entrance animations, page backdrop and bento grid were left out. | [Bento Monochrome](https://21st.dev/@larsen66/components/bento-monochrome) on 21st.dev | larsen66 | Listed as "License: unknown" on 21st.dev (2026-11-04). No code was copied, only the look; ask the author or drop the look before relying on it. |
 
+| The landing's hero: the large headline, one button, and at the foot a wide disc whose rim glows like a horizon (`components/hero.tsx`). Its colours come from TC's accent and canvas in both themes. The eyebrow pill, the faint grid behind the headline (removed 2026-11-04 at the user's request), the gradient on the headline text, the bottom fade layer and the Button and lucide-react dependencies were left out. | `hero-1.tsx` (demo "Build smarter tools for modern teams") on 21st.dev | Not confirmed: several 21st.dev components are named "hero 1" and none found on 2026-11-04 showed this code. Add the author and link when known. | MIT, as given with the component |
+| The framed product preview under the hero's headline: an 8 px tinted frame round a card with a lighter top edge and a deep shadow, from its `MockupFrame` and `Mockup`. TC frames a saved report there instead of a screenshot. Its headline, badge, buttons, orange glow, dashboard image, next-themes and the `class-variance-authority` dependency were left out. | [Hero Section](https://21st.dev/@mikolajdobrucki/components/hero-section) on 21st.dev, from Launch UI, with its `mockup` component | Mikolaj Dobrucki | MIT |
+
 ## MIT licence notices
 
 Copyright (c) LN (@ln-dev7), published on 21st.dev under the MIT licence.
@@ -15,6 +18,10 @@ Copyright (c) LN (@ln-dev7), published on 21st.dev under the MIT licence.
 Copyright (c) 2025 coss.com. Originally Copyright (c) 2025 Origin UI.
 
 Copyright (c) 2023 shadcn.
+
+Copyright (c) Mikolaj Dobrucki (Launch UI), published on 21st.dev under the MIT licence.
+
+Copyright (c) the author of `hero-1` on 21st.dev (not yet confirmed), published under the MIT licence.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

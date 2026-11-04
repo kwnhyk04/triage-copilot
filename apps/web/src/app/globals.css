@@ -37,6 +37,14 @@
   --card-fill: var(--surface);
   --card-shadow: 0 10px 40px rgb(0 0 0 / 4%);
   --card-shadow-lift: 0 20px 60px rgb(0 0 0 / 8%);
+  /* The landing hero: the floor it fades to, the horizon's rim, and the framed
+     panel's tint, edges and shadow. */
+  --hero-floor: color-mix(in srgb, var(--accent) 8%, var(--canvas));
+  --hero-rim: color-mix(in srgb, var(--accent) 55%, var(--canvas));
+  --hero-frame: color-mix(in srgb, var(--accent) 6%, transparent);
+  --hero-edge: color-mix(in srgb, var(--text) 8%, transparent);
+  --hero-edge-top: color-mix(in srgb, var(--text) 16%, transparent);
+  --hero-shadow: 0 25px 50px -12px rgb(0 0 0 / 18%);
   --radius: 6px;
   /* Containers that hold a list, such as the tables and their phone cards. */
   --radius-lg: 10px;
@@ -81,6 +89,10 @@
     --card-fill: color-mix(in srgb, var(--text) 10%, transparent);
     --card-shadow: 0 18px 40px rgb(0 0 0 / 35%);
     --card-shadow-lift: 0 28px 70px rgb(0 0 0 / 55%);
+    --hero-floor: color-mix(in srgb, var(--accent) 16%, var(--canvas));
+    --hero-rim: color-mix(in srgb, var(--accent) 85%, white);
+    --hero-frame: color-mix(in srgb, var(--accent) 8%, transparent);
+    --hero-shadow: 0 25px 50px -12px rgb(0 0 0 / 60%);
   }
 }
 :root[data-theme='dark'] {
@@ -111,6 +123,10 @@
   --card-fill: color-mix(in srgb, var(--text) 10%, transparent);
   --card-shadow: 0 18px 40px rgb(0 0 0 / 35%);
   --card-shadow-lift: 0 28px 70px rgb(0 0 0 / 55%);
+  --hero-floor: color-mix(in srgb, var(--accent) 16%, var(--canvas));
+  --hero-rim: color-mix(in srgb, var(--accent) 85%, white);
+  --hero-frame: color-mix(in srgb, var(--accent) 8%, transparent);
+  --hero-shadow: 0 25px 50px -12px rgb(0 0 0 / 60%);
 }
 
 *,
@@ -487,7 +503,7 @@ pre {
   font-weight: 500;
 }
 
-/* Pages: one column at the bar's width; sign-in and the landing keep a short measure. */
+/* Pages: one column at the bar's width; sign-in keeps a short measure. */
 .page {
   display: grid;
   align-content: start;
@@ -501,22 +517,202 @@ pre {
 .page li {
   max-width: 80ch;
 }
-.landing {
-  padding-top: 56px;
-  gap: 20px;
-}
-.landing h1 {
-  font-size: 32px;
-  line-height: 40px;
-  letter-spacing: -0.01em;
-}
 .lede {
   font-size: 15px;
   line-height: 22px;
 }
-.landing .lede {
+
+/* The landing's hero, after two 21st.dev heroes (docs/third-party.md): a large headline, one
+   button, a saved report in a framed panel, and a wide disc whose rim glows like a horizon at the
+   foot. The panel sits above the disc. */
+.hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  justify-items: center;
+  gap: 20px;
+  padding: 104px var(--gutter) 176px;
+  text-align: center;
+  background: linear-gradient(to bottom, var(--canvas), var(--canvas) 45%, var(--hero-floor) 88%);
+}
+.hero-horizon {
+  position: absolute;
+  z-index: -1;
+  top: calc(100% - 240px);
+  left: 50%;
+  width: 140%;
+  height: 750px;
+  border-radius: 100%;
+  background: radial-gradient(closest-side, var(--canvas) 82%, var(--hero-rim));
+  box-shadow: 0 -16px 80px -24px var(--hero-rim);
+  transform: translateX(-50%);
+}
+.hero h1 {
+  max-width: 17ch;
+  padding-bottom: 0.08em;
+  font-size: clamp(36px, 5.4vw, 76px);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+.hero-sub {
+  max-width: 40rem;
+  color: var(--text-2);
+  font-size: 18px;
+  line-height: 28px;
+  text-wrap: balance;
+}
+.hero-cta {
+  min-width: 13rem;
+  margin-top: 8px;
+}
+/* The framed panel, as the product preview's mockup frame: a tinted 8 px frame round a card with
+   a lighter top edge and a deep shadow. */
+.hero-preview {
+  position: relative;
+  width: min(100%, 52rem);
+  margin-top: 36px;
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--hero-frame);
+}
+.hero-report {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding: 20px 24px 22px;
+  border: 1px solid var(--hero-edge);
+  border-top-color: var(--hero-edge-top);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--hero-shadow);
+  text-align: left;
+}
+.hero-report-head,
+.hero-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.hero-report h2 {
   font-size: 17px;
-  line-height: 26px;
+  line-height: 24px;
+}
+.hero-report h2 a {
+  color: var(--text);
+  text-decoration: none;
+}
+.hero-report h2 a:hover {
+  text-decoration: underline;
+}
+/* The title's link covers the card, so the whole panel opens the report. */
+.hero-report h2 a::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+}
+.hero-report h3 {
+  margin-top: 6px;
+}
+.hero-cause {
+  font-weight: 500;
+}
+.hero-evidence {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+.hero-evidence li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font: 12.5px/18px var(--mono);
+}
+.hero-evidence code {
+  flex: none;
+  color: var(--accent);
+}
+.hero-line {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Light motion on a wide screen only: the words rise in, the panel follows, the horizon fades up.
+   Phones and reduced motion get the still hero. */
+@media (prefers-reduced-motion: no-preference) and (min-width: 721px) {
+  .hero h1,
+  .hero-sub,
+  .hero-cta {
+    animation: hero-rise 600ms var(--ease-out) backwards;
+  }
+  .hero-sub {
+    animation-delay: 80ms;
+  }
+  .hero-cta {
+    animation-delay: 160ms;
+  }
+  .hero-preview {
+    animation: hero-lift 800ms var(--ease-out) 240ms backwards;
+  }
+  .hero-horizon {
+    animation: hero-fade 1200ms var(--ease-out) 200ms backwards;
+  }
+}
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+@keyframes hero-lift {
+  from {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+}
+@keyframes hero-fade {
+  from {
+    opacity: 0;
+  }
+}
+/* Phone: a shorter top, a narrower disc, and the report's rows stacked. */
+@media (max-width: 720px) {
+  .hero {
+    gap: 16px;
+    padding: 56px var(--gutter) 128px;
+  }
+  .hero-sub {
+    font-size: 16px;
+    line-height: 24px;
+  }
+  .hero-preview {
+    margin-top: 20px;
+    padding: 6px;
+  }
+  .hero-report {
+    padding: 16px;
+  }
+  .hero-report-head {
+    flex-wrap: wrap;
+  }
+  .hero-evidence li {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .hero-horizon {
+    top: calc(100% - 170px);
+    width: 700px;
+    height: 500px;
+  }
 }
 .actions {
   display: flex;

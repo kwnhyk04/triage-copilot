@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import Link from 'next/link';
 
 import { signedIn } from '../lib/auth.ts';
+import { HOME } from '../lib/guards.ts';
 import { parseTheme, type Theme, THEME_COOKIE } from '../lib/theme.ts';
 import { Menu, NavBar, NavLinks, ThemeSwitch } from './client.tsx';
 import { LogoMark } from './logo.tsx';
@@ -36,7 +37,7 @@ export function Header({ signedIn, theme }: { signedIn: boolean; theme: Theme })
   return (
     <header className="top">
       <div className="top-bar">
-        <Link href="/" className="brand">
+        <Link href={signedIn ? HOME : '/'} className="brand">
           <LogoMark />
           Triage Copilot
         </Link>

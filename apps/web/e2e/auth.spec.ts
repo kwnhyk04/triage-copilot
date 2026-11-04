@@ -5,6 +5,7 @@ import { SESSION_COOKIE, signSession } from '../src/lib/session.ts';
 import { E2E } from './shared.ts';
 
 const REPORT = `/investigations/${WORKER_OUT_OF_MEMORY.id}`;
+const HEADLINE = 'An AI on-call that investigates first, and lets a human decide';
 test.use({ storageState: { cookies: [], origins: [] } });
 // The form's own message; Next's route announcer is an alert too.
 const message = (page: Page) => page.locator('#sign-in-error');
@@ -62,9 +63,7 @@ test('says a wrong password is wrong, returns to the page asked for, and signs o
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(`${E2E.webUrl}/?signed-out=1`);
   await expect(page.getByRole('status')).toHaveText("You're signed out.");
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-    'Is this alert a real incident?',
-  );
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADLINE);
   expect(await sessions()).toEqual([]);
 });
 
@@ -77,9 +76,7 @@ test('links the sign-in page back to the landing', async ({ page }) => {
   await page.goto('/login');
   await page.getByRole('main').getByRole('link', { name: 'Back to home' }).click();
   await expect(page).toHaveURL(`${E2E.webUrl}/`);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-    'Is this alert a real incident?',
-  );
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADLINE);
 });
 
 test('signs in from a next that is not a page to Live incidents', async ({ page }) => {
@@ -148,9 +145,13 @@ test.describe('signed in', () => {
     await expect(page.getByLabel('Password')).toHaveCount(0);
   });
 
-  test('skips the landing and sign-in, to a safe next page or Live incidents', async ({ page }) => {
+  test('keeps the landing, its button on Live incidents, and skips sign-in', async ({ page }) => {
+    await page.goto('/');
+    await expect(page).toHaveURL(`${E2E.webUrl}/`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADLINE);
+    await page.getByRole('main').getByRole('link', { name: 'Open Live incidents' }).click();
+    await expect(page).toHaveURL(`${E2E.webUrl}/investigations`);
     for (const [path, landed] of [
-      ['/', '/investigations'],
       ['/login', '/investigations'],
       [`/login?next=${encodeURIComponent(REPORT)}`, REPORT],
       ['/login?next=//evil.example/x', '/investigations'],
@@ -175,9 +176,7 @@ test('shows the sign-in form, and Sign in in the header, only when signed out', 
   await expect(bar(page).getByRole('button', { name: 'Sign out' })).toHaveCount(0);
   await bar(page).getByRole('link', { name: 'Triage Copilot' }).click();
   await expect(page).toHaveURL(`${E2E.webUrl}/`);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-    'Is this alert a real incident?',
-  );
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADLINE);
 });
 
 test('treats an expired session as signed out: Sign in in the header, and the form', async ({
