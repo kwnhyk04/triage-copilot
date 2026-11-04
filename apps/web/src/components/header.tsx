@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 import { signedIn } from '../lib/auth.ts';
 import { parseTheme, type Theme, THEME_COOKIE } from '../lib/theme.ts';
-import { Menu, NavLinks, ThemeSwitch } from './client.tsx';
+import { Menu, NavBar, NavLinks, ThemeSwitch } from './client.tsx';
 import { LogoMark } from './logo.tsx';
 
 /**
@@ -24,12 +24,12 @@ export async function SiteHeader() {
 export function Header({ signedIn, theme }: { signedIn: boolean; theme: Theme }) {
   const account = signedIn ? (
     <form method="post" action="/logout">
-      <button type="submit" className="button">
+      <button type="submit" className="nav-item">
         Sign out
       </button>
     </form>
   ) : (
-    <Link href="/login" className="button">
+    <Link href="/login" className="nav-item">
       Sign in
     </Link>
   );
@@ -40,9 +40,7 @@ export function Header({ signedIn, theme }: { signedIn: boolean; theme: Theme })
           <LogoMark />
           Triage Copilot
         </Link>
-        <nav className="top-nav" aria-label="Main">
-          <NavLinks />
-        </nav>
+        <NavBar />
         <div className="top-actions">
           <ThemeSwitch initial={theme} />
           <div className="account">{account}</div>

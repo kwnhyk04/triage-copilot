@@ -126,11 +126,16 @@ const decisionBody = z.strictObject({
   approver: z.string().min(1).max(200),
   reason: z.string().max(2000).exactOptional(),
 });
-const listQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(25),
-  cursor: z.string().min(1).max(512).optional(),
-  source: z.enum(['live', 'sim']).optional(),
-});
+const listQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(25),
+    cursor: z.string().min(1).max(512).optional(),
+    offset: z.coerce.number().int().min(0).max(1_000_000).optional(),
+    source: z.enum(['live', 'sim']).optional(),
+  })
+  .refine((query) => query.cursor === undefined || query.offset === undefined, {
+    message: 'offset or cursor: send one, not both',
+  });
 
 const digest = (value: string) => createHash('sha256').update(value).digest();
 // Equal-length digests let timingSafeEqual compare without revealing how much matched.
@@ -352,7 +357,7 @@ export async function buildApp({
     });
   }
 
-  // Newest first, keyset paginated; the limit is enforced here, whatever the client asks.
+  // Newest first, by cursor or by offset; the limit is enforced here, whatever the client asks.
   app.get('/v1/investigations', async (request, reply) => {
     const query = listQuery.safeParse(request.query);
     if (!query.success) return badRequest(reply, query.error.issues);

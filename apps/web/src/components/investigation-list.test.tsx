@@ -3,8 +3,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { LIVE_SAMPLES, WORKER_OUT_OF_MEMORY } from '../demo/live-samples.ts';
 import { InvestigationList, type ListProps } from './investigation-list.tsx';
 
-// LiveRefresh refreshes through the App Router, which a static render does not mount.
-jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
+// LiveRefresh and the pager use the App Router, which a static render does not mount.
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: () => undefined, push: () => undefined, replace: () => undefined }),
+  usePathname: () => '/demo',
+  useSearchParams: () => new URLSearchParams('source=live'),
+}));
 
 const NOW = Date.parse('2026-10-26T10:04:30Z');
 const shown = (props: Partial<ListProps> = {}) =>
@@ -12,7 +16,9 @@ const shown = (props: Partial<ListProps> = {}) =>
     <InvestigationList
       items={LIVE_SAMPLES}
       source="live"
-      nextCursor={null}
+      total={LIVE_SAMPLES.length}
+      page={1}
+      size={20}
       basePath="/investigations"
       now={NOW}
       {...props}
@@ -93,6 +99,16 @@ describe('InvestigationList', () => {
     );
   });
 
+  it('names the whole incident and cause in a title, as a narrow table cuts them short', () => {
+    const html = shown();
+    expect(html).toMatch(
+      /<a (?=[^>]*title="ContainerDown on worker")[^>]*>ContainerDown on worker<\/a>/,
+    );
+    expect(html).toContain(
+      '<td class="cause-cell" title="Resource exhaustion in worker" data-card="wide">',
+    );
+  });
+
   it('turns each row into a card on a phone, the confidence joining the cause', () => {
     const html = shown();
     for (const role of ['title', 'aside', 'meta', 'wide', 'hide']) {
@@ -108,12 +124,16 @@ describe('InvestigationList', () => {
     expect(html).not.toContain('Real incident');
   });
 
-  it('links each row to its report under the base path, and older items to the next page', () => {
-    const html = shown({ nextCursor: 'abc=', basePath: '/demo/investigations', listPath: '/demo' });
+  it('links each row to its report under the base path, and numbers the pages under the table', () => {
+    const html = shown({ total: 45, page: 2, basePath: '/demo/investigations' });
     expect(html).toContain(`href="/demo/investigations/${WORKER_OUT_OF_MEMORY.id}"`);
-    expect(html).toContain('href="/demo?source=live&amp;cursor=abc%3D"');
-    expect(html).toContain('>Older</a>');
-    expect(shown()).not.toContain('Older');
+    // Each row can be found again, so a new page size can bring the old first row into view.
+    expect(html).toContain(`<tr id="investigation-${WORKER_OUT_OF_MEMORY.id}">`);
+    expect(html.indexOf('</table>')).toBeLessThan(
+      html.indexOf('Page <span>2</span> of <span>3</span>'),
+    );
+    expect(html).toContain('href="/demo?source=live&amp;page=3&amp;size=20"');
+    expect(html).not.toContain('Older');
   });
 
   it('says when a tab is empty, and points to the demo for eval runs, which production keeps none of', () => {
@@ -122,6 +142,8 @@ describe('InvestigationList', () => {
     expect(sim).toContain('No eval runs here.');
     expect(sim).toContain('<a href="/demo?source=sim">');
     expect(sim).not.toContain('<table');
+    // Nothing to page through either.
+    expect(sim).not.toContain('Pagination');
   });
 
   it('labels the illustrative samples it is told of', () => {

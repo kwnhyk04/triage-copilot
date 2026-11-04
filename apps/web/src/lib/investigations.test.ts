@@ -5,25 +5,25 @@ const config = {
   GATEWAY_URL: 'http://gateway.test',
   GATEWAY_API_KEY: 'gateway-test-key-0000000000000000',
 };
-const PAGE = { items: [], next_cursor: null };
+const PAGE = { items: [], next_cursor: null, total: 0 };
+const FIRST = { source: 'live', offset: 0, limit: 20 } as const;
 
 describe('investigations through the gateway', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('lists a page of one source with the API key, passing the cursor on', async () => {
+  it('lists a numbered page of one source with the API key: its offset and size', async () => {
     const spy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(PAGE));
-    await expect(listInvestigations(config, { source: 'live', cursor: 'abc' })).resolves.toEqual(
-      PAGE,
-    );
+    await expect(
+      listInvestigations(config, { source: 'live', offset: 40, limit: 20 }),
+    ).resolves.toEqual(PAGE);
     const request = spy.mock.calls[0]?.[0] as Request;
     const url = new URL(request.url);
-    expect([url.pathname, url.searchParams.get('source'), url.searchParams.get('cursor')]).toEqual([
-      '/v1/investigations',
-      'live',
-      'abc',
-    ]);
+    expect([
+      url.pathname,
+      ...['source', 'offset', 'limit'].map((n) => url.searchParams.get(n)),
+    ]).toEqual(['/v1/investigations', 'live', '40', '20']);
     expect(request.headers.get('X-API-Key')).toBe(config.GATEWAY_API_KEY);
   });
 
@@ -57,11 +57,11 @@ describe('investigations through the gateway', () => {
       answer(504),
     ]) {
       spy.mockImplementation(offline);
-      await expect(listInvestigations(config, {})).rejects.toBeInstanceOf(GatewayOffline);
+      await expect(listInvestigations(config, FIRST)).rejects.toBeInstanceOf(GatewayOffline);
       await expect(getInvestigation(config, LIVE_TRIAGE.id)).rejects.toBeInstanceOf(GatewayOffline);
     }
     spy.mockImplementation(answer(500));
-    const failed = listInvestigations(config, {});
+    const failed = listInvestigations(config, FIRST);
     await expect(failed).rejects.toThrow('gateway answered 500');
     await expect(failed).rejects.not.toBeInstanceOf(GatewayOffline);
   });

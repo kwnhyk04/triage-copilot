@@ -34,17 +34,34 @@ describe('Header', () => {
     const html = shown();
     expect(count(html, '<a href="/investigations?source=live">Live incidents</a>')).toBe(2);
     expect(
-      count(html, '<a aria-current="page" href="/investigations?source=sim">Eval runs</a>'),
+      count(
+        html,
+        '<a aria-current="page" data-current="" href="/investigations?source=sim">Eval runs</a>',
+      ),
     ).toBe(2);
     expect(html).toMatch(/<details class="menu"><summary aria-label="Menu">/);
   });
 
-  it("links the demo's own lists inside the demo, and marks none on a report", () => {
-    mockAt.pathname = '/demo/investigations/x';
+  it('underlines Live incidents on a report, which is no list page, so not as the current page', () => {
+    for (const [pathname, base] of [
+      ['/investigations/x', '/investigations'],
+      ['/demo/investigations/x', '/demo'],
+    ] as const) {
+      mockAt.pathname = pathname;
+      const html = shown();
+      expect(count(html, `<a data-current="" href="${base}?source=live">Live incidents</a>`)).toBe(
+        2,
+      );
+      expect(html).toContain(`<a href="${base}?source=sim">Eval runs</a>`);
+      expect(html).not.toContain('aria-current');
+    }
+  });
+
+  it('draws the sliding marks as hidden parts of the bar', () => {
     const html = shown();
-    expect(html).toContain('<a href="/demo?source=live">Live incidents</a>');
-    expect(html).toContain('<a href="/demo?source=sim">Eval runs</a>');
-    expect(html).not.toContain('aria-current');
+    for (const mark of ['nav-glow', 'nav-line', 'nav-mark']) {
+      expect(html).toContain(`<span class="${mark}" aria-hidden="true"></span>`);
+    }
   });
 
   it('offers Sign in, or once signed in Sign out, which posts', () => {

@@ -8,6 +8,7 @@ type Schemas = components['schemas'];
 export type ListInvestigations = (query: {
   limit: number;
   cursor?: string | undefined;
+  offset?: number | undefined;
   source?: Schemas['InvestigationSource'] | undefined;
 }) => Promise<Schemas['InvestigationPage'] | 'bad_cursor'>;
 /** One investigation; undefined when no alert group has its id. */
@@ -238,39 +239,49 @@ const summaryColumns = (sql: Sql, { liveTenants, stuckAfterMinutes }: ReadSettin
   (SELECT a.labels FROM gateway.alerts a WHERE a.group_id = g.id
    ORDER BY a.created_at, a.id LIMIT 1) AS labels`;
 
-/** Keyset pagination over investigated alert groups, ordered by (created_at, id) descending. */
+/**
+ * Investigated alert groups ordered by (created_at, id) descending, after a cursor or past an
+ * offset, with the count of the whole list so a reader can number its pages.
+ */
 export const createListInvestigations =
   (sql: Sql, settings: ReadSettings): ListInvestigations =>
-  async ({ limit, cursor, source }) => {
+  async ({ limit, cursor, offset = 0, source }) => {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
     if (cursor !== undefined && after === undefined) return 'bad_cursor';
-    // ponytail: sorts every tenant's investigated groups; index (created_at, investigation_id)
-    // past ~100k groups.
-    const rows = await sql<Row[]>`
-      SELECT ${summaryColumns(sql, settings)},
-             to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
-      FROM gateway.alert_groups g
-      LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
-      WHERE g.investigation_id IS NOT NULL ${
-        source === undefined
-          ? sql``
-          : sql`AND (g.tenant_id = ANY(${settings.liveTenants}::uuid[])) = ${source === 'live'}`
-      } ${
-        after === undefined
-          ? sql``
-          : // A text parameter: postgres.js turns a timestamptz one into a JS Date, which drops
-            // the microseconds and skips the rest of a millisecond.
-            sql`AND (g.created_at, g.investigation_id)
-                    < (${after[0]}::text::timestamptz, ${after[1]}::uuid)`
-      }
-      ORDER BY g.created_at DESC, g.investigation_id DESC
-      LIMIT ${limit + 1}`;
+    const listed = () =>
+      source === undefined
+        ? sql``
+        : sql`AND (g.tenant_id = ANY(${settings.liveTenants}::uuid[])) = ${source === 'live'}`;
+    // ponytail: sorts and counts every tenant's investigated groups, and OFFSET walks the rows it
+    // skips; index (created_at, investigation_id) past ~100k groups. The count is its own
+    // statement, so a group landing between the two shows on the next read.
+    const [rows, counted] = await Promise.all([
+      sql<Row[]>`
+        SELECT ${summaryColumns(sql, settings)},
+               to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
+        FROM gateway.alert_groups g
+        LEFT JOIN gateway.investigation_reports r ON r.investigation_id = g.investigation_id
+        WHERE g.investigation_id IS NOT NULL ${listed()} ${
+          after === undefined
+            ? sql``
+            : // A text parameter: postgres.js turns a timestamptz one into a JS Date, which drops
+              // the microseconds and skips the rest of a millisecond.
+              sql`AND (g.created_at, g.investigation_id)
+                      < (${after[0]}::text::timestamptz, ${after[1]}::uuid)`
+        }
+        ORDER BY g.created_at DESC, g.investigation_id DESC
+        LIMIT ${limit + 1} OFFSET ${offset}`,
+      sql<{ total: number }[]>`
+        SELECT count(*)::int AS total FROM gateway.alert_groups g
+        WHERE g.investigation_id IS NOT NULL ${listed()}`,
+    ]);
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     return {
       items: page.map(investigationSummary),
       next_cursor:
         rows.length > limit && last !== undefined ? encodeCursor(last.cursor_at, last.id) : null,
+      total: counted[0]?.total ?? 0,
     };
   };
 

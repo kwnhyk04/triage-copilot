@@ -68,6 +68,20 @@ export function verdictBadge({
     : { label: 'No verdict', tone: 'neutral' };
 }
 
+/** The verdict card's tag: the verdict in a word, and the top cause's confidence when there is one. */
+export function verdictTag(
+  item: Pick<Summary, 'verdict' | 'source' | 'status'>,
+  top: Pick<Schemas['Hypothesis'], 'confidence'> | undefined,
+): string {
+  const { label } = verdictBadge(item);
+  const word = label === VERDICTS.real ? 'Real' : label === VERDICTS.not_real ? 'Not real' : label;
+  return top === undefined ? word : `${word} · ${percent(top.confidence)}`;
+}
+
+/** A count with its noun, such as "1 step" or "21,380 tokens". */
+export const counted = (count: number, noun: string) =>
+  `${count.toLocaleString('en-US')} ${noun}${count === 1 ? '' : 's'}`;
+
 const STATUS_TONES: Record<Schemas['InvestigationStatus'], Tone> = {
   queued: 'neutral',
   running: 'info',
@@ -98,6 +112,14 @@ export const planBadge = (
   status: Schemas['ActionStatus'],
   review: Schemas['PlanReviewStatus'] | null | undefined,
 ): BadgeState => (review === 'refuse' ? { label: 'Refused', tone: 'bad' } : PLAN_STATES[status]);
+
+/** A plan's review in a word or two, for its card's tag. */
+export const REVIEW_TAGS: Record<Schemas['PlanReviewStatus'], string> = {
+  ok: 'No issues',
+  flag: 'Flagged',
+  refuse: 'Refused',
+  not_reviewed: 'Unreviewed',
+};
 
 /** Each kind of issue a plan's review raises, in plain words. */
 export const ISSUE_KINDS: Record<Schemas['PlanIssueKind'], string> = {

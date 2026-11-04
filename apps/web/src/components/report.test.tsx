@@ -61,6 +61,48 @@ describe('Report', () => {
     ]);
   });
 
+  it('heads each section with a round icon, its title and a tag with its key fact', () => {
+    // The plan's decision badge stays beside its title, before the tag.
+    const head = (id: string, tag: string) =>
+      new RegExp(
+        '<div class="panel-head"><span class="panel-icon"><svg [^>]*aria-hidden="true"[^>]*>' +
+          `(?:<path [^>]*></path>)+</svg></span><h2 id="${id}">[^<]+</h2><span class="panel-aside">` +
+          `(?:<span class="badge[^"]*">[^<]+</span>)?<span class="panel-tag">${tag}</span></span></div>`,
+      );
+    const html = shown(WORKER_OUT_OF_MEMORY, { decide });
+    for (const [id, tag] of [
+      ['verdict', 'Real · 80%'],
+      ['plan', 'Flagged'],
+      ['evidence', '2 results'],
+      ['steps', '5 steps'],
+      ['models', '21,380 tokens'],
+      ['missing', '1 missing'],
+    ] as const) {
+      expect([id, head(id, tag).test(html)]).toEqual([id, true]);
+    }
+  });
+
+  it("tags a plan with its review, a missing plan as none, and a run's verdict and actions", () => {
+    const tag = (html: string) =>
+      /<span class="panel-tag">([^<]+)<\/span>/.exec(html.slice(html.indexOf('id="plan"')))?.[1];
+    // A refused plan's badge already says Refused, so its tag would only repeat it.
+    const refusedPlan = shown(refused(), { decide });
+    const head = refusedPlan.slice(refusedPlan.indexOf('id="plan"'));
+    expect(head.slice(0, head.indexOf('</div>'))).not.toContain('panel-tag');
+    expect(count(head.slice(0, head.indexOf('</div>')), 'Refused')).toBe(1);
+    expect(tag(shown(reviewed({ ...OK, ...NO_ISSUES }), { decide }))).toBe('No issues');
+    const off = { ...OK, ...NO_ISSUES, status: 'not_reviewed', by: null, reason: 'off' } as const;
+    expect(tag(shown(reviewed(off), { decide }))).toBe('Unreviewed');
+    const problem = 'No model gave a plan.';
+    const none = { ...WORKER_OUT_OF_MEMORY.plan, proposal: null, problem };
+    expect(tag(shown({ ...WORKER_OUT_OF_MEMORY, plan: none, plan_status: null }))).toBe('No plan');
+    // A plan from before reviews has no review to tag; the next tag is the evidence's.
+    expect(tag(shown(reviewed(null), { decide }))).toBe('2 results');
+    const run: Investigation = { ...ONE_CLIENT_RETRYING, source: 'sim', verdict: null };
+    expect(shown(run)).toContain('<span class="panel-tag">Simulated · 60%</span>');
+    expect(shown(ONE_CLIENT_RETRYING)).toContain('<span class="panel-tag">Not real · 60%</span>');
+  });
+
   it('reads in order: verdict and cause, evidence, steps, models that served, missing evidence', () => {
     order(shown(WORKER_OUT_OF_MEMORY), [
       '>Verdict and cause<',
@@ -74,7 +116,7 @@ describe('Report', () => {
   it('gives the top cause with its confidence, then the other causes considered', () => {
     order(shown(WORKER_OUT_OF_MEMORY), [
       'Resource exhaustion in worker',
-      '80%',
+      '80% confidence',
       'The worker runs out of memory on large invoices and is killed with code 137.',
       'Other causes considered',
       'A queue outage could stop the worker, but redis answers its health check.',
@@ -333,6 +375,7 @@ describe('Report', () => {
     expect(html).toContain('<span class="badge">Simulated</span>');
     expect(html).not.toContain('Real incident');
     expect(html).toContain('Rollback deploy on checkout');
+    expect(html).toContain('<span class="panel-tag">1 action</span>');
     expect(html).toContain('Errors began two minutes after v1.8.0.');
     expect(html).not.toContain('<button');
   });

@@ -16,6 +16,7 @@ import {
   verdictBadge,
 } from '../lib/report.ts';
 import { LiveRefresh } from './live-refresh.tsx';
+import { Pager } from './pager.tsx';
 import { Badge } from './ui.tsx';
 
 // The list refreshes every 10 s while one of its items may still change.
@@ -57,11 +58,12 @@ const NONE = <span className="faint">None</span>;
 export interface ListProps {
   items: readonly Summary[];
   source: Source;
-  nextCursor: string | null;
+  /** How many the whole list holds, page and size: the pager numbers the pages from them. */
+  total: number;
+  page: number;
+  size: number;
   /** Where reports live: /investigations, or /demo/investigations. */
   basePath: string;
-  /** The list's own path, for the next page. */
-  listPath?: string;
   now: number;
   /** Hand-written samples, labeled as such. */
   illustrative?: ReadonlySet<string>;
@@ -81,16 +83,17 @@ function PlanCell({ item, waiting }: { item: Summary; waiting: boolean }) {
 }
 
 /**
- * Investigations as a table, newest first, with a link to the older ones. Below 720 px each row is
- * a card, its cells placed by data-card: the incident and verdict, then the status, plan and age,
- * then the cause with its confidence.
+ * Investigations as a table, newest first, a page at a time with numbered pages under it. Below
+ * 720 px each row is a card, its cells placed by data-card: the incident and verdict, then the
+ * status, plan and age, then the cause with its confidence.
  */
 export function InvestigationList({
   items,
   source,
-  nextCursor,
+  total,
+  page,
+  size,
   basePath,
-  listPath = '/investigations',
   now,
   illustrative,
   refresh,
@@ -136,9 +139,11 @@ export function InvestigationList({
             </thead>
             <tbody>
               {items.map((item) => (
-                <tr key={item.id}>
+                <tr key={item.id} id={`investigation-${item.id}`}>
                   <td data-card="title">
-                    <Link href={`${basePath}/${item.id}`}>{item.title}</Link>
+                    <Link href={`${basePath}/${item.id}`} title={item.title}>
+                      {item.title}
+                    </Link>
                     {illustrative?.has(item.id) === true && (
                       <span className="illustrative">{ILLUSTRATIVE_LABEL}</span>
                     )}
@@ -148,12 +153,16 @@ export function InvestigationList({
                       <Badge state={verdictBadge(item)} />
                     </td>
                   )}
-                  <td data-card={item.cause === null ? 'hide' : 'wide'}>
+                  <td
+                    className="cause-cell"
+                    title={item.cause === null ? undefined : causeName(item.cause)}
+                    data-card={item.cause === null ? 'hide' : 'wide'}
+                  >
                     {item.cause === null ? (
                       NONE
                     ) : (
                       <>
-                        {causeName(item.cause)}
+                        <span className="cut">{causeName(item.cause)}</span>
                         <span className="phone-only">{`, ${percent(item.cause.confidence)}`}</span>
                       </>
                     )}
@@ -182,16 +191,7 @@ export function InvestigationList({
           </table>
         </div>
       )}
-      {nextCursor !== null && (
-        <p className="pager">
-          <Link
-            className="button"
-            href={`${listPath}?source=${source}&cursor=${encodeURIComponent(nextCursor)}`}
-          >
-            Older
-          </Link>
-        </p>
-      )}
+      {items.length > 0 && <Pager page={page} size={size} total={total} firstId={items[0]?.id} />}
     </>
   );
 }

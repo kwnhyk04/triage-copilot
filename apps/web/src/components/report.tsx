@@ -1,8 +1,11 @@
+import type { ReactNode } from 'react';
+
 import type { Investigation } from '../lib/investigations.ts';
 import {
   ACTION_KINDS,
   cause,
   causeName,
+  counted,
   fallbackNotes,
   ISSUE_KINDS,
   OUTCOMES,
@@ -16,13 +19,16 @@ import {
   planNote,
   progressLine,
   REVIEW_NOTE,
+  REVIEW_TAGS,
   reviewHeading,
   statusBadge,
   STEP_KINDS,
   stillChanging,
   utcTime,
   verdictBadge,
+  verdictTag,
 } from '../lib/report.ts';
+import { Icon, type IconName } from './icons.tsx';
 import { ILLUSTRATIVE_LABEL } from './investigation-list.tsx';
 import { LiveRefresh } from './live-refresh.tsx';
 import { Badge } from './ui.tsx';
@@ -34,6 +40,36 @@ type Plan = NonNullable<Investigation['plan']>;
 type PlanReview = NonNullable<Plan['review']>;
 /** Records a human's decision on a plan from the submitted form (a server action). */
 export type DecidePlan = (planId: string, form: FormData) => Promise<void>;
+
+/** A section's head: its round icon, its title, any badge beside it, and a tag with its key fact. */
+function PanelHead({
+  id,
+  title,
+  icon,
+  tag,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon: IconName;
+  tag?: string | undefined;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="panel-head">
+      <span className="panel-icon">
+        <Icon name={icon} size={18} stroke={1.5} />
+      </span>
+      <h2 id={id}>{title}</h2>
+      {(children !== undefined || tag !== undefined) && (
+        <span className="panel-aside">
+          {children}
+          {tag !== undefined && <span className="panel-tag">{tag}</span>}
+        </span>
+      )}
+    </div>
+  );
+}
 
 // An excerpt over this many lines shows them first and folds the rest behind Show all.
 const FOLD_LINES = 12;
@@ -133,7 +169,7 @@ function PlanPanel({
   if (proposal == null) {
     return (
       <section className="panel" aria-labelledby="plan">
-        <h2 id="plan">Plan</h2>
+        <PanelHead id="plan" title="Plan" icon="plan" tag="No plan" />
         <p>{`No plan: ${plan.problem ?? 'no reason was recorded'}`}</p>
       </section>
     );
@@ -144,10 +180,14 @@ function PlanPanel({
   const newFiles = new Set(review?.new_files);
   return (
     <section className={pending ? 'panel plan pending' : 'panel plan'} aria-labelledby="plan">
-      <div className="panel-head">
-        <h2 id="plan">Plan</h2>
+      <PanelHead
+        id="plan"
+        title="Plan"
+        icon="plan"
+        tag={review == null || refused ? undefined : REVIEW_TAGS[review.status]}
+      >
         <Badge state={planBadge(plan.status, review?.status)} />
-      </div>
+      </PanelHead>
       <p className="plan-what">
         {PLAN_KINDS[proposal.kind]} {proposal.target}
       </p>
@@ -200,10 +240,9 @@ const WAITING_NOTE =
 function PlanWaiting() {
   return (
     <section className="panel plan" aria-labelledby="plan">
-      <div className="panel-head">
-        <h2 id="plan">Plan</h2>
+      <PanelHead id="plan" title="Plan" icon="plan">
         <Badge state={PLANNING} />
-      </div>
+      </PanelHead>
       <p>{WAITING_NOTE}</p>
     </section>
   );
@@ -264,7 +303,12 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
 
       <div className={side ? 'report-body with-side' : 'report-body'}>
         <section className="panel" aria-labelledby="verdict">
-          <h2 id="verdict">Verdict and cause</h2>
+          <PanelHead
+            id="verdict"
+            title="Verdict and cause"
+            icon="verdict"
+            tag={verdictTag(investigation, top)}
+          />
           <p className="lede">{investigation.summary ?? 'No report yet.'}</p>
           {investigation.partial && (
             <p className="notice">
@@ -311,7 +355,12 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
             {plan !== null && <PlanPanel plan={plan} decide={decide} demo={demo} now={now} />}
             {actions.length > 0 && (
               <section className="panel" aria-labelledby="proposed">
-                <h2 id="proposed">Proposed actions</h2>
+                <PanelHead
+                  id="proposed"
+                  title="Proposed actions"
+                  icon="actions"
+                  tag={counted(actions.length, 'action')}
+                />
                 <ul className="stack" role="list">
                   {actions.map((action) => (
                     <li key={action.id}>
@@ -330,7 +379,15 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
         )}
 
         <section className="panel" aria-labelledby="evidence">
-          <h2 id="evidence">Evidence</h2>
+          <PanelHead
+            id="evidence"
+            title="Evidence"
+            icon="evidence"
+            tag={counted(
+              cited.reduce((sum, hypothesis) => sum + hypothesis.evidence.length, 0),
+              'result',
+            )}
+          />
           {cited.length === 0 ? (
             <p>None cited.</p>
           ) : (
@@ -359,7 +416,7 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
         </section>
 
         <section className="panel" aria-labelledby="steps">
-          <h2 id="steps">Steps</h2>
+          <PanelHead id="steps" title="Steps" icon="steps" tag={counted(steps.length, 'step')} />
           {steps.length === 0 ? (
             <p>No steps yet.</p>
           ) : (
@@ -387,7 +444,12 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
         </section>
 
         <section className="panel" aria-labelledby="models">
-          <h2 id="models">Models that served</h2>
+          <PanelHead
+            id="models"
+            title="Models that served"
+            icon="models"
+            tag={counted(investigation.tokens_used, 'token')}
+          />
           {models.length === 0 ? (
             <p>None listed: the report is older than the model list, or not written yet.</p>
           ) : (
@@ -451,7 +513,12 @@ export function Report({ investigation, now, decide, demo, illustrative, refresh
 
         {investigation.missing_evidence.length > 0 && (
           <section className="panel" aria-labelledby="missing">
-            <h2 id="missing">Missing evidence</h2>
+            <PanelHead
+              id="missing"
+              title="Missing evidence"
+              icon="missing"
+              tag={`${String(investigation.missing_evidence.length)} missing`}
+            />
             <ul>
               {investigation.missing_evidence.map((missing) => (
                 <li key={missing}>{missing}</li>

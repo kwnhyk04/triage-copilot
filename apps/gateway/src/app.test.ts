@@ -26,7 +26,7 @@ const config = {
   RATE_LIMIT_PER_MINUTE: 600,
   AUTH_FAILURES_PER_MINUTE: 20,
 } as const;
-const PAGE = { items: [], next_cursor: null };
+const PAGE = { items: [], next_cursor: null, total: 0 };
 const up = () => Promise.resolve();
 const ACTION_ID = '9f8b6c1e-3d2a-4f5b-8e7d-6c5b4a392817';
 const TOKEN = 'tenant-webhook-token-00000000000000';
@@ -611,6 +611,24 @@ describe('gateway', () => {
       expect(listed).toEqual([
         { limit: 25, source: 'live' },
         { limit: 5, source: 'sim' },
+      ]);
+    });
+
+    it('passes an offset on for numbered pages, and refuses one beside a cursor or out of range', async () => {
+      await start();
+      for (const query of ['?source=live&limit=20&offset=40', '?offset=0', '?offset=1000000']) {
+        expect([query, (await get(query)).statusCode]).toEqual([query, 200]);
+      }
+      for (const query of ['?offset=-1', '?offset=1000001', '?offset=2.5', '?offset=ten']) {
+        expect([query, (await get(query)).statusCode]).toEqual([query, 400]);
+      }
+      const both = await get('?offset=20&cursor=abc');
+      expect(both.statusCode).toBe(400);
+      expect(both.json<{ detail: string }>().detail).toContain('offset or cursor');
+      expect(listed).toEqual([
+        { limit: 20, offset: 40, source: 'live' },
+        { limit: 25, offset: 0 },
+        { limit: 25, offset: 1000000 },
       ]);
     });
 

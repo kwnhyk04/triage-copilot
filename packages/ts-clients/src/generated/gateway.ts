@@ -62,7 +62,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lists investigations, newest first, with keyset pagination. */
+        /** Lists investigations, newest first, by keyset cursor or by numbered page. */
         get: operations["listInvestigations"];
         put?: never;
         post?: never;
@@ -351,6 +351,8 @@ export interface components {
             items: components["schemas"]["InvestigationSummary"][];
             /** @description Pass as cursor to read the next page; null on the last page. */
             next_cursor: string | null;
+            /** @description How many investigations the whole list holds (of the source asked for, if any), the same on every page, so a reader can number the pages. */
+            total: number;
         };
         /**
          * @description queued: waiting for the agent, parked for a slot or the model budget, or stuck; running: queued with a step recorded within the gateway's SWEEPER_STUCK_AFTER_MINUTES (10), read from the steps when served; then awaiting_approval, resolved, failed or cancelled from the report.
@@ -873,6 +875,8 @@ export interface operations {
                 limit?: number;
                 /** @description The next_cursor of the previous page; omit for the first page. */
                 cursor?: string;
+                /** @description How many investigations to skip, newest first, for numbered pages; omit for the first page. Sent with cursor, or outside 0 to 1000000, it gets 400. */
+                offset?: number;
                 /** @description Only live or only simulated investigations; omit for every tenant's. Another value gets 400. */
                 source?: components["schemas"]["InvestigationSource"];
             };
