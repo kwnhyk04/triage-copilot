@@ -548,8 +548,10 @@ pre {
   box-shadow: 0 -16px 80px -24px var(--hero-rim);
   transform: translateX(-50%);
 }
+/* Wide measures, balanced: the headline in two even lines and the subtitle in two from 1100 px;
+   a phone's width wraps them sooner. */
 .hero h1 {
-  max-width: 17ch;
+  max-width: 1100px;
   padding-bottom: 0.08em;
   font-size: clamp(36px, 5.4vw, 76px);
   line-height: 1.04;
@@ -557,7 +559,7 @@ pre {
   text-wrap: balance;
 }
 .hero-sub {
-  max-width: 40rem;
+  max-width: 900px;
   color: var(--text-2);
   font-size: 18px;
   line-height: 28px;

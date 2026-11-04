@@ -183,6 +183,34 @@ test.describe('the landing hero', () => {
     expect(covered).toBe(true);
   });
 
+  test('runs the headline and subtitle across a wide screen, and wraps them on a phone', async ({
+    page,
+  }) => {
+    // Lines of text in an element: its height over its line height.
+    const lines = (selector: string) =>
+      page.locator(selector).evaluate((element) => {
+        const { lineHeight, paddingBottom } = getComputedStyle(element);
+        const text = element.getBoundingClientRect().height - parseFloat(paddingBottom);
+        return Math.round(text / parseFloat(lineHeight));
+      });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    for (const [width, height, headline, subtitle] of [
+      [1100, 900, 2, 2],
+      [1440, 900, 2, 2],
+      [2048, 1030, 2, 2],
+      [2560, 1300, 2, 2],
+      [390, 844, 3, 4],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto('/');
+      expect([width, await lines('.hero h1'), await lines('.hero-sub')]).toEqual([
+        width,
+        headline,
+        subtitle,
+      ]);
+    }
+  });
+
   test('moves lightly on a wide screen, and stays still with reduced motion or on a phone', async ({
     page,
   }) => {
