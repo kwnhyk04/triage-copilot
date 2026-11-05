@@ -11,6 +11,7 @@ Scenario-based evaluation of the agent. The sim serves scripted incidents; each 
 | `harness/score.py` | Per-run scores, the metrics, 95% bootstrap intervals and the floor rules. |
 | `harness/eval.py` | `make eval`: the plan, the run cache and resume, the quota estimate, the reports and the eval table at the end of this file. |
 | `harness/plans.py`, `harness/test_plans.py` | `make eval-plans` (P2.5): the planner on the dev split's recorded triage reports, one Claude call a plan, and its tests with a scripted planner. |
+| `harness/cache_replay.py`, `harness/test_cache_replay.py` | `make eval-cache`: Claude's prompt cache reads and writes per investigation on the recorded runs, with no model called, and its tests on a made-up run. |
 | `harness/test_eval_score.py`, `harness/test_scenario_set.py` | Scoring, floor, plan and report tests. Scenario-set tests: the frozen manifest pins every file, the generator writes the same bytes, deploy and config timing give no answer away, and every required signal shows in the real tools' results. |
 | `thresholds.json` | The floor rules and the floors per scope (`test-full-3`, `dev-ci-1`), written by `SET_FLOORS=1` on 2026-10-20; three `dev-ci-1` floors were then set by hand and its p95 times left without one, so `SET_FLOORS=1` is never rerun on the ci subset. |
 | `pricing.json` | Paid-tier rates of the pinned models, from the official pricing page (updated 2026-10-15), for the paid-equivalent cost. The project bills $0 on the free tier. |
@@ -134,6 +135,19 @@ make eval-reviews MAX_USD=32 REVIEW_MODEL=claude-opus-5-5
 make eval-plans FRESH=1 LLM_PLANNER_EFFORT=max MAX_USD=22
 make eval-reviews FRESH=1 REVIEW_MODEL=<the chosen arm> MAX_USD=8
 ```
+
+Prompt caching has its own pass, `make eval-cache`, with no stack and no model. It sends every all-Claude run in `reports/runs/` back through the job's `history` and the real `AnthropicProvider` into a fake that keeps Anthropic's published cache rules, with each prompt's size from the recorded call. With message breakpoints ignored, the fake must give every recorded call its recorded reads and writes, or the pass stops.
+
+Results (2026-11-05, `reports/2026-11-05-cache-replay.md`, every investigation listed): the means per investigation on all 180 recorded Claude Haiku 5.5 runs, before and after the breakpoint on the last message of a turn. Each run's cost is the whole investigation, output included. This is a replay, so the first eval on Claude after this change gives the real figures.
+
+| Per investigation | Before (recorded) | After (replayed) |
+| --- | --- | --- |
+| Tokens read from the cache | 63,957 | 111,185 |
+| Tokens written to the cache | 112 | 9,756 |
+| Input tokens at the full rate | 64,452 | 7,581 |
+| Cost | $0.00842 | $0.00441 (48% less) |
+
+128 of the 180 runs end in a forced report, whose `tool_choice` differs from the turns before it. That ends the messages cache, so that one turn reads only the tools and system prompt and pays the full rate for the conversation: $0.00057 of each run's $0.00441 on average.
 
 ## Runs and scores
 

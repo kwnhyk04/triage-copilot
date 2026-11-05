@@ -7,6 +7,7 @@ import socket
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from itertools import pairwise
 from typing import Any
 
 import anthropic
@@ -329,6 +330,7 @@ def test_claude_sends_its_key_and_caches_the_system_prompt_and_tools(
         "type": "tool_result",
         "tool_use_id": "tc_0000000001",
         "content": "[tc_0000000001] up 1",
+        "cache_control": {"type": "ephemeral"},
     }
     assert body["messages"][1:] == [
         {"role": "assistant", "content": [use]},
@@ -352,6 +354,81 @@ def test_claude_forces_the_report_and_summarizes_without_thinking() -> None:
     body = json.loads(seen[0].content)
     assert (body["thinking"], body["max_tokens"]) == ({"type": "disabled"}, 400)
     assert (summary, usage.input) == ("- 40 timeouts", 2_800)
+
+
+def investigation(tool_calls: int) -> list[Message]:
+    """The brief, then that many tool calls and their results, as the job's history builds them."""
+    messages = [Message("user", text="Investigate.")]
+    for n in range(tool_calls):
+        call_id = f"tc_{n:010}"
+        call = ToolCallPart(call_id, "query_metrics", {"query": "x"})
+        result = ToolResultPart(call_id, "query_metrics", f"[{call_id}] up 1")
+        messages += [Message("assistant", call=call), Message("tool", result=result)]
+    return messages
+
+
+def blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
+    return [block for message in body["messages"] for block in message["content"]]
+
+
+@pytest.mark.parametrize("tool_calls", [0, 1, 15])
+def test_claude_marks_the_last_message_of_each_turn_and_no_other(tool_calls: int) -> None:
+    seen, provider = claude(200, CLAUDE_REPLY)
+
+    asyncio.run(provider.generate("system", investigation(tool_calls), TOOLS, None, 512))
+
+    body = json.loads(seen[0].content)
+    *earlier, last = blocks(body)
+    assert last["cache_control"] == {"type": "ephemeral"}
+    assert not [block for block in earlier if "cache_control" in block]
+    # With the system prompt's, two of the API's four breakpoints, however long the investigation.
+    assert "cache_control" in body["system"][0]
+
+
+def test_claude_repeats_the_last_turn_so_the_next_one_reads_it() -> None:
+    seen, provider = claude(200, CLAUDE_REPLY)
+
+    for tool_calls in range(4):
+        history = investigation(tool_calls)
+        asyncio.run(provider.generate("system", history, TOOLS, None, 2_048 - tool_calls))
+
+    def sent(body: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{k: v for k, v in b.items() if k != "cache_control"} for b in blocks(body)]
+
+    for before, after in pairwise(json.loads(request.content) for request in seen):
+        assert sent(after)[: len(blocks(before))] == sent(before)
+        # The cache keys on these; the output allowance left may change every turn.
+        for key in ("tools", "system", "tool_choice"):
+            assert after[key] == before[key]
+
+
+def test_claude_marks_no_message_of_a_forced_report() -> None:
+    """Its tool_choice differs from every turn before it, which ends the messages cache, so a
+    breakpoint would only write what no turn reads; the tools and system prompt still read."""
+    seen, provider = claude(200, CLAUDE_REPLY)
+    forced = [*investigation(2), Message("user", text="Stop investigating.")]
+
+    asyncio.run(provider.generate("system", forced, TOOLS, ("submit_report",), 4_096))
+
+    body = json.loads(seen[0].content)
+    assert body["messages"][-1]["content"] == [{"type": "text", "text": "Stop investigating."}]
+    assert not [block for block in blocks(body) if "cache_control" in block]
+    assert "cache_control" in body["system"][0]
+
+
+def test_claude_counts_cache_reads_and_writes_in_the_input() -> None:
+    # With the last message marked, input_tokens is next to nothing; the token cap needs it all.
+    usage = {
+        "input_tokens": 3,
+        "output_tokens": 40,
+        "cache_creation_input_tokens": 900,
+        "cache_read_input_tokens": 9_000,
+    }
+    _, provider = claude(200, CLAUDE_REPLY | {"usage": usage})
+
+    turn = asyncio.run(provider.generate("system", investigation(1), TOOLS, None, 512))
+
+    assert turn.usage == Usage(input=9_903, output=40, cached=9_000, cache_writes=900)
 
 
 @pytest.mark.parametrize(

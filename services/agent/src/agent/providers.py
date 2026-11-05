@@ -18,8 +18,10 @@ from typing import Any, Protocol, cast
 import anthropic
 import httpx2
 from anthropic.types import (
+    CacheControlEphemeralParam,
     MessageParam,
     OutputConfigParam,
+    TextBlockParam,
     ToolChoiceParam,
     ToolParam,
     ToolResultBlockParam,
@@ -76,6 +78,8 @@ SPEND_LIMIT = re.compile(r"(spend|usage) limit|credit balance", re.IGNORECASE)
 # Gemini's documented value for a function call it did not sign, such as one replayed from
 # another model's turn.
 UNSIGNED = b"skip_thought_signature_validator"
+# A 5-minute cache entry: an investigation's turns start seconds apart, and each read renews it.
+EPHEMERAL: CacheControlEphemeralParam = {"type": "ephemeral"}
 
 
 @dataclass(frozen=True)
@@ -291,8 +295,9 @@ def _retry_delay(details: object) -> float | None:
 
 
 class AnthropicProvider:
-    """Claude with native tool use. The system prompt and the tool definitions are cached: tools
-    render before the system prompt, so its one breakpoint covers both."""
+    """Claude with native tool use, on two of the API's four cache breakpoints: the system prompt,
+    which covers the tool definitions rendered before it, and the last message of each turn, so
+    the next turn reads the conversation so far."""
 
     name = "anthropic"
 
@@ -330,11 +335,16 @@ class AnthropicProvider:
             if allowed
             else {"type": "any", "disable_parallel_tool_use": True}
         )
+        # A forced report's tool_choice differs from every turn before it, which ends the messages
+        # cache: its tools and system prompt still read, and a breakpoint would write what no turn
+        # reads.
+        *earlier, last = messages
+        sent = [*map(_anthropic_message, earlier), _anthropic_message(last, cached=allowed is None)]
         with _anthropic_errors():
             response = await self._client.messages.create(
                 model=self.model,
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                messages=[_anthropic_message(m) for m in messages],
+                system=[{"type": "text", "text": system, "cache_control": EPHEMERAL}],
+                messages=sent,
                 tools=definitions,
                 tool_choice=choice,
                 max_tokens=max_output_tokens,
@@ -414,7 +424,8 @@ def _anthropic_errors() -> Generator[None]:
         raise _anthropic_error(error) from None
 
 
-def _anthropic_message(message: Message) -> MessageParam:
+def _anthropic_message(message: Message, *, cached: bool = False) -> MessageParam:
+    """One message, always in content blocks, the only form that can carry a cache breakpoint."""
     if message.call is not None:
         call = message.call
         use: ToolUseBlockParam = {
@@ -424,15 +435,15 @@ def _anthropic_message(message: Message) -> MessageParam:
             "input": call.args,
         }
         return {"role": "assistant", "content": [use]}
+    block: ToolResultBlockParam | TextBlockParam
     if message.result is not None:
         result = message.result
-        block: ToolResultBlockParam = {
-            "type": "tool_result",
-            "tool_use_id": result.id,
-            "content": result.content,
-        }
-        return {"role": "user", "content": [block]}
-    return {"role": "user", "content": message.text or ""}
+        block = {"type": "tool_result", "tool_use_id": result.id, "content": result.content}
+    else:
+        block = {"type": "text", "text": message.text or ""}
+    if cached:
+        block["cache_control"] = EPHEMERAL
+    return {"role": "user", "content": [block]}
 
 
 def _anthropic_usage(usage: anthropic.types.Usage) -> Usage:
