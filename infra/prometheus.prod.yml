@@ -18,6 +18,11 @@ scrape_configs:
     static_configs:
       - targets: [agent:4210]
         labels: { service: agent }
+  # Live verdicts and waiting plans, on the gateway's internal listener (src/metrics.ts).
+  - job_name: gateway
+    static_configs:
+      - targets: [gateway:4201]
+        labels: { service: gateway }
   # Each /readyz, through the probe exporter on this container's loopback. watch runs on this PC,
   # which only the egress proxy reaches: its probe port forwards GET /readyz there.
   - job_name: readyz

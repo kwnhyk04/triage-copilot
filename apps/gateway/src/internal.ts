@@ -13,6 +13,7 @@ import {
 import type { GatewayConfig } from './config.ts';
 import type { ActionsOn, Claim, Report } from './executions.ts';
 import type { GetAlertContext } from './investigations.ts';
+import type { Metrics } from './metrics.ts';
 
 export interface InternalDeps {
   config: Pick<GatewayConfig, 'LOG_LEVEL' | 'EXECUTOR_SERVICE_TOKEN' | 'AGENT_SERVICE_TOKEN'>;
@@ -20,6 +21,7 @@ export interface InternalDeps {
   report: Report;
   alertContext: GetAlertContext;
   actionsOn: ActionsOn;
+  metrics: Metrics;
 }
 
 const claimBody = z.strictObject({ dry_run: z.boolean() });
@@ -28,6 +30,8 @@ const resultBody = z.strictObject({
   detail: z.string().max(2000).exactOptional(),
 });
 const ALERTS = '/internal/investigations/:id/alerts';
+// No token: only internal networks reach this listener, and Prometheus holds none.
+const OPEN = new Set(['/healthz', '/metrics']);
 
 /**
  * The executor's and the agent's API. It has a listener of its own, bound to 127.0.0.1 (the
@@ -40,6 +44,7 @@ export function buildInternalApp({
   report,
   alertContext,
   actionsOn,
+  metrics,
 }: InternalDeps): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL, base: { service: 'gateway-internal' } },
@@ -47,10 +52,11 @@ export function buildInternalApp({
   });
   answerWithProblems(app);
 
-  // Every route but the probe takes one service's token: the agent's on its alert context, the
-  // executor's everywhere else, unknown routes included. Neither works on the other's routes.
+  // Every route but the probe and the metrics takes one service's token: the agent's on its alert
+  // context, the executor's everywhere else, unknown routes included. Neither works on the other's
+  // routes.
   app.addHook('onRequest', async (request, reply) => {
-    if (request.routeOptions.url === '/healthz') return;
+    if (OPEN.has(request.routeOptions.url ?? '')) return;
     const agent = request.routeOptions.url === ALERTS;
     const token = bearer(request);
     const expected = agent ? config.AGENT_SERVICE_TOKEN : config.EXECUTOR_SERVICE_TOKEN;
@@ -60,6 +66,17 @@ export function buildInternalApp({
     }
   });
   app.get('/healthz', () => ({ status: 'ok' }));
+
+  // A failure answers 503, so the scrape's `up` shows it and MonitoringBlind fires.
+  app.get('/metrics', async (request, reply) => {
+    try {
+      const text = await metrics();
+      return await reply.type('text/plain; version=0.0.4; charset=utf-8').send(text);
+    } catch (error) {
+      request.log.warn({ err: error }, 'metrics failed');
+      return problem(reply, 503, 'Service Unavailable', 'The metrics could not be read.');
+    }
+  });
 
   // 201: claimed now, so the executor may act. 200: claimed before, so it must not act again.
   app.post<{ Params: { id: string } }>(
@@ -89,6 +106,9 @@ export function buildInternalApp({
       if (claimed === 'not_found') {
         return problem(reply, 404, 'Not Found', 'No approved action has this id.');
       }
+      if (claimed === 'expired') {
+        return problem(reply, 410, 'Gone', 'The approval has expired; nothing is claimed.');
+      }
       return reply.code(claimed.created ? 201 : 200).send(claimed.execution);
     },
   );
@@ -111,7 +131,8 @@ export function buildInternalApp({
     },
   );
 
-  // Read only: the agent's get_alert_context tool.
+  // The agent's get_alert_context tool. It changes one thing: the first read closes the group, so
+  // a later alert gets an investigation of its own.
   app.get<{ Params: { id: string } }>(ALERTS, async (request, reply) => {
     const id = z.guid().safeParse(request.params.id);
     if (!id.success) return badRequest(reply, id.error.issues);

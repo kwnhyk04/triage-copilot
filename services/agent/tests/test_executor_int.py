@@ -106,7 +106,8 @@ def plan(tenant: UUID, kind: str, target: str) -> UUID:
         )
         conn.execute(
             "INSERT INTO gateway.plans (id, tenant_id, investigation_id, kind, target, files,"
-            " rationale, models, recorded_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())",
+            " rationale, models, review, recorded_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
             (
                 plan_id,
                 tenant,
@@ -116,6 +117,8 @@ def plan(tenant: UUID, kind: str, target: str) -> UUID:
                 Jsonb(files),
                 "Restart it, then run `docker compose down -v` to be sure [tc_01J9ZK3Q7M].",
                 Jsonb([]),
+                # Only a plan a model reviewed takes an approval.
+                Jsonb({"status": "ok", "by": "model"}),
             ),
         )
     return plan_id
@@ -139,6 +142,73 @@ def agent() -> Iterator[Agent]:
     fake = Agent()
     yield fake
     fake.server.shutdown()
+
+
+def test_an_executor_started_later_skips_an_approval_past_its_window(
+    scratch_db: "ScratchDb",
+    sqs: "SQSClient",
+    queues: tuple[str, str],
+    agent: Agent,
+    docker: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch_db.migrate_gateway()
+    queue_url, _ = queues
+    tenant = live_tenant()
+    with monkeypatch.context() as patch:
+        patch.setenv("PATH", str(docker))
+        effectors = {"restart_service": restart_effector()}
+    outcomes: list[str] = []
+    internal = free_port()
+    extra = {
+        "ACTIONS_QUEUE": queue_url.rsplit("/", 1)[1],
+        "LIVE_TENANTS": json.dumps({str(tenant): "filing-lens"}),
+        "APPROVAL_WINDOW_HOURS": "24",
+    }
+    with gateway("http://127.0.0.1:1/unused.fifo", agent.url, internal, extra=extra) as url:
+        # Approved while no executor runs: the message waits in the queue.
+        stale = plan(tenant, "restart_service", "api")
+        response = httpx2.post(
+            f"{url}/v1/plans/{stale}/approve",
+            headers={"x-approver-key": APPROVER_KEY},
+            json={"approver": "operator"},
+            timeout=5,
+        )
+        assert response.status_code == 200, response.text
+        with psycopg.connect(os.environ["GATEWAY_DATABASE_URL"]) as conn:
+            conn.execute(
+                "UPDATE gateway.plan_decisions SET decided_at = decided_at - interval '25 hours'"
+                " WHERE plan_id = %s",
+                (stale,),
+            )
+        client = ExecutionsClient(f"http://127.0.0.1:{internal}", EXECUTOR_TOKEN, timeout=5)
+
+        def handle(body: str) -> None:
+            options: dict[str, Any] = {"effectors": effectors, "stack": "dev"}
+            outcomes.append(run_action(body, client, dry_run=False, **options))
+
+        # The executor starts a day later, with the switch on and dry run off.
+        stopping = threading.Event()
+        args = (sqs, queue_url, handle, stopping)
+        thread = threading.Thread(target=consume, args=args, kwargs={"wait_seconds": 1})
+        thread.start()
+        try:
+            deadline = time.monotonic() + 30
+            while not outcomes:
+                assert time.monotonic() < deadline, "the executor got no message"
+                time.sleep(0.2)
+        finally:
+            stopping.set()
+            thread.join(10)
+            client.close()
+
+    assert outcomes == ["refused"]
+    assert executions() == {}
+    assert calls(docker) == []
+    # The message was handled and deleted, so it never comes back.
+    attributes = sqs.get_queue_attributes(QueueUrl=queue_url, AttributeNames=["All"])["Attributes"]
+    assert attributes["ApproximateNumberOfMessages"] == "0"
+    assert attributes["ApproximateNumberOfMessagesNotVisible"] == "0"
 
 
 def test_only_approved_catalog_restarts_run_once_and_a_dry_run_only_records(

@@ -39,7 +39,7 @@ PASTED = {
         "ALERT_EMAIL_FROM",
         "ALERT_EMAIL_TO",
     },
-    ".env.prod.gateway": set[str](),
+    ".env.prod.gateway": {"WEB_URL"},
     ".env.prod.agent": {"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "NVIDIA_API_KEY"},
 }
 

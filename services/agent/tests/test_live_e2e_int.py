@@ -3,8 +3,9 @@
 watch reads FreightAudit through in-process fakes of its docker, git and HTTP readers, fed by the
 synthetic fixture logs, and posts to the gateway process. The agent triages on a scripted model
 with the live tools, and the gateway's mirror ends with ReportRecorded v2, its verdict and its
-models. No canary planted in the fixtures reaches any stored row or log line. A storm through
-watch starts at most 30 investigations a day and records every alert.
+models. No canary planted in the fixtures reaches any stored row or log line. A health check that
+fires after the agent read the log signals is triaged on its own. A storm through watch starts at
+most 30 investigations a day and records every alert.
 """
 
 import asyncio
@@ -13,7 +14,7 @@ import importlib.util
 import logging
 import os
 import re
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString, cast
@@ -258,12 +259,14 @@ def test_a_live_alert_reaches_a_report_v2_through_watch_and_the_gateway_with_no_
         stopping = asyncio.Event()
         relaying = asyncio.create_task(relay.run(stopping))
         try:
+            # Every poll before the agent starts, so it reads all four alerts at once; the next
+            # test has it read the first ones before the health check fires.
+            watch = watcher(monkeypatch, target, url, docker, http)
+            for n in range(3):
+                sent = await asyncio.to_thread(watch.poll, NOW + timedelta(seconds=30 * n))
+                posted.extend(f"{state} {key.alertname}" for state, key in sent)
+            watch.close()
             async with agent(make_consumer(sqs, queue_url, job)):
-                watch = watcher(monkeypatch, target, url, docker, http)
-                for n in range(3):
-                    sent = await asyncio.to_thread(watch.poll, NOW + timedelta(seconds=30 * n))
-                    posted.extend(f"{state} {key.alertname}" for state, key in sent)
-                watch.close()
                 await eventually(reported, within=60)
         finally:
             stopping.set()
@@ -278,7 +281,8 @@ def test_a_live_alert_reaches_a_report_v2_through_watch_and_the_gateway_with_no_
         asyncio.run(main(url))
     alerts.close()
 
-    # Three log signals on the first poll, the failed health check on the third: one group.
+    # Three log signals on the first poll, the failed health check on the third, all before the
+    # agent read the group: one group.
     assert sorted(posted) == [
         "firing ClaudeSwitchedOff",
         "firing ExtractPaused",
@@ -338,6 +342,93 @@ def test_a_live_alert_reaches_a_report_v2_through_watch_and_the_gateway_with_no_
     # The logs watch read do hold canaries, so the scans above could have found them.
     raw = "".join((FIXTURES / name).read_text(encoding="utf-8") for name in LOGS.values())
     assert CANARY.search(raw)
+
+
+def test_a_health_check_after_the_log_signals_is_triaged_on_its_own(
+    engine: Engine,
+    sqs: SQSClient,
+    queues: tuple[str, str],
+    events: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_url, _ = queues
+    token = new_tenant()
+    tenant = tenant_of(token)
+    with engine.begin() as conn:
+        set_switch(conn, "live", True)
+    internal_port = free_port()
+    alerts = AlertContextClient(f"http://127.0.0.1:{internal_port}", SERVICE_TOKEN)
+    script = [ToolRequest(tool="get_alert_context", args={}, reason="See the group."), REPORT]
+    relay = Relay(engine, sqs_sender(sqs, events[0]), interval=0.2)
+    job = make_job(
+        engine,
+        {},
+        ScriptedModel([]),
+        live_tenants={UUID(tenant): "freight-audit"},
+        live_tools=live_tools(alerts, None),
+        live_model=ScriptedModel(script),
+        on_commit=relay.nudge,
+    )
+    http = FakeHttp()
+    http.status[HEALTH] = 503
+    target = Target(FA, "prod", token, {"api": HEALTH}, repo=Path("repo"))
+
+    def reports(count: int) -> Callable[[], bool]:
+        query = (
+            "SELECT 1 FROM gateway.investigation_reports r JOIN gateway.alert_groups g"
+            " ON g.investigation_id = r.investigation_id WHERE g.tenant_id = %s"
+        )
+        return lambda: len(gateway_rows(query, tenant)) >= count
+
+    async def main(url: str) -> None:
+        stopping = asyncio.Event()
+        relaying = asyncio.create_task(relay.run(stopping))
+        try:
+            async with agent(make_consumer(sqs, queue_url, job)):
+                watch = watcher(monkeypatch, target, url, FakeDocker(LOGS), http)
+                # The log signals fire on the first poll, and the agent reports on them.
+                await asyncio.to_thread(watch.poll, NOW)
+                await eventually(reports(1), within=60)
+                # The failed health check, the real symptom, takes three polls to fire.
+                for n in (1, 2):
+                    await asyncio.to_thread(watch.poll, NOW + timedelta(seconds=30 * n))
+                watch.close()
+                await eventually(reports(2), within=60)
+        finally:
+            stopping.set()
+            await relaying
+
+    events_env = {"AGENT_EVENTS_QUEUE": events[0], "AGENT_EVENTS_DLQ": events[1]}
+    with (
+        internal_api(job) as agent_url,
+        gateway(queue_url, agent_url, internal_port, extra=events_env) as url,
+    ):
+        asyncio.run(main(url))
+    alerts.close()
+
+    groups = gateway_rows(
+        "SELECT g.investigation_id::text, array(SELECT a.labels->>'alertname'"
+        " FROM gateway.alerts a WHERE a.group_id = g.id ORDER BY 1)"
+        " FROM gateway.alert_groups g WHERE g.tenant_id = %s ORDER BY g.created_at",
+        tenant,
+    )
+    assert [names for _, names in groups] == [
+        ["ClaudeSwitchedOff", "ExtractPaused", "ReadinessCheckFailed"],
+        ["HealthCheckFailed"],
+    ]
+    second = groups[1][0]
+    [(verdict,)] = gateway_rows(
+        "SELECT verdict::text FROM gateway.investigation_reports WHERE investigation_id = %s",
+        second,
+    )
+    assert verdict == "real"
+    # The second triage read the health check itself, so nothing joined unseen.
+    [(context,)] = gateway_rows(
+        "SELECT result FROM gateway.investigation_steps WHERE investigation_id = %s"
+        " AND tool_name = 'get_alert_context' AND tokens_input IS NULL",
+        second,
+    )
+    assert "HealthCheckFailed" in context
 
 
 def test_a_storm_through_watch_starts_at_most_30_triages_a_day_and_records_every_alert(

@@ -27,6 +27,8 @@ export const E2E = {
   planningId: 'c0ffee00-0000-4000-8000-000000000003',
   // Its real incident whose plan the review refused.
   refusedId: 'c0ffee00-0000-4000-8000-000000000006',
+  // Its real incident whose plan no model reviewed.
+  unreviewedId: 'c0ffee00-0000-4000-8000-000000000009',
   // Older settled investigations it adds to each list, so each has several pages. Their alert
   // names are their own, so no test's text finds one by chance.
   liveFillers: 40,

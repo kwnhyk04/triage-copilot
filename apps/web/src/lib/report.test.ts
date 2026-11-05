@@ -98,11 +98,22 @@ describe('labels', () => {
 
   it('shows a plan its review refused as Refused, in red, and any other by its decision', () => {
     expect(planBadge('pending', 'refuse')).toEqual({ label: 'Refused', tone: 'bad' });
-    // A flag leaves the decision to a person; an older gateway sends no review at all.
-    for (const review of ['flag', 'ok', 'not_reviewed', null, undefined] as const) {
+    // A flag leaves the decision to a person.
+    for (const review of ['flag', 'ok'] as const) {
       expect([review, planBadge('pending', review)]).toEqual([review, PLAN_STATES.pending]);
     }
     expect(planBadge('approved', 'flag')).toEqual(PLAN_STATES.approved);
+  });
+
+  it('shows a pending plan no model reviewed as one that cannot be approved', () => {
+    const blocked = { label: 'Not reviewed, cannot be approved', tone: 'bad' };
+    // The reviewer could not answer, or the plan is from before reviews and carries none.
+    for (const review of ['not_reviewed', null, undefined] as const) {
+      expect([review, planBadge('pending', review)]).toEqual([review, blocked]);
+    }
+    // One decided before the gateway refused these keeps its decision.
+    expect(planBadge('approved', 'not_reviewed')).toEqual(PLAN_STATES.approved);
+    expect(planBadge('rejected', null)).toEqual(PLAN_STATES.rejected);
   });
 
   it("names each kind of issue a plan's review raises in plain words", () => {
@@ -140,13 +151,16 @@ describe('labels', () => {
     expect(REVIEW_NOTE).toBe('Reviewed by a second model. Read every step yourself.');
   });
 
-  it('says what approving does: a restart runs once while the actions switch is on', () => {
-    expect(planNote({ kind: 'restart_service', target: 'worker' })).toBe(
-      'Approving only records the decision unless the actions switch is on. ' +
-        'With it on, the executor restarts worker once.',
+  it('says what approving does: a restart runs once while the actions switch is on, until it expires', () => {
+    expect(planNote({ kind: 'restart_service', target: 'worker' }, 6)).toBe(
+      'Approving queues this restart. With the actions switch on, the executor restarts worker ' +
+        'once. The approval expires after 6 hours: past that, nothing runs.',
     );
+    expect(planNote({ kind: 'restart_service', target: 'worker' }, 1)).toContain('after 1 hour:');
+    // An older gateway sends no window: 24 hours is the setting's default.
+    expect(planNote({ kind: 'restart_service', target: 'worker' })).toContain('after 24 hours:');
     for (const kind of ['code_fix', 'none'] as const) {
-      expect(planNote({ kind, target: 'api' })).toBe(
+      expect(planNote({ kind, target: 'api' }, 6)).toBe(
         'Approving only records the decision: nothing runs from this kind of plan.',
       );
     }

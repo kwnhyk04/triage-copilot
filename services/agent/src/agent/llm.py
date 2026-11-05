@@ -31,6 +31,7 @@ from agent.model import (
     PROMPT_OVERHEAD,
     BudgetRefused,
     CreditsExhausted,
+    Interrupted,
     KeyRejected,
     ModelCall,
     ModelError,
@@ -65,6 +66,11 @@ PLAN_OUTPUT_CAP = plan_limits("medium")[0]
 # (evals/reports, 2026-11-02 reviews a2e82b9b) used at most 1,036 output tokens and 8.3 s.
 REVIEW_OUTPUT_CAP = 4_000
 REVIEW_TIMEOUT = 120.0
+# What a failed call can have generated, in output tokens a second: above the 120 measured for Opus
+# at effort max, and safe to overshoot, since it only moves a dollar cap.
+OUTPUT_PER_SECOND = 300
+# No model answers sooner, so a call that failed faster reached none (a refused connection, say).
+FIRST_ANSWER_SECONDS = 1.0
 SUMMARY_OUTPUT_CAP = 400
 SUMMARY_MIN_OUTPUT = 64
 SUMMARY_SYSTEM = (
@@ -99,10 +105,11 @@ STOPPED = text("""
     LIMIT 1
 """)
 # Claude's tokens per model since this UTC day or month began (:period), of the calls made for the
-# roles a cap counts (:roles), for the dollar caps.
+# roles a cap counts (:roles), and what its failed calls may have cost, for the dollar caps.
 SPEND_SINCE = text("""
     SELECT model, sum(input_tokens)::bigint AS input, sum(cached_tokens)::bigint AS cached,
-           sum(cache_write_tokens)::bigint AS writes, sum(output_tokens)::bigint AS output
+           sum(cache_write_tokens)::bigint AS writes, sum(output_tokens)::bigint AS output,
+           sum(estimated_usd)::float8 AS estimated
     FROM agent.model_calls
     WHERE provider = 'anthropic' AND role::text = ANY(:roles)
       AND created_at >= date_trunc(:period, now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
@@ -142,7 +149,7 @@ def claude_spend(
         rates = RATES.get(row.model)
         if rates is None:
             return row.model
-        total += cost(
+        total += row.estimated + cost(
             rates, input=row.input, cached=row.cached, cache_writes=row.writes, output=row.output
         )
     return total
@@ -390,7 +397,7 @@ class Router:
                 )
             except Exception as error:
                 self._after_failure(role, error)
-                usage = error.usage if isinstance(error, ModelError) else Usage()
+                usage = _failed_usage(role, error, started, bound, cap, caches=False)
                 calls.append(_plan_call(role, _outcome(error), bound, sha, usage, started, error))
                 continue
             problem = request.problems(answer)
@@ -429,7 +436,7 @@ class Router:
             )
         except Exception as error:
             self._after_failure(role, error)
-            usage = error.usage if isinstance(error, ModelError) else Usage()
+            usage = _failed_usage(role, error, started, bound, cap, caches=False)
             failed = record(_outcome(error), usage=usage, started=started, error=error)
             return None, [failed], failed.error
         problem = request.problems(answer)
@@ -469,7 +476,7 @@ class Router:
             )
         except Exception as error:
             self._after_failure(role, error)
-            usage = error.usage if isinstance(error, ModelError) else Usage()
+            usage = _failed_usage(role, error, started, bound, max_output)
             failed = _call(
                 role, _outcome(error), bound, max_output, usage, _ms(started), _err(error), sha=sha
             )
@@ -511,9 +518,9 @@ class Router:
             )
             raise
         except Exception as error:
-            elapsed = _ms(started)
+            usage, elapsed = _failed_usage(role, error, started, bound, max_output), _ms(started)
             calls.append(
-                _call(role, "error", bound, max_output, Usage(), elapsed, _err(error), sha=sha)
+                _call(role, "error", bound, max_output, usage, elapsed, _err(error), sha=sha)
             )
             raise ModelError(f"{role.provider} call failed: {type(error).__name__}") from error
         calls.append(_call(role, "ok", bound, max_output, out.usage, _ms(started), sha=sha))
@@ -531,6 +538,27 @@ def _worst(role: Role, bound: int, max_output: int, *, caches: bool = True) -> f
     if role.daily_usd is None and role.monthly_usd is None:
         return 0.0
     return worst(RATES[role.model], bound, max_output, caches=caches)
+
+
+def _failed_usage(
+    role: Role,
+    error: Exception,
+    started: float,
+    bound: int,
+    max_output: int,
+    *,
+    caches: bool = True,
+) -> Usage:
+    """What a failed call used: the provider's own count; or, when it never gave one (a timeout, a
+    lost connection, a broken stream), an estimate for the dollar caps: every input token, and the
+    output the time it ran allows. One that failed within the first second reached no model."""
+    if isinstance(error, ModelError) and not isinstance(error, Interrupted):
+        return error.usage
+    seconds = time.perf_counter() - started
+    if seconds < FIRST_ANSWER_SECONDS:
+        return NO_USAGE
+    output = min(max_output, round(seconds * OUTPUT_PER_SECOND))
+    return Usage(estimated_usd=_worst(role, bound, output, caches=caches))
 
 
 def _action(

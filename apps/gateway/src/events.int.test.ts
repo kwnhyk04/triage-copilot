@@ -574,6 +574,7 @@ describe('agent events against Postgres and ElasticMQ', () => {
       claim: () => Promise.reject(new Error('unused')),
       report: () => Promise.reject(new Error('unused')),
       alertContext: createAlertContext(db.sql),
+      metrics: () => Promise.reject(new Error('unused by this test')),
     });
     try {
       const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
@@ -630,6 +631,7 @@ describe('agent events against Postgres and ElasticMQ', () => {
       claim: () => Promise.reject(new Error('unused')),
       report: () => Promise.reject(new Error('unused')),
       alertContext: createAlertContext(db.sql),
+      metrics: () => Promise.reject(new Error('unused by this test')),
     });
     try {
       const found = await internal.inject({

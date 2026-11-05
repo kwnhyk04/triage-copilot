@@ -11,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, z } from '@triage/ts-config';
 import postgres from 'postgres';
 
-import { liveTenantsRequired, stuckAfterMinutesSetting } from './config.ts';
+import {
+  approvalWindowHoursSetting,
+  liveTenantsRequired,
+  stuckAfterMinutesSetting,
+} from './config.ts';
 import { connectDb } from './db.ts';
 import { replayDeadLetters } from './events.ts';
 import { sha256 } from './intake.ts';
@@ -25,6 +29,7 @@ const settings = z.object({
   AGENT_EVENTS_QUEUE: z.string().min(1).default('agent-events.fifo'),
   AGENT_EVENTS_DLQ: z.string().min(1).default('agent-events-dlq.fifo'),
   SWEEPER_STUCK_AFTER_MINUTES: stuckAfterMinutesSetting,
+  APPROVAL_WINDOW_HOURS: approvalWindowHoursSetting,
 });
 // The web demo's eval runs, which demo-save replaces.
 const DEMO_FILE = new URL('../../web/src/demo/generated/eval-runs.ts', import.meta.url);
@@ -72,6 +77,7 @@ try {
       const reads = {
         liveTenants: Object.keys(live.LIVE_TENANTS),
         stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
+        approvalWindowHours: config.APPROVAL_WINDOW_HOURS,
       };
       const file = await demoFile(createGetInvestigation(readOnly, reads), ids);
       await mkdir(new URL('.', DEMO_FILE), { recursive: true });

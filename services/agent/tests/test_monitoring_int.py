@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test_alert_rules import rules
 from test_prod_compose import BASE, INFRA, PROD
 
 pytestmark = pytest.mark.integration
@@ -58,7 +59,7 @@ def test_prometheus_loads_production_s_config_and_rules() -> None:
         "/etc/prometheus/prometheus.yml",
         entrypoint="promtool",
     )
-    assert "8 rules found" in output
+    assert f"{len(rules())} rules found" in output
 
 
 def test_the_probe_exporter_loads_its_config() -> None:

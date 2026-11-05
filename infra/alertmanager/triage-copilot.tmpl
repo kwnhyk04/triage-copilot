@@ -1,7 +1,8 @@
 {{/*
 Triage Copilot's alert messages: one title and one text for Discord and email (alertmanager.yml).
 They say which alert, how severe and since when, and link only the rule's runbook in the public
-repo (docs/alerts.md): no Alertmanager, Prometheus or silence link. Times are UTC.
+repo (docs/alerts.md): no Alertmanager, Prometheus or silence link. Times are UTC. A verdict or a
+waiting plan is one line that links its report instead.
 */}}
 {{ define "triage-copilot.title" }}Triage Copilot {{ .Status }}: {{ .GroupLabels.alertname }}{{ if gt (len .Alerts.Firing) 1 }} ({{ len .Alerts.Firing }}){{ end }}{{ end }}
 
@@ -10,3 +11,7 @@ repo (docs/alerts.md): no Alertmanager, Prometheus or silence link. Times are UT
 Runbook: {{ .Annotations.runbook_url }}
 
 {{ end }}{{ end }}
+
+{{ define "triage-copilot.report.title" }}Triage Copilot: {{ (index .Alerts 0).Annotations.summary }}{{ end }}
+
+{{ define "triage-copilot.report.text" }}Report: {{ (index .Alerts 0).Annotations.report_url }}{{ end }}

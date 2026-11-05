@@ -53,7 +53,7 @@ Live triage's Claude takes no call, so live triage runs on Gemini, then NVIDIA. 
 - `monthly_cap`: TC's own $15 a month (`LLM_CLAUDE_MONTHLY_USD`) is used up, until the month ends (UTC).
 - `unpriced`: a Claude model has no prices in `agent/pricing.py`, so no cap can be checked.
 
-The credits' planned end (`LLM_CLAUDE_UNTIL`, 2026-11-10) fires nothing. Today's cap has its own rule.
+The credits' planned end (`LLM_CLAUDE_UNTIL`, 2026-11-10) does not fire this rule, but it ends plan reviews: see PlansUnreviewed. Today's cap has its own rule.
 
 1. `make prod-switch` shows the switches. `docker compose -p triagecopilot-prod logs agent --since 1h | Select-String -Pattern "Anthropic|credits"` shows the provider's answer.
 2. Fix by reason:
@@ -66,6 +66,19 @@ The credits' planned end (`LLM_CLAUDE_UNTIL`, 2026-11-10) fires nothing. Today's
 Today's Claude spend (UTC) leaves less than one largest call's worst case under the triage cap (`LLM_TRIAGE_DAILY_USD`, $0.40). Live triage runs on the free models until midnight UTC, when this resolves.
 
 Nothing needs fixing unless it fires every day. If it does, compare the day's triages (`make prod-digest`) with the flood guard's 30 a day per app before raising the cap.
+
+## PlansUnreviewed
+
+Plans arrived in the last hour that no model reviewed. The gateway refuses to approve such a plan, and the web shows it as "Not reviewed, cannot be approved". A human can still fix the incident by hand. Each plan's review says why it went unreviewed.
+
+1. Open the report and read the plan's `Not reviewed:` line.
+2. Fix by reason:
+   - The reviewer is switched off: `make prod-switch NAME=reviewer STATE=on`.
+   - Its credits ended (`LLM_CLAUDE_UNTIL`, 2026-11-10): every plan goes unreviewed until that date moves in `.env.prod.agent` and `make prod-up` recreates the agent. If Claude has really ended, switch the planner off with `make prod-switch NAME=planner STATE=off`.
+   - The reviewer's cap (`LLM_REVIEWER_DAILY_USD`) is spent: it resets at midnight UTC.
+   - The reviewer's model failed: `docker compose -p triagecopilot-prod logs agent --since 1h | Select-String -Pattern "reviewer|anthropic"`.
+
+A plan is reviewed once, so one that went unreviewed stays so. It resolves an hour after the last such plan.
 
 ## EgressDenied
 
@@ -84,10 +97,22 @@ Egress check 5 in docs/guide.md makes one refusal on purpose.
 
 ## MonitoringBlind
 
-Prometheus could not read the probe exporter (`readyz`) or egress-log for 5 minutes, so the readiness or refusal rules cannot fire.
+Prometheus could not read the probe exporter (`readyz`), egress-log or the gateway's metrics (`gateway`) for 5 minutes, so the readiness or refusal rules, or the verdict and waiting-plan messages, cannot fire.
 
-1. `docker compose -p triagecopilot-prod ps -a blackbox egress-log prometheus`.
+1. `docker compose -p triagecopilot-prod ps -a blackbox egress-log prometheus gateway`.
 2. The probe exporter shares Prometheus's network namespace, so it needs a restart after Prometheus is recreated: `make prod-up` recreates both.
+
+## InvestigationVerdict
+
+Not a fault: a live investigation reached a verdict. One Discord message, no email, with a link to the report. It names the app, the verdict and the cause class, never text a model wrote. A report the agent wrote after a stop has no verdict and sends nothing.
+
+Open the report. The series lasts an hour, so a verdict that lands while Prometheus or Alertmanager is down for longer never sends a message. The web still has it.
+
+## PlanWaiting
+
+Not a fault: a plan a model reviewed waits for a human. One Discord message, no email, with a link to the report. A refused plan and one no model reviewed send nothing here; the second fires PlansUnreviewed.
+
+Open the report and approve or reject it. An approval expires after `APPROVAL_WINDOW_HOURS` (24 by default), so an approved restart the executor has not claimed by then never runs.
 
 ## Not watched
 

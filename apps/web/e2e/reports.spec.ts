@@ -111,6 +111,22 @@ test('shows why a plan was refused, with no way to approve or reject it', async 
   await expect(row.getByText('Decision needed')).toHaveCount(0);
 });
 
+test('shows why no model reviewed a plan, that it cannot be approved, and no buttons', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/investigations/${E2E.unreviewedId}`);
+  const plan = page.getByRole('region', { name: 'Plan', exact: true });
+  await expect(plan.getByText('Not reviewed: its credits ended on 2026-11-10 (UTC)')).toBeVisible();
+  await expect(plan.getByText('Not reviewed, cannot be approved.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(Approve|Reject) plan$/ })).toHaveCount(0);
+  expect((await state(request)).decisions).toEqual([]);
+  await page.goto('/investigations');
+  const row = page.getByRole('row', { name: /WorkerStalled on worker/ });
+  await expect(row.getByText('Not reviewed, cannot be approved')).toBeVisible();
+  await expect(row.getByText('Decision needed')).toHaveCount(0);
+});
+
 test('follows a running investigation without a reload, pauses, and stops at the report', async ({
   page,
   request,
@@ -149,8 +165,8 @@ test('shows a real incident still planning, then its plan as soon as it lands', 
 });
 
 test.describe('numbered pages', () => {
-  // The fake gateway's live list: the samples, its three incidents and the fillers.
-  const LIVE_TOTAL = LIVE_SAMPLES.length + 3 + E2E.liveFillers;
+  // The fake gateway's live list: the samples, its four incidents and the fillers.
+  const LIVE_TOTAL = LIVE_SAMPLES.length + 4 + E2E.liveFillers;
   const SIM_TOTAL = EVAL_RUNS.length + E2E.simFillers;
   const of = (total: number, size: number) => Math.ceil(total / size);
   const status = (page: import('@playwright/test').Page) => page.locator('.pager-status');
@@ -255,7 +271,8 @@ test("lines up the Plan card's head with the others, its state and tag on one li
 }) => {
   for (const width of [1440, 1100, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of [REPORT, `/investigations/${E2E.refusedId}`]) {
+    const paths = [E2E.refusedId, E2E.unreviewedId].map((id) => `/investigations/${id}`);
+    for (const path of [REPORT, ...paths]) {
       await page.goto(path);
       const heights = await page
         .locator('.panel-head')

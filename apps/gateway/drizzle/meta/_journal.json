@@ -78,6 +78,13 @@
       "when": 1793666239767,
       "tag": "0010_plan_reviews",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793908651157,
+      "tag": "0011_alerts_read_at",
+      "breakpoints": true
     }
   ]
 }

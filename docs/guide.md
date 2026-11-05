@@ -86,7 +86,7 @@ Plan review (Part B, the `reviewer` switch, on by default): before anyone decide
 
 Measured (evals/README.md, `make eval-reviews`): on 16 fresh plans, no trusted plan was refused and 3 of the 4 bad steps were caught. The miss: dns-partition-2's "restart coredns only if it looks wedged", which the labels forbid. Known limits: the "to rule it out" rule was tested only on the dev set, where every such step was refused; medium bad-deploy-1 is caught about half the time.
 
-Actions (phase 3): approving a restart plan queues its kind and target, never its written steps, for the executor (`make dev-executor`, on this PC, not in production). The executor runs `docker compose -p <project> restart <service>` on an app or worker container of the app's catalog in `EXECUTOR_STACK` (default `dev`). It does so only while the `actions` switch is on (`make switch NAME=actions STATE=on`, off by default) and only with `EXECUTOR_DRY_RUN=false`. The default dry run records the command and runs nothing. Each approval runs at most once, and an approval made while the switch is off never runs. A code fix's approval runs nothing.
+Actions (phase 3): only a plan a model reviewed can be approved. Approving a restart plan queues its kind and target, never its written steps, for the executor (`make dev-executor`, on this PC, not in production). An approval lasts `APPROVAL_WINDOW_HOURS` (24 by default): past that the gateway refuses the claim, so an executor started later skips it and nothing runs. The executor runs `docker compose -p <project> restart <service>` on an app or worker container of the app's catalog in `EXECUTOR_STACK` (default `dev`). It does so only while the `actions` switch is on (`make switch NAME=actions STATE=on`, off by default) and only with `EXECUTOR_DRY_RUN=false`. The default dry run records the command and runs nothing. Each approval runs at most once, and an approval made while the switch is off never runs. A code fix's approval runs nothing.
 
 ## Deploy
 
@@ -101,7 +101,7 @@ Every production network is internal except the egress proxy's, so no other cont
 | File | Read by | Holds |
 | --- | --- | --- |
 | `.env.prod` | compose, for interpolation | `PROD_POSTGRES_PASSWORD`, `PROD_GATEWAY_DB_PASSWORD`, `PROD_AGENT_DB_PASSWORD`, `PROD_GRAFANA_ADMIN_PASSWORD`; `TC_IMAGES` (`ghcr.io/<owner>`, lower case, from the GitHub remote); `TC_TAG` (`sha-` and the merged commit's first 12 characters, once `publish.yml` has pushed it); `TS_AUTHKEY` (a one-off, tagged, pre-approved auth key: the container keeps it in its environment); the four `ALERT_*` values and `COMPOSE_PROFILES=observability` once alerting is set up (Alerting) |
-| `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY=10.231.233.18`, the sidecar's fixed address, once checked (check 5) |
+| `.env.prod.gateway` | the gateway | `GATEWAY_API_KEY`, `APPROVER_API_KEY`, `AGENT_SERVICE_TOKEN`, `EXECUTOR_SERVICE_TOKEN`, `WEB_URL` (the web's public address, which Discord messages link; the gateway refuses to start without it), `LIVE_TENANTS`; `GATEWAY_TRUST_PROXY=10.231.233.18`, the sidecar's fixed address, once checked (check 5) |
 | `.env.prod.agent` | the agent, its migration and the runbook load | the same `AGENT_SERVICE_TOKEN`, `AI_ENABLED=true`, `ANTHROPIC_API_KEY` (the TC workspace's), `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `LIVE_TENANTS` |
 
 The compose file fixes everything container-side: hosts, ports, database URLs, the queue and service addresses, `FASTEMBED_CACHE_PATH`, `SOURCE_INDEX_DIR` and `NODE_ENV=production`. So a line copied from `.env` cannot point a container at 127.0.0.1 or an H: path.
@@ -224,8 +224,11 @@ With `COMPOSE_PROFILES=observability` in `.env.prod`, production runs Prometheus
 | InvestigationsFailing | an investigation message went to the dead-letter queue, or failed validation, in the last hour | warning |
 | ClaudeOff | Claude takes no live triage call for a minute: switched off, key rejected, credits or TC's monthly cap used up. Not its planned end on `LLM_CLAUDE_UNTIL` | warning |
 | ClaudeDailyCapReached | today's Claude spend leaves less than one largest call under the triage cap ($0.40, UTC) | warning |
+| PlansUnreviewed | a plan arrived in the last hour with no model review, so it cannot be approved | warning |
 | EgressDenied | the egress proxy refused a request in the last 10 minutes | warning |
-| MonitoringBlind | Prometheus cannot read the probe exporter or egress-log for 5 minutes | warning |
+| MonitoringBlind | Prometheus cannot read the probe exporter, egress-log or the gateway's metrics for 5 minutes | warning |
+| InvestigationVerdict | a live investigation reached a verdict: one Discord message with a link to the report, no email | warning |
+| PlanWaiting | a plan a model reviewed waits for a decision: one Discord message with a link to the report, no email | warning |
 
 - **No route of its own.** Alertmanager, the mail relay and egress-log sit on `alerting` alone: internal, with Prometheus and the egress proxy, so no app container reaches Alertmanager's API, which has no login. Nothing publishes a port.
 - **Discord** goes through the proxy's port 3130, which serves 10.231.233.50 alone and allows `discord.com:443` alone. So the webhook URL must start with `https://discord.com/api/webhooks/`; `discordapp.com`, `canary.` and `ptb.` are refused, and the entrypoint says so at start.

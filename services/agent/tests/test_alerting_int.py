@@ -359,6 +359,44 @@ def test_alerts_reach_the_fake_discord_and_gmail_once_per_rule_and_nothing_else(
     assert (TOKEN in printed, PASSWORD in printed) == (False, False)
 
 
+REPORT = "https://web.test/investigations/1b4e28ba-2fa1-41d2-883f-0016d3cca427"
+
+
+def test_a_verdict_and_a_waiting_plan_reach_discord_once_each_with_the_report_and_no_mail(
+    delivery: Delivery,
+) -> None:
+    posts, mails = len(delivery.received("discord")), len(delivery.received("gmail"))
+    url = "--alertmanager.url=http://127.0.0.1:9093"
+    sent = [
+        ("InvestigationVerdict", "Real incident on freight-audit: database"),
+        ("PlanWaiting", "A plan on freight-audit waits for a decision"),
+    ]
+    for name, summary in sent:
+        labels = [f"alertname={name}", "severity=warning", "notify=report", "investigation=inv-1"]
+        notes = [f"--annotation=summary={summary}", f"--annotation=report_url={REPORT}"]
+        notes.append(f"--annotation=runbook_url={LINK}{name.lower()}")
+        docker(
+            "exec", delivery.names["alertmanager"], "amtool", "alert", "add", *labels, *notes, url
+        )
+
+    def both() -> list[dict[str, Any]] | None:
+        new = delivery.received("discord")[posts:]
+        return new if len(new) >= 2 else None
+
+    new = until(both, "a Discord message per alert", 60, hint=delivery.logs)
+    time.sleep(5)
+    assert len(delivery.received("discord")) == posts + 2
+    assert len(delivery.received("gmail")) == mails
+    embeds = [embed for post in new for embed in json.loads(post["body"])["embeds"]]
+    assert {embed["title"] for embed in embeds} == {f"Triage Copilot: {s}" for _, s in sent}
+    for embed in embeds:
+        # The report is the only link, on the webhook's own path, with nothing secret in it.
+        assert links(embed["description"]) == {REPORT}
+    assert {post["path"] for post in new} == {f"/api/webhooks/1234567890/{TOKEN}"}
+    for post in new:
+        assert TOKEN not in post["body"]
+
+
 BROKEN = [
     *[({name: ""}, name) for name in SETTINGS],
     (

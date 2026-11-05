@@ -223,6 +223,9 @@ class ModelCall(Base):
     # Of the input: read from the provider's prompt cache, and written to it (since 0009).
     cached_tokens: Mapped[int]
     cache_write_tokens: Mapped[int] = mapped_column(server_default="0")
+    # US dollars a failed call may have cost when its provider never said (since 0016): the dollar
+    # caps add it, and the token budgets never do.
+    estimated_usd: Mapped[float] = mapped_column(server_default="0")
     thought_tokens: Mapped[int]
     # The hard cap's upper bound on input_tokens, kept to check that it held.
     input_bound: Mapped[int | None]

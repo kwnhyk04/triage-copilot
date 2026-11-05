@@ -49,6 +49,18 @@ describe('LIVE_TENANTS', () => {
   });
 });
 
+describe('APPROVAL_WINDOW_HOURS', () => {
+  it('is 24 hours unless set, and takes a positive whole number alone', () => {
+    expect(loadGatewayConfig(env).APPROVAL_WINDOW_HOURS).toBe(24);
+    const hours = (value: string) =>
+      loadGatewayConfig({ ...env, APPROVAL_WINDOW_HOURS: value }).APPROVAL_WINDOW_HOURS;
+    expect(hours('2')).toBe(2);
+    for (const value of ['0', '-1', '1.5', 'a day']) {
+      expect(() => hours(value)).toThrow('APPROVAL_WINDOW_HOURS');
+    }
+  });
+});
+
 describe('in production', () => {
   it('refuses any key or token still at its .env.example value', () => {
     for (const name of [
@@ -65,8 +77,18 @@ describe('in production', () => {
   });
 
   it('runs on fresh keys, and dev runs on the .env.example ones', () => {
-    expect(() => loadGatewayConfig({ ...env, NODE_ENV: 'production' })).not.toThrow();
+    const production = { ...env, NODE_ENV: 'production', WEB_URL: 'https://triage.example.com' };
+    expect(() => loadGatewayConfig(production)).not.toThrow();
     expect(() => loadGatewayConfig({ ...env, ...PLACEHOLDERS })).not.toThrow();
+  });
+
+  it("refuses dev's web address, which a Discord message would link", () => {
+    expect(loadGatewayConfig(env).WEB_URL).toBe('http://127.0.0.1:3200');
+    const production = { ...env, NODE_ENV: 'production' };
+    expect(() => loadGatewayConfig(production)).toThrow('WEB_URL is required');
+    expect(() => loadGatewayConfig({ ...production, WEB_URL: 'http://127.0.0.1:3200' })).toThrow(
+      "WEB_URL: must be the web's public address",
+    );
   });
 });
 

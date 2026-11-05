@@ -16,6 +16,7 @@ import fc from 'fast-check';
 import { buildApp, createUpdates } from './app.ts';
 import { connectDb } from './db.ts';
 import { createFindTenant, createIntake, fingerprint, sha256 } from './intake.ts';
+import { createAlertContext } from './investigations.ts';
 import {
   MAX_ATTEMPTS,
   type OutboxMessage,
@@ -104,6 +105,119 @@ describe('alert intake against Postgres and ElasticMQ', () => {
     for (const { body } of messages) {
       expect(parseMessage('investigation-requested.v2', body).tenant_id).toBe(tenantId);
     }
+  });
+
+  describe('alerts that come after the first', () => {
+    const KEY = '{}:{app="freight-audit"}';
+    const setup = async () => {
+      const { tenantId } = await newTenant(db.sql);
+      const intake = createIntake(db.sql, () => undefined, 5);
+      const store = (alert: string, status = 'firing') =>
+        intake(tenantId, webhook(KEY, [{ alert, status }]));
+      return { tenantId, store };
+    };
+    const investigationOf = async (groupId: string) => {
+      const [group] = await db.sql<{ investigation_id: string }[]>`
+        SELECT investigation_id FROM gateway.alert_groups WHERE id = ${groupId}`;
+      return group?.investigation_id ?? '';
+    };
+    /** The alert names the agent reads for this group, as its get_alert_context does. */
+    const read = async (groupId: string) => {
+      const context = await createAlertContext(db.sql)(await investigationOf(groupId));
+      return context?.alerts.map((alert) => alert.labels.alert);
+    };
+    const groups = (tenantId: string) =>
+      db.sql<{ investigated: boolean; reason: string | null; alerts: string[] }[]>`
+        SELECT g.investigation_id IS NOT NULL AS investigated, g.not_investigated AS reason,
+               (SELECT array_agg(a.labels->>'alert' ORDER BY a.created_at)
+                FROM gateway.alerts a WHERE a.group_id = g.id) AS alerts
+        FROM gateway.alert_groups g WHERE g.tenant_id = ${tenantId} ORDER BY g.created_at`;
+
+    it('gives a health check that follows a log signal its own investigation', async () => {
+      const { tenantId, store } = await setup();
+      // watch fires a log signal after one poll, a failed health check after three, so the agent
+      // has read the first alert by the time the real symptom arrives.
+      const logSignal = await store('ExtractPaused');
+      expect(await read(logSignal.group_id)).toEqual(['ExtractPaused']);
+      const healthCheck = await store('HealthCheckFailed');
+
+      expect(healthCheck.group_id).not.toBe(logSignal.group_id);
+      expect([...(await groups(tenantId))]).toEqual([
+        { investigated: true, reason: null, alerts: ['ExtractPaused'] },
+        { investigated: true, reason: null, alerts: ['HealthCheckFailed'] },
+      ]);
+      expect(await read(healthCheck.group_id)).toEqual(['HealthCheckFailed']);
+      // Both go down one FIFO group, so the second starts when the first is done.
+      const sent = await db.sql<{ message_group_id: string }[]>`
+        SELECT message_group_id FROM gateway.outbox ORDER BY id`;
+      expect(sent.map((row) => row.message_group_id)).toEqual(
+        Array.from({ length: 2 }, () => sha256(`${tenantId}\n${KEY}`)),
+      );
+    });
+
+    it('lets later alerts join that second group until it is read in turn', async () => {
+      const { tenantId, store } = await setup();
+      await read((await store('ExtractPaused')).group_id);
+      const second = await store('HealthCheckFailed');
+      expect((await store('ContainerExited')).group_id).toBe(second.group_id);
+      expect(await read(second.group_id)).toEqual(['HealthCheckFailed', 'ContainerExited']);
+      expect((await groups(tenantId)).map((group) => group.alerts)).toEqual([
+        ['ExtractPaused'],
+        ['HealthCheckFailed', 'ContainerExited'],
+      ]);
+    });
+
+    it('keeps alerts that arrive before the first read in one group, which the agent reads', async () => {
+      const { tenantId, store } = await setup();
+      const first = await store('ExtractPaused');
+      expect((await store('HealthCheckFailed')).group_id).toBe(first.group_id);
+      expect(await read(first.group_id)).toEqual(['ExtractPaused', 'HealthCheckFailed']);
+      expect(await groups(tenantId)).toHaveLength(1);
+    });
+
+    it('never joins a group whose report is in, even one that read nothing', async () => {
+      const { tenantId, store } = await setup();
+      const first = await store('ExtractPaused');
+      await db.sql`UPDATE gateway.alert_groups SET status = 'resolved' WHERE id = ${first.group_id}`;
+      expect((await store('HealthCheckFailed')).group_id).not.toBe(first.group_id);
+      expect((await groups(tenantId)).map((group) => group.investigated)).toEqual([true, true]);
+    });
+
+    it('investigates a firing alert that follows a resolved one in the same window', async () => {
+      const { tenantId, store } = await setup();
+      const resolved = await store('ShortBlip', 'resolved');
+      // A second one that arrives resolved stays with the first: nothing to investigate.
+      expect((await store('OtherBlip', 'resolved')).group_id).toBe(resolved.group_id);
+      expect((await store('HealthCheckFailed')).group_id).not.toBe(resolved.group_id);
+      expect([...(await groups(tenantId))]).toEqual([
+        { investigated: false, reason: 'resolved', alerts: ['ShortBlip', 'OtherBlip'] },
+        { investigated: true, reason: null, alerts: ['HealthCheckFailed'] },
+      ]);
+    });
+
+    it('holds a window the flood guard kept from investigation in one group', async () => {
+      const { tenantId } = await newTenant(db.sql);
+      const intake = createIntake(db.sql, () => undefined, 0);
+      const first = await intake(tenantId, webhook(KEY, [{ alert: 'a' }]));
+      const second = await intake(tenantId, webhook(KEY, [{ alert: 'b' }]));
+      expect(second.group_id).toBe(first.group_id);
+      expect([...(await groups(tenantId))]).toEqual([
+        { investigated: false, reason: 'burst', alerts: ['a', 'b'] },
+      ]);
+    });
+
+    it('never loses an alert to a read at the same moment', async () => {
+      // Each race ends one of two ways: the read shows the alert, or the alert has its own group.
+      for (let round = 0; round < 25; round++) {
+        const { store } = await setup();
+        const first = await store('ExtractPaused');
+        const [second, seen] = await Promise.all([
+          store('HealthCheckFailed'),
+          read(first.group_id),
+        ]);
+        expect(seen?.includes('HealthCheckFailed')).toBe(second.group_id === first.group_id);
+      }
+    }, 30_000);
   });
 
   it('investigates 30 groups a tenant a UTC day, records why the rest are not, and digests them', async () => {

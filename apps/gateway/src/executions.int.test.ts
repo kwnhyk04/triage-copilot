@@ -10,6 +10,7 @@ import { newTenant, scratchDb } from './testing.ts';
 
 const TOKEN = 'executor-token-for-these-tests-000000';
 const AGENT_SERVICE_TOKEN = 'agent-token-for-these-tests-0000000000';
+const WINDOW_HOURS = 24;
 
 describe('executions against Postgres', () => {
   let scratch: Awaited<ReturnType<typeof scratchDb>>;
@@ -23,10 +24,11 @@ describe('executions against Postgres', () => {
     db = connectDb(scratch.url);
     internal = buildInternalApp({
       config: { LOG_LEVEL: 'error', EXECUTOR_SERVICE_TOKEN: TOKEN, AGENT_SERVICE_TOKEN },
-      claim: createClaim(db.sql),
+      claim: createClaim(db.sql, WINDOW_HOURS),
       report: createReport(db.sql),
       alertContext: createAlertContext(db.sql),
       actionsOn: () => Promise.resolve(actions),
+      metrics: () => Promise.reject(new Error('unused by this test')),
     });
   }, 60_000);
   afterAll(async () => {
@@ -90,6 +92,65 @@ describe('executions against Postgres', () => {
     post(`/internal/actions/${id}/execution`, { dry_run: dryRun });
   const report = (id: string, result: object) =>
     post(`/internal/actions/${id}/execution/result`, result);
+  /** Moves a decision `hours` into the past. */
+  const aged = async (id: string, hours: number) => {
+    await db.sql`
+      UPDATE gateway.approvals SET decided_at = decided_at - make_interval(hours => ${hours})
+      WHERE action_id = ${id}`;
+    await db.sql`
+      UPDATE gateway.plan_decisions SET decided_at = decided_at - make_interval(hours => ${hours})
+      WHERE plan_id = ${id}`;
+  };
+  const claimsOf = async (ids: string[]) => [
+    ...(await db.sql`SELECT FROM gateway.executions WHERE action_id = ANY(${ids})`),
+    ...(await db.sql`SELECT FROM gateway.plan_executions WHERE plan_id = ANY(${ids})`),
+  ];
+
+  it('refuses an approval past its window with 410, dry runs too, and claims nothing', async () => {
+    const ids = [await action('approved'), await plan('approved')];
+    for (const id of ids) {
+      await aged(id, WINDOW_HOURS + 1);
+      for (const dryRun of [false, true]) {
+        const refused = await claim(id, dryRun);
+        expect([dryRun, refused.statusCode]).toEqual([dryRun, 410]);
+        expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+        expect(refused.json<{ detail: string }>().detail).toBe(
+          'The approval has expired; nothing is claimed.',
+        );
+      }
+    }
+    expect(await claimsOf(ids)).toEqual([]);
+  });
+
+  it('claims an approval still inside its window', async () => {
+    const ids = [await action('approved'), await plan('approved')];
+    for (const id of ids) {
+      await aged(id, WINDOW_HOURS - 1);
+      expect((await claim(id)).statusCode).toBe(201);
+    }
+  });
+
+  it('replays a claim made in time once its approval is past the window, so it never runs again', async () => {
+    const id = await plan('approved');
+    const first = await claim(id);
+    expect(first.statusCode).toBe(201);
+    await aged(id, WINDOW_HOURS + 1);
+    const again = await claim(id);
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ state: string }>().state).toBe('claimed');
+  });
+
+  it('answers 404, never 410, for an old decision that was never claimable', async () => {
+    const ids = [
+      await action('rejected'),
+      await plan('rejected'),
+      await plan('approved', 'code_fix'),
+    ];
+    for (const id of ids) {
+      await aged(id, WINDOW_HOURS + 1);
+      expect((await claim(id)).statusCode).toBe(404);
+    }
+  });
 
   it('claims an approved action once: a second claim returns the first and never runs it again', async () => {
     const id = await action('approved');

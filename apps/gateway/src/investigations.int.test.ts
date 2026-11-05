@@ -45,7 +45,7 @@ describe('investigation list against Postgres', () => {
     scratch = await scratchDb();
     db = connectDb(scratch.url);
     live = (await newTenant(db.sql)).tenantId;
-    const settings = { liveTenants: [live], stuckAfterMinutes: 10 };
+    const settings = { liveTenants: [live], stuckAfterMinutes: 10, approvalWindowHours: 24 };
     app = await buildApp({
       config: APP_CONFIG,
       ping: db.ping,

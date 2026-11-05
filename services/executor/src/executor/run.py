@@ -2,11 +2,13 @@
 
 An action runs only when its kind is on the allowlist, its target is an app or a worker of the
 app's catalog with a container in the executor's stack, and the gateway lets the executor claim
-it, which takes a recorded approval whose decision is approved and the operator's actions switch
-on; and only as the message says it was approved (kind, target, parameters). Phase 3 runs one
-kind, restart_service, as `docker compose -p <project> restart <service>` with the catalog's names,
-never the message's text. The action id is the idempotency key: a second claim finds the first,
-and the action never runs again. Any doubt refuses (fail closed): an invalid message, an
+it, which takes a recorded approval whose decision is approved, still inside its window, and the
+operator's actions switch on; and only as the message says it was approved (kind, target,
+parameters). An approval past its window is skipped, however late this executor started. Phase 3
+runs one kind, restart_service, as `docker compose -p <project> restart <service>` with the
+catalog's names, never the message's text. The action id is the idempotency key: a second claim
+finds the first, and the action never runs again. Any doubt refuses (fail closed): an invalid
+message, an
 ActionApproved v1 or a sim tenant's action (no app), a kind off the allowlist, a target the
 catalog does not let restart, a gateway that cannot be reached or answers with an error.
 Mutating actions are never retried; one stuck in claimed waits for a human.
@@ -106,6 +108,8 @@ def run_action(
     except ApiError as error:
         if error.status == 404:
             return _refuse("no approved action has this id", action_id=message.action_id)
+        if error.status == 410:
+            return _refuse("the approval expired", action_id=message.action_id)
         # 409: the actions switch is off; 503: the gateway could not tell.
         return _refuse(
             "the gateway refused the claim", action_id=message.action_id, status=error.status

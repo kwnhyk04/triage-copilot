@@ -8,6 +8,8 @@ import {
   counted,
   fallbackNotes,
   ISSUE_KINDS,
+  modelReviewed,
+  NOT_APPROVABLE,
   OUTCOMES,
   PARTS,
   percent,
@@ -151,7 +153,8 @@ function Review({ review, pending }: { review: PlanReview; pending: boolean }) {
 
 /**
  * A real incident's plan: what it would do, its review, what approving does, and the decision or
- * its form. A plan its review refused takes no decision, so it has neither note nor form.
+ * its form. A plan its review refused takes no decision, and one no model reviewed takes no
+ * approval, so neither has a note or a form.
  */
 function PlanPanel({
   plan,
@@ -164,7 +167,6 @@ function PlanPanel({
   demo?: boolean | undefined;
   now: number;
 }) {
-  // A gateway older than reviews sends none: such a plan shows as it always did.
   const { proposal, review } = plan;
   if (proposal == null) {
     return (
@@ -175,7 +177,8 @@ function PlanPanel({
     );
   }
   const refused = review?.status === 'refuse';
-  const pending = plan.status === 'pending' && !refused;
+  const blocked = plan.status === 'pending' && !refused && !modelReviewed(review?.status);
+  const pending = plan.status === 'pending' && !refused && !blocked;
   const decided = plan.status === 'approved' ? 'Approved' : 'Rejected';
   const newFiles = new Set(review?.new_files);
   return (
@@ -184,7 +187,7 @@ function PlanPanel({
         id="plan"
         title="Plan"
         icon="plan"
-        tag={review == null || refused ? undefined : REVIEW_TAGS[review.status]}
+        tag={review == null || refused || blocked ? undefined : REVIEW_TAGS[review.status]}
       >
         <Badge state={planBadge(plan.status, review?.status)} />
       </PanelHead>
@@ -208,11 +211,13 @@ function PlanPanel({
         </ul>
       )}
       {review != null && <Review review={review} pending={pending} />}
-      {refused ? (
-        <p className="decided">A refused plan takes no decision.</p>
+      {refused || blocked ? (
+        <p className="decided">
+          {refused ? 'A refused plan takes no decision.' : `${NOT_APPROVABLE}.`}
+        </p>
       ) : (
         <>
-          <p className="plan-note">{planNote(proposal)}</p>
+          <p className="plan-note">{planNote(proposal, plan.approval_window_hours)}</p>
           {pending ? (
             <Decide
               plan={plan}

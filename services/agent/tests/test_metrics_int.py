@@ -17,7 +17,7 @@ from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, delete, insert
 from test_live_int import claude_spend, switch
 
-from agent.db import DeadLetter, Investigation, ModelCall
+from agent.db import DeadLetter, Investigation, ModelCall, Plan
 from agent.llm import Limiter
 from agent.main import create_app
 from agent.metrics import render
@@ -44,6 +44,7 @@ TRIAGE = Role(
 SAMPLE = re.compile(r"^(\w+(?:\{[^}]*\})?) (\S+)$")
 DLQ = 'tc_investigations_failed_recent{kind="dlq"}'
 UNREADABLE = 'tc_investigations_failed_recent{kind="unreadable"}'
+UNREVIEWED = "tc_plans_unreviewed_recent"
 
 
 @pytest.fixture
@@ -101,6 +102,35 @@ def test_counts_the_investigation_messages_that_failed_in_the_last_hour(engine: 
     assert {name: found[name] for name in (DLQ, UNREADABLE)} == {DLQ: 2, UNREADABLE: 1}
 
 
+def planned(engine: Engine, status: str | None, age: timedelta | None) -> None:
+    """A plan with this review, finished `age` ago; None while it is still due."""
+    review = None if status is None else {"status": status}
+    done = None if age is None else datetime.now(UTC) - age
+    with engine.begin() as conn:
+        inv = uuid4()
+        conn.execute(insert(Investigation).values(id=inv, status="resolved"))
+        conn.execute(
+            insert(Plan).values(investigation_id=inv, id=uuid4(), review=review, planned_at=done)
+        )
+
+
+def test_counts_the_plans_that_arrived_with_no_model_review_in_the_last_hour(
+    engine: Engine,
+) -> None:
+    assert metrics(engine)[UNREVIEWED] == 0
+
+    planned(engine, "not_reviewed", timedelta(minutes=5))
+    planned(engine, "not_reviewed", timedelta(minutes=50))
+    planned(engine, "not_reviewed", timedelta(hours=2))
+    # A model reviewed these, the code checks refused the third, and the last is still due.
+    planned(engine, "ok", timedelta(minutes=5))
+    planned(engine, "flag", timedelta(minutes=5))
+    planned(engine, "refuse", timedelta(minutes=5))
+    planned(engine, None, None)
+
+    assert metrics(engine)[UNREVIEWED] == 2
+
+
 def test_says_nothing_of_claude_while_it_takes_calls_or_is_not_set_up(engine: Engine) -> None:
     assert stopped(engine) == {}
     # No ANTHROPIC_API_KEY (or AI off): live triage has no Claude to report on.
@@ -140,4 +170,4 @@ def test_the_route_serves_them_in_prometheus_s_text_format(scratch_db: "ScratchD
     response = TestClient(create_app(settings)).get("/metrics")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
-    assert samples(response.text) == {DLQ: 0, UNREADABLE: 0}
+    assert samples(response.text) == {DLQ: 0, UNREADABLE: 0, UNREVIEWED: 0}
