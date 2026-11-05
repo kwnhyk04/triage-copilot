@@ -1,0 +1,1 @@
+ALTER TABLE "gateway"."alert_groups" ADD COLUMN "alerts_read_at" timestamp with time zone;

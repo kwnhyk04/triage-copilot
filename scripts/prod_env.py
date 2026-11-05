@@ -61,6 +61,9 @@ GATEWAY_API_KEY={fresh()}
 APPROVER_API_KEY={fresh()}
 AGENT_SERVICE_TOKEN={agent_token}
 EXECUTOR_SERVICE_TOKEN={fresh()}
+# Paste: the web's public address, which Discord messages link. The gateway refuses to start
+# without it.
+WEB_URL=
 # The live tenants as JSON once live goes on (P1.12); {{}} keeps every tenant the sim's.
 LIVE_TENANTS={{}}
 # After docs/guide.md, Deploy, check 5: GATEWAY_TRUST_PROXY=10.231.233.18

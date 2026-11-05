@@ -104,14 +104,26 @@ export const PLAN_STATES: Record<Schemas['ActionStatus'], BadgeState> = {
   rejected: { label: 'Rejected', tone: 'neutral' },
 };
 
+/** A pending plan no model reviewed: the gateway refuses its approval. */
+export const NOT_APPROVABLE = 'Not reviewed, cannot be approved';
+
+/** Whether a model reviewed the plan and did not refuse it, which an approval takes. */
+export const modelReviewed = (review: Schemas['PlanReviewStatus'] | null | undefined) =>
+  review === 'ok' || review === 'flag';
+
 /**
- * A plan's badge: red Refused once its review refused it, which leaves it pending for good, else
- * its decision. An older gateway sends no review, so its plans show their decision as before.
+ * A plan's badge: red Refused once its review refused it, which leaves it pending for good; red too
+ * while it is pending and no model reviewed it, a plan from before reviews included; else its
+ * decision.
  */
-export const planBadge = (
+export function planBadge(
   status: Schemas['ActionStatus'],
   review: Schemas['PlanReviewStatus'] | null | undefined,
-): BadgeState => (review === 'refuse' ? { label: 'Refused', tone: 'bad' } : PLAN_STATES[status]);
+): BadgeState {
+  if (review === 'refuse') return { label: 'Refused', tone: 'bad' };
+  if (status === 'pending' && !modelReviewed(review)) return { label: NOT_APPROVABLE, tone: 'bad' };
+  return PLAN_STATES[status];
+}
 
 /** A plan's review in a word or two, for its card's tag. */
 export const REVIEW_TAGS: Record<Schemas['PlanReviewStatus'], string> = {
@@ -157,11 +169,17 @@ export const OUTCOMES: Record<Schemas['ToolCallStatus'], BadgeState> = {
   timeout: { label: 'Timed out', tone: 'warn' },
 };
 
-/** What approving does: only an approved restart runs, once, while the actions switch is on. */
-export const planNote = ({ kind, target }: Pick<Schemas['PlanProposal'], 'kind' | 'target'>) =>
+/**
+ * What approving does: only an approved restart runs, once, while the actions switch is on, and
+ * until the approval expires. `hours` is the gateway's window; an older gateway sends none.
+ */
+export const planNote = (
+  { kind, target }: Pick<Schemas['PlanProposal'], 'kind' | 'target'>,
+  hours = 24,
+) =>
   kind === 'restart_service'
-    ? 'Approving only records the decision unless the actions switch is on. ' +
-      `With it on, the executor restarts ${target} once.`
+    ? `Approving queues this restart. With the actions switch on, the executor restarts ${target} ` +
+      `once. The approval expires after ${counted(hours, 'hour')}: past that, nothing runs.`
     : 'Approving only records the decision: nothing runs from this kind of plan.';
 
 /** A hypothesis's root cause class and the service it names, such as "database in postgres". */

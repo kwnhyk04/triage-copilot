@@ -92,7 +92,16 @@ describe('Report', () => {
     expect(count(head.slice(0, head.indexOf('</div>')), 'Refused')).toBe(1);
     expect(tag(shown(reviewed({ ...OK, ...NO_ISSUES }), { decide }))).toBe('No issues');
     const off = { ...OK, ...NO_ISSUES, status: 'not_reviewed', by: null, reason: 'off' } as const;
-    expect(tag(shown(reviewed(off), { decide }))).toBe('Unreviewed');
+    // Its badge says it went unreviewed; only one decided before the gateway refused these needs
+    // the tag. Without a tag of its own the next one is the evidence's.
+    expect(tag(shown(reviewed(off), { decide }))).toBe('2 results');
+    const decided = reviewed(off);
+    const approved: Investigation = {
+      ...decided,
+      plan_status: 'approved',
+      plan: decided.plan && { ...decided.plan, status: 'approved' },
+    };
+    expect(tag(shown(approved, { decide }))).toBe('Unreviewed');
     const problem = 'No model gave a plan.';
     const none = { ...WORKER_OUT_OF_MEMORY.plan, proposal: null, problem };
     expect(tag(shown({ ...WORKER_OUT_OF_MEMORY, plan: none, plan_status: null }))).toBe('No plan');
@@ -160,6 +169,13 @@ describe('Report', () => {
     expect(html).toContain('(request 4827)');
   });
 
+  it("says how long an approval lasts, in the gateway's own window", () => {
+    const plan = { ...WORKER_OUT_OF_MEMORY.plan, approval_window_hours: 6 };
+    expect(shown({ ...WORKER_OUT_OF_MEMORY, plan }, { decide })).toContain(
+      'The approval expires after 6 hours: past that, nothing runs.',
+    );
+  });
+
   it('puts the plan after the verdict and cause, with Approve plan and Reject plan', () => {
     const html = shown(WORKER_OUT_OF_MEMORY, { decide });
     order(html, ['id="verdict"', 'id="plan"', 'id="evidence"']);
@@ -167,8 +183,8 @@ describe('Report', () => {
       'Restart worker',
       'A restart frees its memory',
       'name="reason"',
-      'Approving only records the decision unless the actions switch is on. ' +
-        'With it on, the executor restarts worker once.',
+      'Approving queues this restart. With the actions switch on, the executor restarts worker ' +
+        'once. The approval expires after 24 hours: past that, nothing runs.',
     ]) {
       expect([text, html.includes(text)]).toEqual([text, true]);
     }
@@ -195,7 +211,7 @@ describe('Report', () => {
       '<q>If it exits again, raise its memory limit.</q>',
       'nothing cited shows that the limit itself is too low.',
       NOTE,
-      'Approving only records the decision',
+      'Approving queues this restart',
       '>Approve plan</button>',
       '>Reject plan</button>',
     ]);
@@ -216,13 +232,7 @@ describe('Report', () => {
         'A refused plan takes no decision.',
       ]);
       // No buttons, and not the amber mark of a plan that waits for a person.
-      for (const text of [
-        '<button',
-        '<form',
-        'Approving only records',
-        'Decision needed',
-        'plan pending',
-      ]) {
+      for (const text of ['<button', '<form', 'Approving', 'Decision needed', 'plan pending']) {
         expect([text, html.includes(text)]).toEqual([text, false]);
       }
     }
@@ -252,17 +262,37 @@ describe('Report', () => {
     expect(html).not.toContain('<button');
   });
 
-  it('says a plan was reviewed with no issues, or not reviewed and why; both take a decision', () => {
+  it('says a plan was reviewed with no issues, and it takes a decision', () => {
     const ok = shown(reviewed({ ...OK, ...NO_ISSUES }), { decide });
     order(ok, ['Reviewed: no issues', NOTE, '>Approve plan</button>']);
     expect(ok).not.toContain('class="issues"');
-    const reason = 'its credits ended on 2026-11-10 (UTC)';
-    const unreviewed = { ...OK, ...NO_ISSUES, status: 'not_reviewed', by: null, reason } as const;
-    const html = shown(reviewed(unreviewed), { decide });
-    order(html, [`Not reviewed: ${reason}`, '>Approve plan</button>', '>Reject plan</button>']);
-    expect(html).not.toContain(NOTE);
     // The approved code fix keeps its review beside its decision.
     order(shown(ANSWERS_AFTER_RENAME, { decide }), ['Reviewed: no issues', NOTE, 'Approved at']);
+  });
+
+  it('shows why no model reviewed a plan, that it cannot be approved, and no buttons', () => {
+    const reason = 'its credits ended on 2026-11-10 (UTC)';
+    const unreviewed = { ...OK, ...NO_ISSUES, status: 'not_reviewed', by: null, reason } as const;
+    for (const html of [
+      shown(reviewed(unreviewed), { decide }),
+      shown(reviewed(unreviewed), { demo: true }),
+    ]) {
+      order(html, [
+        '<span class="badge bad">Not reviewed, cannot be approved</span>',
+        `Not reviewed: ${reason}`,
+        '<p class="decided">Not reviewed, cannot be approved.</p>',
+      ]);
+      for (const text of [
+        NOTE,
+        '<button',
+        '<form',
+        'Approving',
+        'Decision needed',
+        'plan pending',
+      ]) {
+        expect([text, html.includes(text)]).toEqual([text, false]);
+      }
+    }
   });
 
   it("marks each of a code fix's files that the review found would be new", () => {
@@ -275,7 +305,7 @@ describe('Report', () => {
     expect(count(html, 'new file')).toBe(1);
   });
 
-  it('shows a plan without a review as before, whether the gateway sends null or none', () => {
+  it('takes no approval on a plan without a review, whether the gateway sends null or none', () => {
     const none = reviewed(null);
     const html = shown(none, { decide });
     // An older gateway, which Vercel may still be reading from, sends neither field at all.
@@ -284,10 +314,10 @@ describe('Report', () => {
     const older: Record<string, unknown> = { ...none, plan };
     delete older.plan_review;
     expect(shown(older as unknown as Investigation, { decide })).toBe(html);
-    for (const text of ['class="review', NOTE, 'new file', 'Refused', 'Reviewed', '<h3>Read']) {
+    for (const text of ['class="review', NOTE, 'new file', 'Refused', 'Reviewed:', '<button']) {
       expect([text, html.includes(text)]).toEqual([text, false]);
     }
-    order(html, ['Restart worker', 'Approving only records', '>Approve plan</button>']);
+    order(html, ['Restart worker', 'Not reviewed, cannot be approved.']);
   });
 
   it('says that approving a code fix runs nothing', () => {

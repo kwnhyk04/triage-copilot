@@ -79,7 +79,15 @@ describe('InvestigationList', () => {
     expect(html).not.toContain('Planning');
   });
 
-  it('shows plans as before when an older gateway sends no plan_review', () => {
+  it('shows a plan no model reviewed as one that cannot be approved, never as needing a decision', () => {
+    const unreviewed = LIVE_SAMPLES.map((item) => ({
+      ...item,
+      plan_review: 'not_reviewed' as const,
+    }));
+    const blocked = '<span class="badge bad">Not reviewed, cannot be approved</span>';
+    expect(shown({ items: unreviewed })).toContain(blocked);
+    expect(shown({ items: unreviewed })).not.toContain('Decision needed');
+    // An older gateway sends no plan_review, which reads the same as null.
     const items = LIVE_SAMPLES.map((item) => ({ ...item, plan_review: null }));
     const older = items.map((item) => {
       const copy: Record<string, unknown> = { ...item };
@@ -87,7 +95,7 @@ describe('InvestigationList', () => {
       return copy;
     }) as unknown as typeof items;
     expect(shown({ items: older })).toBe(shown({ items }));
-    expect(shown({ items })).toContain('<span class="badge warn">Decision needed</span>');
+    expect(shown({ items })).toContain(blocked);
   });
 
   it('fixes the columns and centres the confidence as a block whose digits line up', () => {

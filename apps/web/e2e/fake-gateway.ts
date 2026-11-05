@@ -1,7 +1,8 @@
 // A stand-in gateway for the browser tests: node:http on 127.0.0.1 with no dependency. It serves the
 // demo's samples, whose pending plan the review flagged, plus one investigation that gains a step
-// on each read until its report lands, one real incident whose plan lands on its third read, and
-// one whose plan the review refused. Older fillers give each list several pages. It takes the same
+// on each read until its report lands, one real incident whose plan lands on its third read, one
+// whose plan the review refused, and one whose plan no model reviewed. Older fillers give each list
+// several pages. It takes the same
 // keys as the real one, numbers its pages as the real one does, and records plan decisions.
 // /__e2e/* lets the tests reset and read its state; it is never part of the real gateway.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -107,6 +108,28 @@ const REFUSED: Investigation = {
   },
 };
 
+/** A real incident whose plan no model reviewed: it takes no approval. */
+const UNREVIEWED: Investigation = {
+  ...WORKER_OUT_OF_MEMORY,
+  id: E2E.unreviewedId,
+  group_id: 'c0ffee00-0000-4000-8000-00000000000a',
+  title: 'WorkerStalled on worker',
+  plan_status: 'pending',
+  plan_review: 'not_reviewed',
+  plan: {
+    ...WORKER_OUT_OF_MEMORY.plan,
+    id: 'c0ffee00-0000-4000-8000-00000000000b',
+    review: {
+      status: 'not_reviewed',
+      by: null,
+      model: null,
+      issues: [],
+      reason: 'its credits ended on 2026-11-10 (UTC)',
+      new_files: [],
+    },
+  },
+};
+
 /** An investigation with any recorded decision on its plan. */
 function withDecision(investigation: Investigation): Investigation {
   const decision = investigation.plan && decided.get(investigation.plan.id);
@@ -140,9 +163,15 @@ const fillers = (source: 'live' | 'sim', count: number): Investigation[] =>
 const FILLERS = [...fillers('live', E2E.liveFillers), ...fillers('sim', E2E.simFillers)];
 
 const all = () =>
-  [running(reads), planning(planningReads), REFUSED, ...LIVE_SAMPLES, ...EVAL_RUNS, ...FILLERS].map(
-    withDecision,
-  );
+  [
+    running(reads),
+    planning(planningReads),
+    REFUSED,
+    UNREVIEWED,
+    ...LIVE_SAMPLES,
+    ...EVAL_RUNS,
+    ...FILLERS,
+  ].map(withDecision);
 const send = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 const body = async (request: IncomingMessage) => {
@@ -171,8 +200,10 @@ createServer((request, response) => {
       const [, id = '', verdict = ''] = plan;
       const found = all().find((item) => item.plan?.id === id)?.plan;
       if (!found) return send(response, 404, { title: 'Not Found', status: 404 });
-      // As the real gateway: one decision per plan, and none on a plan its review refused.
-      if (found.status !== 'pending' || found.review?.status === 'refuse')
+      // As the real gateway: one decision per plan, none on a plan its review refused, and no
+      // approval of a plan no model reviewed.
+      const unreviewed = verdict === 'approve' && found.review?.by !== 'model';
+      if (found.status !== 'pending' || found.review?.status === 'refuse' || unreviewed)
         return send(response, 409, { title: 'Conflict', status: 409 });
       const { approver, reason } = (await body(request)) as { approver: string; reason?: string };
       decisions.push({

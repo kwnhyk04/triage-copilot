@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
-from typing import Any, cast, get_args
+from typing import Any, NoReturn, cast, get_args
 
 import httpx2
 import pytest
@@ -38,6 +38,7 @@ from agent.model import (
     PROMPT_LIMIT,
     BudgetRefused,
     CreditsExhausted,
+    Interrupted,
     KeyRejected,
     Message,
     ModelError,
@@ -816,6 +817,112 @@ def test_a_review_past_its_timeout_fails(monkeypatch: pytest.MonkeyPatch) -> Non
     assert answer is None
     assert [c.outcome for c in calls] == ["error"]
     assert (reason or "").startswith("TimeoutError")
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The router's clock, which a failing call moves on by hand."""
+    now = [0.0]
+    monkeypatch.setattr("agent.llm.time.perf_counter", lambda: now[0])
+    return now
+
+
+class Fails(Fake):
+    """A provider whose every call runs for `seconds` by the clock, then fails with `error`."""
+
+    def __init__(self, clock: list[float], seconds: float, error: Exception) -> None:
+        super().__init__("claude")
+        self.clock, self.seconds, self.error = clock, seconds, error
+
+    def fail(self) -> NoReturn:
+        self.clock[0] += self.seconds
+        raise self.error
+
+    async def generate(self, *args: Any, **kwargs: Any) -> ProviderTurn:
+        self.fail()
+
+    async def complete(self, *args: Any, **kwargs: Any) -> tuple[str, Usage]:
+        self.fail()
+
+    async def structured(self, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], Usage]:
+        self.fail()
+
+
+OPUS = RATES["claude-opus-5-5"]
+
+
+def failed_plan(error: Fails) -> Usage:
+    """The usage recorded for Claude's failed plan, the free chain answering after it."""
+    router = planners(error, Fake("primary"), Fake("fallback"))
+    answer, calls = asyncio.run(router.plan(PLAN_REQUEST))
+    assert answer == PLAN_ANSWER
+    assert calls[0].outcome == "error"
+    return calls[0].usage
+
+
+def test_a_plan_cut_off_counts_its_worst_case_against_the_caps(clock: list[float]) -> None:
+    usage = failed_plan(Fails(clock, 905.0, TimeoutError()))
+    # The cap sees every input token and the whole allowance; the token counts stay what a provider
+    # reported, so a guess never spends the investigation's tokens.
+    expected = worst(OPUS, PLAN_REQUEST.bound, PLAN_OUTPUT_CAP, caches=False)
+    assert usage.estimated_usd == pytest.approx(expected)
+    assert (usage.input, usage.output) == (0, 0)
+
+
+def test_a_failed_call_is_estimated_by_how_long_it_ran(clock: list[float]) -> None:
+    usage = failed_plan(Fails(clock, 10.0, httpx2.ReadError("the connection dropped")))
+    # Ten seconds at 300 tokens a second, faster than any model here was measured.
+    expected = worst(OPUS, PLAN_REQUEST.bound, 3_000, caches=False)
+    assert usage.estimated_usd == pytest.approx(expected)
+
+
+def test_a_call_that_failed_at_once_cost_nothing(clock: list[float]) -> None:
+    assert failed_plan(Fails(clock, 0.2, httpx2.ConnectError("refused"))) == Usage()
+
+
+def test_a_stream_that_broke_is_estimated_as_a_timeout_is(clock: list[float]) -> None:
+    usage = failed_plan(Fails(clock, 905.0, Interrupted("anthropic: Overloaded")))
+    expected = worst(OPUS, PLAN_REQUEST.bound, PLAN_OUTPUT_CAP, caches=False)
+    assert usage.estimated_usd == pytest.approx(expected)
+
+
+def test_the_provider_s_own_answer_stands_over_any_estimate(clock: list[float]) -> None:
+    billed = Usage(input=12_000, output=900)
+    assert failed_plan(Fails(clock, 905.0, Truncated("cut", usage=billed))) == billed
+    # An error status: the provider answered, and generated nothing.
+    assert failed_plan(Fails(clock, 30.0, ModelError("anthropic 529: overloaded"))) == Usage()
+
+
+def test_a_free_model_s_failure_counts_against_no_cap(clock: list[float]) -> None:
+    free = Fails(clock, 905.0, TimeoutError())
+    _, calls = asyncio.run(planners(None, free, Fake("fallback")).plan(PLAN_REQUEST))
+    assert calls[0].usage == Usage()
+
+
+def test_turns_summaries_and_reviews_are_estimated_too(clock: list[float]) -> None:
+    timeout = httpx2.ReadTimeout("no answer")
+    claude = Fails(clock, 8.0, timeout)
+    router = chain(claude, Fake("primary"), Fake("fallback"))
+    haiku = RATES["claude-haiku-5-5"]
+
+    # A turn goes on down the chain, as it does for any failure of Claude.
+    [failed, answered] = asyncio.run(router.turn(REQUEST)).calls
+    assert (failed.outcome, answered.model) == ("error", "primary-model")
+    assert failed.input_bound is not None and failed.max_output_tokens is not None
+    output = min(failed.max_output_tokens, 2_400)
+    assert failed.usage.estimated_usd == pytest.approx(worst(haiku, failed.input_bound, output))
+    assert (failed.usage.input, failed.usage.output) == (0, 0)
+
+    _, calls = asyncio.run(router.summarize("a log line", 10_000, SHA))
+    assert calls[0].input_bound is not None and calls[0].max_output_tokens is not None
+    output = min(calls[0].max_output_tokens, 2_400)
+    expected = worst(haiku, calls[0].input_bound, output)
+    assert calls[0].usage.estimated_usd == pytest.approx(expected)
+
+    _, calls, _ = asyncio.run(reviews(Fails(clock, 121.0, timeout)).review(REVIEW_REQUEST))
+    sonnet = RATES["claude-sonnet-5-5"]
+    expected = worst(sonnet, REVIEW_REQUEST.bound, REVIEW_OUTPUT_CAP, caches=False)
+    assert calls[0].usage.estimated_usd == pytest.approx(expected)
 
 
 def test_the_reviewer_cap_is_checked_against_the_review_s_worst_case_with_nothing_cached() -> None:

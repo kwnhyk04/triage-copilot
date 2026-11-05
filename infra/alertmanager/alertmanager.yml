@@ -22,6 +22,14 @@ route:
   group_wait: 30s
   group_interval: 10m
   repeat_interval: 12h
+  routes:
+    # A verdict or a plan that waits: one Discord message each, at once, with no email. Each alert
+    # lasts an hour at most, so no reminder ever comes.
+    - matchers: ['notify="report"']
+      receiver: reports
+      group_by: [alertname, investigation]
+      group_wait: 5s
+      repeat_interval: 24h
 
 receivers:
   - name: triage-copilot
@@ -38,4 +46,11 @@ receivers:
         headers: { Subject: '{{ template "triage-copilot.title" . }}' }
         text: '{{ template "triage-copilot.text" . }}'
         html: ''
+        send_resolved: false
+  - name: reports
+    discord_configs:
+      - webhook_url_file: /tmp/discord-webhook-url
+        http_config: { proxy_url: http://egress-proxy:3130 }
+        title: '{{ template "triage-copilot.report.title" . }}'
+        message: '{{ template "triage-copilot.report.text" . }}'
         send_resolved: false

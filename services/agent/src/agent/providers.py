@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agent.model import (
     CreditsExhausted,
+    Interrupted,
     KeyRejected,
     Message,
     ModelError,
@@ -464,6 +465,9 @@ def _anthropic_error(error: anthropic.APIStatusError) -> ModelError:
     RateLimited, with or without retry-after: the call alone moves down the chain."""
     code = error.status_code
     detail = _api_message(error)
+    # An error event in a stream that began with 200: no status failed, and Claude had started.
+    if code < 400:
+        return Interrupted(f"anthropic: the stream failed: {detail}"[:300])
     if code == 402 or error.type == "billing_error" or (code == 400 and SPEND_LIMIT.search(detail)):
         return CreditsExhausted(f"anthropic {code}: credits or spend limit used up: {detail}"[:300])
     if code == 429:

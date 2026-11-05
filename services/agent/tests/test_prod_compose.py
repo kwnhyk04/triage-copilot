@@ -199,10 +199,10 @@ def _alertmanager_config() -> dict[str, Any]:
 def test_alert_delivery_reaches_the_proxy_on_its_own_ports_from_fixed_addresses() -> None:
     conf = SQUID_CONF.read_text("utf-8")
     config = _alertmanager_config()
-    [receiver] = config["receivers"]
-    [discord] = receiver["discord_configs"]
-    # Alertmanager sends Discord's webhooks through its own proxy port.
-    assert discord["http_config"]["proxy_url"] == "http://egress-proxy:3130"
+    # Alertmanager sends Discord's webhooks through its own proxy port, every receiver's.
+    discords = [d for r in config["receivers"] for d in r["discord_configs"]]
+    assert [d["http_config"]["proxy_url"] for d in discords] == ["http://egress-proxy:3130"] * 2
+    assert {d["webhook_url_file"] for d in discords} == {"/tmp/discord-webhook-url"}  # noqa: S108
     # It sends no SMTP through a proxy, so mail goes to the relay, which tunnels each connection
     # through the relay's own proxy port to Gmail, and takes connections from Alertmanager alone.
     relay = PROD["services"]["smtp-relay"]["entrypoint"]
@@ -257,6 +257,26 @@ def test_prometheus_loads_production_s_config_and_rules_and_alerts_alertmanager(
     # AgentNotReady join their scrape with the agent's probe.
     agent = [{"targets": ["agent:4210"], "labels": {"service": "agent"}}]
     assert _job("agent")["static_configs"] == agent
+
+
+def test_verdicts_and_waiting_plans_go_to_discord_alone_each_once() -> None:
+    config = _alertmanager_config()
+    [route] = config["route"]["routes"]
+    assert route["matchers"] == ['notify="report"']
+    assert route["group_by"] == ["alertname", "investigation"]
+    # A series lives an hour (apps/gateway/src/metrics.ts), so no reminder ever fires.
+    assert route["repeat_interval"] == "24h"
+    [receiver] = [r for r in config["receivers"] if r["name"] == route["receiver"]]
+    assert "email_configs" not in receiver
+    [discord] = receiver["discord_configs"]
+    assert discord["send_resolved"] is False
+    # Prometheus reads them on the gateway's internal listener, on a network the public port is not.
+    assert _job("gateway")["static_configs"] == [
+        {"targets": ["gateway:4201"], "labels": {"service": "gateway"}}
+    ]
+    assert set(PROD["services"]["prometheus"]["networks"]) & set(
+        PROD["services"]["gateway"]["networks"]
+    ) == {"data"}
 
 
 def test_each_readiness_probe_runs_from_inside_prometheus() -> None:

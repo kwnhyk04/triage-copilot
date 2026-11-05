@@ -11,6 +11,7 @@ import {
   createGetInvestigation,
   createListInvestigations,
 } from './investigations.ts';
+import { createMetrics } from './metrics.ts';
 import { sqsClient, sqsSender, startRelay } from './outbox.ts';
 import { startRetention } from './retention.ts';
 import { agentStates, startSweeper } from './sweeper.ts';
@@ -34,13 +35,17 @@ const nudge = () => {
   nudgeRelay();
 };
 const live = Object.keys(config.LIVE_TENANTS);
-const reads = { liveTenants: live, stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES };
+const reads = {
+  liveTenants: live,
+  stuckAfterMinutes: config.SWEEPER_STUCK_AFTER_MINUTES,
+  approvalWindowHours: config.APPROVAL_WINDOW_HOURS,
+};
 const app = await buildApp({
   config,
   ping: db.ping,
   updates: createUpdates(),
   decide: createDecide(db.sql, nudge, config.LIVE_TENANTS),
-  decidePlan: createDecidePlan(db.sql, nudge, config.LIVE_TENANTS),
+  decidePlan: createDecidePlan(db.sql, nudge, config.LIVE_TENANTS, config.APPROVAL_WINDOW_HOURS),
   findTenant: createFindTenant(db.sql),
   intake: createIntake(
     db.sql,
@@ -53,10 +58,11 @@ const app = await buildApp({
 });
 const internal = buildInternalApp({
   config,
-  claim: createClaim(db.sql),
+  claim: createClaim(db.sql, config.APPROVAL_WINDOW_HOURS),
   report: createReport(db.sql),
   alertContext: createAlertContext(db.sql),
   actionsOn: agentSwitch(config.AGENT_URL, config.AGENT_SERVICE_TOKEN, 'actions'),
+  metrics: createMetrics(db.sql, config.LIVE_TENANTS, config.WEB_URL),
 });
 const senders = {
   investigations: sqsSender(sqs, config.INVESTIGATIONS_QUEUE),

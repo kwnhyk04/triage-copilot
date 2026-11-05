@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { components } from '@triage/ts-clients/gateway';
 import { parseMessage } from '@triage/ts-clients/messages';
 import { z } from '@triage/ts-config';
-import type { Sql } from 'postgres';
+import type { Sql, TransactionSql } from 'postgres';
 
 /** Most alerts one webhook may carry; Alertmanager's max_alerts should match. */
 export const MAX_ALERTS = 200;
@@ -123,14 +123,22 @@ export const createFindTenant =
   };
 
 /**
+ * One at a time per group key, webhooks and the first read of a group's alerts: an alert either
+ * commits before that read, which then shows it, or sees the read and opens a group of its own.
+ */
+export const lockGroupKey = (tx: TransactionSql, tenantId: string, groupKey: string) =>
+  tx`SELECT pg_advisory_xact_lock(hashtextextended(${`group\n${tenantId}\n${groupKey}`}, 0))`;
+
+/**
  * Stores each firing once, keyed by (tenant, fingerprint, startsAt), and records a known alert's
- * new status. New alerts join the group of their groupKey whose 5-minute window opened last, or
- * open a group. A new group gets an investigation when it has a firing alert and the tenant opened
- * fewer than `maxNewInvestigations` in the last 5 minutes and fewer than `maxDailyInvestigations`
- * this UTC day; otherwise it stays queued_not_investigated with the reason, so a storm over many
- * group keys starts only a few, and every alert is still stored. The investigation's
- * InvestigationRequested message goes to the outbox in the same transaction; `onQueued` runs after
- * that commit to wake the relay.
+ * new status. New alerts join the group of their groupKey whose 5-minute window opened last, while
+ * it can still see them, or open a group: so a later alert of an app is never left unread in an
+ * earlier alert's group. A new group gets an investigation when it has a firing alert and the
+ * tenant opened fewer than `maxNewInvestigations` in the last 5 minutes and fewer than
+ * `maxDailyInvestigations` this UTC day; otherwise it stays queued_not_investigated with the reason,
+ * so a storm over many group keys starts only a few, and every alert is still stored. The
+ * investigation's InvestigationRequested message goes to the outbox in the same transaction;
+ * `onQueued` runs after that commit to wake the relay.
  */
 export function createIntake(
   sql: Sql,
@@ -151,6 +159,7 @@ export function createIntake(
     );
     const severity = SEVERITIES.find((s) => alerts.some((a) => a.labels.severity === s));
     const outcome = await sql.begin(async (tx) => {
+      await lockGroupKey(tx, tenantId, groupKey);
       const seen = one(
         await tx<
           { fresh: number; fresh_firing: number; changed: number; known_group: string | null }[]
@@ -181,10 +190,18 @@ export function createIntake(
         return { group_id: seen.known_group ?? '', deduped: seen.changed === 0, queued: false };
       }
 
+      // A group takes an alert only while its investigation has not read its alerts, or while the
+      // flood guard holds it. A firing alert never joins one of resolved alerts alone, which
+      // nothing investigates.
       const openGroup = () => tx<{ id: string }[]>`
         SELECT id FROM gateway.alert_groups
         WHERE tenant_id = ${tenantId} AND group_key = ${groupKey}
           AND window_start > now() - interval '5 minutes'
+          AND CASE
+            WHEN investigation_id IS NOT NULL THEN status = 'queued' AND alerts_read_at IS NULL
+            WHEN not_investigated = 'resolved' THEN ${seen.fresh_firing}::int = 0
+            ELSE true
+          END
         ORDER BY window_start DESC LIMIT 1`;
       let [group] = await openGroup();
       if (group === undefined) {

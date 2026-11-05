@@ -86,12 +86,18 @@ export function createDecide(sql: Sql, onQueued: () => void, apps: LiveApps): De
  * Records a human decision on a plan in gateway.plan_decisions, whose primary key allows one per
  * plan: a second decision inserts nothing and gets already_decided. A plan without a proposal takes
  * none, and neither does one its review refused (PlanRecorded v2); the review never changes once
- * stored, and this is the only writer of plan_decisions. An approved restart (phase 3) queues
- * ActionApproved v2 in the same transaction, as the plan's kind and target alone: its rationale,
- * the steps it writes for a human, never reaches the executor. A code fix's approval queues nothing
- * until the coder exists (phase 4).
+ * stored, and this is the only writer of plan_decisions. Only a plan a model reviewed takes an
+ * approval: one that went unreviewed, or a v1 plan from before reviews, can still be rejected. An
+ * approved restart (phase 3) queues ActionApproved v2 in the same transaction, as the plan's kind
+ * and target alone: its rationale, the steps it writes for a human, never reaches the executor. A
+ * code fix's approval queues nothing until the coder exists (phase 4).
  */
-export function createDecidePlan(sql: Sql, onQueued: () => void, apps: LiveApps): DecidePlan {
+export function createDecidePlan(
+  sql: Sql,
+  onQueued: () => void,
+  apps: LiveApps,
+  approvalWindowHours: number,
+): DecidePlan {
   return async (planId, verdict, { approver, reason }) => {
     const outcome = await sql.begin(async (tx) => {
       const [plan] = await tx<(PlanRow & { tenant_id: string; investigation_id: string })[]>`
@@ -102,6 +108,7 @@ export function createDecidePlan(sql: Sql, onQueued: () => void, apps: LiveApps)
       if (plan === undefined) return 'not_found';
       if (plan.kind === null) return 'no_proposal';
       if (plan.review?.status === 'refuse') return 'refused';
+      if (verdict === 'approved' && plan.review?.by !== 'model') return 'not_reviewed';
       // No conflict target, as for actions: a concurrent second decision inserts nothing.
       const [decided] = await tx<{ decided_at: Date }[]>`
         INSERT INTO gateway.plan_decisions (plan_id, approver, decision, reason)
@@ -129,13 +136,16 @@ export function createDecidePlan(sql: Sql, onQueued: () => void, apps: LiveApps)
           VALUES ('actions', ${sha256(`${plan.tenant_id}\n${restart}`)}, ${plan.id},
                   ${tx.json({ ...message })})`;
       }
-      const decidedPlan = toPlan({
-        ...plan,
-        decision: verdict,
-        approver,
-        decided_at: decided.decided_at,
-        reason: reason ?? null,
-      });
+      const decidedPlan = toPlan(
+        {
+          ...plan,
+          decision: verdict,
+          approver,
+          decided_at: decided.decided_at,
+          reason: reason ?? null,
+        },
+        approvalWindowHours,
+      );
       return { decidedPlan, queued: restart !== null };
     });
     if (typeof outcome === 'string') return outcome;

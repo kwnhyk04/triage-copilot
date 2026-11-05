@@ -452,7 +452,7 @@ class Job:
         self, conn: Connection, inv: UUID, state: State, calls: Sequence[Call]
     ) -> None:
         if calls:
-            state.used += await asyncio.to_thread(_store_calls, conn, inv, calls)
+            state.used += await asyncio.to_thread(store_calls, conn, inv, calls)
 
     async def _take_turn(self, conn: Connection, inv: UUID, state: State, turn: ModelTurn) -> bool:
         """Records the turn; True when it ended the investigation with a report."""
@@ -1205,14 +1205,14 @@ def _tokens_today(conn: Connection) -> int:
         return used.scalar_one_or_none() or 0
 
 
-def _store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
+def store_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
     """Records model requests and adds their tokens to the investigation and the day."""
     with conn.begin():
         return _add_calls(conn, inv, calls)
 
 
 def _add_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
-    """_store_calls in the caller's transaction."""
+    """store_calls in the caller's transaction."""
     if not calls:
         return 0
     spent = sum(c.usage.input + c.usage.output for c in calls)
@@ -1229,6 +1229,7 @@ def _add_calls(conn: Connection, inv: UUID, calls: Sequence[Call]) -> int:
                 "output_tokens": c.usage.output,
                 "cached_tokens": c.usage.cached,
                 "cache_write_tokens": c.usage.cache_writes,
+                "estimated_usd": c.usage.estimated_usd,
                 "thought_tokens": c.usage.thoughts,
                 "input_bound": c.input_bound,
                 "max_output_tokens": c.max_output_tokens,

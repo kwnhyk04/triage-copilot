@@ -62,6 +62,15 @@ groups:
           summary: "Claude has reached today's triage cap (UTC), so live triage runs on the free models until midnight UTC."
           runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudedailycapreached
 
+      # A plan no model reviewed takes no approval: the reviewer's Claude was off, out of budget or
+      # failed, as it is for good once LLM_CLAUDE_UNTIL passes. The count covers the last hour.
+      - alert: PlansUnreviewed
+        expr: tc_plans_unreviewed_recent > 0
+        labels: { severity: warning }
+        annotations:
+          summary: '{{ $value }} plans arrived in the last hour with no model review, so they cannot be approved.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#plansunreviewed
+
       # A rise of egress-log's count, or the count appearing: it has no series before the first
       # refusal since egress-log started.
       - alert: EgressDenied
@@ -73,11 +82,32 @@ groups:
           summary: 'The egress proxy refused a request in the last 10 minutes: a container asked for a host, port or path outside its allowlist.'
           runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#egressdenied
 
-      # Without the probe exporter or egress-log, the readiness and refusal rules cannot fire.
+      # Without the probe exporter, egress-log or the gateway's metrics, the readiness, refusal,
+      # verdict and waiting-plan rules cannot fire.
       - alert: MonitoringBlind
-        expr: up{job=~"readyz|egress-log"} == 0
+        expr: up{job=~"readyz|egress-log|gateway"} == 0
         for: 5m
         labels: { severity: warning }
         annotations:
           summary: 'Prometheus cannot read {{ $labels.job }}, so the rules that need it stay silent.'
           runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind
+
+      # A verdict and a plan that waits for a person: notify routes each to one Discord message with
+      # a link to its report (infra/alertmanager), no email and no reminder. A series lasts an hour
+      # (apps/gateway/src/metrics.ts). Its labels hold an id, an app and closed lists, so nothing a
+      # model wrote reaches Discord.
+      - alert: InvestigationVerdict
+        expr: tc_investigation_verdict == 1
+        labels: { severity: warning, notify: report }
+        annotations:
+          summary: '{{ if eq $labels.verdict "real" }}Real incident{{ else }}Not a real incident{{ end }} on {{ $labels.app }}: {{ $labels.cause }}'
+          report_url: '{{ $labels.report }}'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#investigationverdict
+
+      - alert: PlanWaiting
+        expr: tc_plan_waiting == 1
+        labels: { severity: warning, notify: report }
+        annotations:
+          summary: 'A plan on {{ $labels.app }} waits for a decision'
+          report_url: '{{ $labels.report }}'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#planwaiting

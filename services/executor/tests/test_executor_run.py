@@ -49,8 +49,10 @@ def body(**change: Any) -> str:
 class Gateway:
     """The gateway's claim and result routes, with one execution per action id."""
 
-    def __init__(self, approved: bool = True, row: dict[str, Any] | None = None) -> None:
-        self.approved, self.row = approved, row or {}
+    def __init__(
+        self, approved: bool = True, row: dict[str, Any] | None = None, expired: bool = False
+    ) -> None:
+        self.approved, self.row, self.expired = approved, row or {}, expired
         self.execution: dict[str, Any] | None = None
         self.paths: list[str] = []
         self.results: list[dict[str, Any]] = []
@@ -64,6 +66,8 @@ class Gateway:
             return httpx2.Response(200, json=self.execution)
         if not self.approved:
             return httpx2.Response(404, headers=PROBLEM, json={"title": "Not Found", "status": 404})
+        if self.expired:
+            return httpx2.Response(410, headers=PROBLEM, json={"title": "Gone", "status": 410})
         if self.execution is not None:
             return httpx2.Response(200, json=self.execution)
         dry_run = json.loads(request.content)["dry_run"]
@@ -120,6 +124,18 @@ def test_an_action_without_an_approval_row_is_refused() -> None:
     assert run(gateway, effects) == "refused"
     assert effects.runs == []
     assert gateway.paths == [f"/internal/actions/{ID}/execution"]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_an_expired_approval_is_skipped_and_says_so(
+    dry_run: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    gateway, effects = Gateway(expired=True), Effects()
+    assert run(gateway, effects, dry_run=dry_run) == "refused"
+    assert effects.runs == []
+    assert gateway.results == []
+    refusals = [record for record in caplog.records if record.name == "executor.run"]
+    assert [vars(record)["reason"] for record in refusals] == ["the approval expired"]
 
 
 v1: dict[str, Any] = {k: v for k, v in MESSAGE.items() if k not in ("tenant_id", "app")}

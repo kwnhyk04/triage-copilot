@@ -37,8 +37,11 @@ def test_the_rules_cover_what_production_must_report() -> None:
         "InvestigationsFailing",
         "ClaudeOff",
         "ClaudeDailyCapReached",
+        "PlansUnreviewed",
         "EgressDenied",
         "MonitoringBlind",
+        "InvestigationVerdict",
+        "PlanWaiting",
     ]
 
 
@@ -49,4 +52,17 @@ def test_each_rule_links_its_own_runbook_section() -> None:
         assert (name, rule["annotations"]["runbook_url"]) == (name, LINK + name.lower())
         assert (name, name.lower() in sections) == (name, True)
         assert (name, rule["labels"]["severity"] in {"critical", "warning"}) == (name, True)
-        assert set(rule["annotations"]) == {"summary", "runbook_url"}
+        # The rules Alertmanager sends to Discord alone, each linking its report.
+        report = rule["labels"].get("notify") == "report"
+        expected = {"summary", "runbook_url"} | ({"report_url"} if report else set[str]())
+        assert (name, set(rule["annotations"])) == (name, expected)
+
+
+def test_a_message_carries_no_text_a_model_wrote() -> None:
+    # A log line steers the model, so nothing it wrote reaches Discord: the metrics name only an
+    # app, an id, a kind and a closed list of causes, never a service, a summary or a rationale.
+    for rule in rules():
+        if rule["labels"].get("notify") == "report":
+            summary = rule["annotations"]["summary"]
+            used = set(re.findall(r"\$labels\.(\w+)", summary))
+            assert (rule["alert"], used <= {"app", "verdict", "cause"}) == (rule["alert"], True)

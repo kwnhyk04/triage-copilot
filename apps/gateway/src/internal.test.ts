@@ -3,6 +3,7 @@ import type { components } from '@triage/ts-clients/gateway';
 import type { ActionsOn, Claim, Execution, Report } from './executions.ts';
 import { buildInternalApp } from './internal.ts';
 import type { GetAlertContext } from './investigations.ts';
+import type { Metrics } from './metrics.ts';
 
 const TOKEN = 'executor-token-for-these-tests-000000';
 const AGENT_TOKEN = 'agent-token-for-these-tests-0000000000';
@@ -51,6 +52,7 @@ describe('internal API', () => {
     report: Report = unused,
     alertContext: GetAlertContext = unused,
     actionsOn: ActionsOn = () => Promise.resolve(true),
+    metrics: Metrics = unused,
   ) =>
     buildInternalApp({
       config: {
@@ -62,6 +64,7 @@ describe('internal API', () => {
       report,
       alertContext,
       actionsOn,
+      metrics,
     });
 
   it('asks the actions switch before every claim, and claims nothing while it is off or unknown', async () => {
@@ -184,6 +187,47 @@ describe('internal API', () => {
         [ID, true],
         [ID, true],
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves /metrics in Prometheus text format with no token, as the agent does', async () => {
+    const text = '# TYPE tc_plan_waiting gauge\n';
+    const app = start(unused, unused, unused, undefined, () => Promise.resolve(text));
+    try {
+      const response = await app.inject({ url: '/metrics' });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toBe('text/plain; version=0.0.4; charset=utf-8');
+      expect(response.body).toBe(text);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('answers 503 when /metrics cannot read Postgres, so the scrape shows it failed', async () => {
+    const app = start(unused, unused, unused, undefined, () => Promise.reject(new Error('down')));
+    try {
+      expect((await app.inject({ url: '/metrics' })).statusCode).toBe(503);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('answers 410 for an approval past its window', async () => {
+    const app = start(() => Promise.resolve('expired'));
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: claimUrl,
+        headers: executor,
+        payload: { dry_run: false },
+      });
+      expect(response.statusCode).toBe(410);
+      expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect(response.json()).toMatchObject({
+        detail: 'The approval has expired; nothing is claimed.',
+      });
     } finally {
       await app.close();
     }

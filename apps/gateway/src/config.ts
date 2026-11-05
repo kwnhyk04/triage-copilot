@@ -33,6 +33,8 @@ export const liveTenantsSetting = z.string().default('{}').transform(liveTenantA
 export const liveTenantsRequired = z.string().transform(liveTenantApps);
 /** Minutes without a step (or a message without a receive) before an investigation counts as stuck. */
 export const stuckAfterMinutesSetting = z.coerce.number().int().positive().default(10);
+/** Hours an approval stays executable; past them the executor can no longer claim it. */
+export const approvalWindowHoursSetting = z.coerce.number().int().positive().default(24);
 const proxyAddress = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);
 // The ends of all of IPv4, all of IPv6, and all of IPv4 as the mapped block (::ffff:0:0/96) that
 // Fastify matches IPv4 clients against. Any IPv6 range holding that block is refused, though
@@ -74,6 +76,8 @@ const trustProxySetting = z
   })
   .optional();
 
+const DEV_WEB_URL = 'http://127.0.0.1:3200';
+
 export const loadGatewayConfig = (env?: Env) =>
   loadConfig(
     z
@@ -113,6 +117,9 @@ export const loadGatewayConfig = (env?: Env) =>
         // Tenants whose alerts are real incidents: their snapshots and steps go after 30 days, and
         // the list serves them as live.
         LIVE_TENANTS: liveTenantsSetting,
+        APPROVAL_WINDOW_HOURS: approvalWindowHoursSetting,
+        // The web's address, which each Discord message links a report at.
+        WEB_URL: z.url().default(DEV_WEB_URL),
         // The agent's internal API, which the recovery sweeper asks with the service token.
         AGENT_URL: z.url().default('http://127.0.0.1:4210'),
         AGENT_SERVICE_TOKEN: z.string().min(32),
@@ -124,6 +131,10 @@ export const loadGatewayConfig = (env?: Env) =>
         LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
       })
       .superRefine((config, ctx) => {
+        if (config.NODE_ENV === 'production' && config.WEB_URL === DEV_WEB_URL) {
+          const message = "must be the web's public address, which Discord messages link";
+          ctx.addIssue({ code: 'custom', path: ['WEB_URL'], message });
+        }
         CREDENTIALS.forEach((name, i) => {
           if (CREDENTIALS.slice(0, i).some((other) => config[other] === config[name])) {
             ctx.addIssue({ code: 'custom', path: [name], message: 'must differ from the others' });

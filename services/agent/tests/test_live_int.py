@@ -30,7 +30,7 @@ from test_workers_int import (
 
 from agent.api import add_internal_api
 from agent.db import AiUsage, Investigation, ModelCall, Outbox
-from agent.job import PROMPT_SHA, UTC_TODAY
+from agent.job import PROMPT_SHA, UTC_TODAY, store_calls
 from agent.live import LIVE_PROMPT_SHA, LIVE_SPECS, LIVE_SYSTEM, LiveReportDraft
 from agent.llm import Binding, Limiter, Router, spent
 from agent.model import (
@@ -46,6 +46,7 @@ from agent.model import (
     Usage,
     is_model_turn,
 )
+from agent.model import ModelCall as Call
 from agent.providers import Provider, ProviderTurn
 from agent.settings import Role
 from agent.switches import Switch, is_on, run, set_switch
@@ -419,6 +420,26 @@ def test_the_triage_cap_counts_today_s_claude_spend_and_each_call_s_worst_case(
     with engine.connect() as conn:
         # A model without a price cannot be checked against the cap, so Claude waits.
         assert "claude-fable-5-1" in (spent(conn, TRIAGE, 0.0) or "")
+
+
+def test_a_failed_call_s_estimate_counts_against_the_caps_but_spends_no_tokens(
+    engine: Engine,
+) -> None:
+    inv = uuid4()
+    with engine.begin() as conn:
+        conn.execute(insert(Investigation).values(id=inv))
+    usage = Usage(estimated_usd=0.39)
+    failed = Call("primary", "anthropic", "claude-haiku-5-5", "error", usage, 40_000, 4_096)
+    with engine.connect() as conn:
+        # What a provider never reported is no token of the investigation's or the day's budget.
+        assert store_calls(conn, inv, [failed]) == 0
+        assert "triage cap of $0.40" in (spent(conn, TRIAGE, 0.02) or "")
+        assert spent(conn, TRIAGE, 0.005) is None
+    with engine.begin() as conn:
+        conn.execute(update(ModelCall).values(created_at=ModelCall.created_at - timedelta(days=1)))
+    with engine.connect() as conn:
+        # Yesterday's estimate no longer counts toward today's cap.
+        assert spent(conn, TRIAGE, 0.02) is None
 
 
 # A Claude role with TC's monthly cap and no daily one, as an eval's Claude has.

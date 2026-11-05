@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Triage Copilot gateway
-  version: 0.11.0
+  version: 0.12.0
   description: >-
     REST endpoints of the gateway. The GraphQL API is contracts/graphql/schema.graphql. Errors are
     RFC 9457 Problem Details (application/problem+json). Every /v1 route needs credentials: the
@@ -227,11 +227,12 @@ paths:
       - $ref: '#/components/parameters/PlanId'
     post:
       operationId: approvePlan
-      summary: Records a human approval of a plan. Nothing runs from it yet.
+      summary: Records a human approval of a plan a model reviewed.
       description: >-
-        One decision per plan. A plan that holds no proposal, because no model gave one, takes
-        no decision, and neither does a plan its review refused. In phase 2 an approval only
-        records the human's answer; no action is queued.
+        One decision per plan. A plan that holds no proposal, because no model gave one, takes no
+        decision, and neither does a plan its review refused. A plan no model reviewed takes no
+        approval. An approved restart is queued for the executor, which must claim it within
+        APPROVAL_WINDOW_HOURS; any other approval only records the human's answer.
       security:
         - approverKey: []
       requestBody:
@@ -283,6 +284,33 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /metrics:
+    servers:
+      - url: http://127.0.0.1:4201
+        description: >-
+          The internal listener (GATEWAY_INTERNAL_HOST and GATEWAY_INTERNAL_PORT). The public
+          listener does not serve it.
+    get:
+      operationId: getMetrics
+      summary: What Prometheus reads, in its text format.
+      description: >-
+        Each live verdict and each plan that waits for a decision, for an hour after it was stored.
+        It names ids, apps and closed lists, never text a model wrote. It takes no credential, as
+        only internal networks reach this listener.
+      security: []
+      responses:
+        '200':
+          description: The metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: Postgres could not be read, so the scrape shows it failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /internal/actions/{id}/execution:
     servers:
       - url: http://127.0.0.1:4201
@@ -301,7 +329,8 @@ paths:
         action id is the idempotency key, so a second claim returns the first one with 200, and the
         executor must not run the action again. An execution left in claimed is never retried; it
         waits for a human. Before every claim the gateway asks the agent's actions switch: while it
-        is off (409) or unknown (503), nothing is claimed.
+        is off (409) or unknown (503), nothing is claimed. An approval older than
+        APPROVAL_WINDOW_HOURS (24 by default) can no longer be claimed (410), dry runs included.
       security:
         - executorToken: []
       requestBody:
@@ -335,6 +364,12 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '409':
           description: The actions switch is off, so nothing is claimed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: The approval is past its window, so nothing is claimed.
           content:
             application/problem+json:
               schema:
@@ -583,8 +618,8 @@ components:
             $ref: '#/components/schemas/Plan'
     PlanNotDecidable:
       description: >-
-        The plan was already approved or rejected, it holds no proposal to decide, or its review
-        refused it.
+        The plan was already approved or rejected, it holds no proposal to decide, its review
+        refused it, or, for an approval, no model reviewed it.
       content:
         application/problem+json:
           schema:
@@ -1016,8 +1051,8 @@ components:
       type: object
       description: >-
         The agent's plan for a real incident's fix, made once after the triage's real verdict, for
-        a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review
-        refused takes no decision.
+        a human to approve or reject. Only an approved restart runs, once. A plan its review
+        refused takes no decision, and one no model reviewed takes no approval.
       required:
         - id
         - proposal
@@ -1063,6 +1098,12 @@ components:
           format: date-time
         decision_reason:
           type: [string, 'null']
+        approval_window_hours:
+          type: integer
+          minimum: 1
+          description: >-
+            How long an approval of this plan stays executable; past that the executor cannot claim
+            it, and nothing runs. An older gateway leaves this out.
     PlanProposal:
       type: object
       required: [kind, target, files, rationale]
@@ -1125,8 +1166,8 @@ components:
       type: string
       description: >-
         ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the
-        plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and
-        a human decides it unreviewed.
+        plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, so
+        it cannot be approved, only rejected.
       enum: [ok, flag, refuse, not_reviewed]
     PlanReviewer:
       type: string

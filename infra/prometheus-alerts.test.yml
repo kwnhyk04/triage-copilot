@@ -162,6 +162,121 @@ tests:
               summary: "Claude has reached today's triage cap (UTC), so live triage runs on the free models until midnight UTC."
               runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#claudedailycapreached
 
+  # Plans with no model review: none sends nothing; the first fires at once, counted as it grows.
+  - interval: 1m
+    input_series:
+      - series: 'tc_plans_unreviewed_recent{job="agent",instance="agent:4210",service="agent"}'
+        values: '0 0 1 2'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PlansUnreviewed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PlansUnreviewed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: agent, instance: 'agent:4210', service: agent }
+            exp_annotations:
+              summary: '2 plans arrived in the last hour with no model review, so they cannot be approved.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#plansunreviewed
+
+  # A real verdict fires from the first scrape that shows it, with a link to its report.
+  - interval: 1m
+    input_series:
+      - series: 'tc_investigation_verdict{job="gateway",instance="gateway:4201",service="gateway",investigation="inv-1",app="freight-audit",verdict="real",cause="database",report="https://web.test/investigations/inv-1"}'
+        values: '_ 1 1'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: InvestigationVerdict
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: InvestigationVerdict
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                notify: report,
+                job: gateway,
+                instance: 'gateway:4201',
+                service: gateway,
+                investigation: inv-1,
+                app: freight-audit,
+                verdict: real,
+                cause: database,
+                report: 'https://web.test/investigations/inv-1',
+              }
+            exp_annotations:
+              summary: 'Real incident on freight-audit: database'
+              report_url: https://web.test/investigations/inv-1
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#investigationverdict
+
+  # A verdict of not real says so.
+  - interval: 1m
+    input_series:
+      - series: 'tc_investigation_verdict{job="gateway",instance="gateway:4201",service="gateway",investigation="inv-2",app="filing-lens",verdict="not_real",cause="unknown",report="https://web.test/investigations/inv-2"}'
+        values: '1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: InvestigationVerdict
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                notify: report,
+                job: gateway,
+                instance: 'gateway:4201',
+                service: gateway,
+                investigation: inv-2,
+                app: filing-lens,
+                verdict: not_real,
+                cause: unknown,
+                report: 'https://web.test/investigations/inv-2',
+              }
+            exp_annotations:
+              summary: 'Not a real incident on filing-lens: unknown'
+              report_url: https://web.test/investigations/inv-2
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#investigationverdict
+
+  # A plan that waits for a person, with a link to its report.
+  - interval: 1m
+    input_series:
+      - series: 'tc_plan_waiting{job="gateway",instance="gateway:4201",service="gateway",investigation="inv-1",app="freight-audit",kind="restart_service",report="https://web.test/investigations/inv-1"}'
+        values: '1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PlanWaiting
+        exp_alerts:
+          - exp_labels:
+              {
+                severity: warning,
+                notify: report,
+                job: gateway,
+                instance: 'gateway:4201',
+                service: gateway,
+                investigation: inv-1,
+                app: freight-audit,
+                kind: restart_service,
+                report: 'https://web.test/investigations/inv-1',
+              }
+            exp_annotations:
+              summary: 'A plan on freight-audit waits for a decision'
+              report_url: https://web.test/investigations/inv-1
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#planwaiting
+
+  # Prometheus cannot read the gateway's metrics, so no verdict or waiting plan is sent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="gateway",instance="gateway:4201",service="gateway"}'
+        values: '1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MonitoringBlind
+        exp_alerts:
+          - exp_labels:
+              { severity: warning, job: gateway, instance: 'gateway:4201', service: gateway }
+            exp_annotations:
+              summary: 'Prometheus cannot read gateway, so the rules that need it stay silent.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind
+
   # The proxy's first refusal: egress-log's counter appears.
   - interval: 1m
     input_series:

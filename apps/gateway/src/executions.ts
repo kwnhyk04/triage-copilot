@@ -12,7 +12,7 @@ export type Execution = Schemas['Execution'];
 export type Claim = (
   actionId: string,
   dryRun: boolean,
-) => Promise<{ created: boolean; execution: Execution } | 'not_found'>;
+) => Promise<{ created: boolean; execution: Execution } | 'not_found' | 'expired'>;
 /** Records how a claimed execution ended. */
 export type Report = (
   actionId: string,
@@ -64,18 +64,21 @@ async function read(tx: TransactionSql, actionId: string): Promise<Execution | u
 
 /**
  * Only an approval whose decision is approved yields a row: of a proposed action, or of a plan
- * whose kind is restart_service (phase 3 runs no other). The primary keys turn a second claim into
- * a no-op that reads the first, and a concurrent second claim waits for the first to commit, so
- * exactly one caller gets `created`.
+ * whose kind is restart_service (phase 3 runs no other), and only within `windowHours` of the
+ * decision, by the database's clock. Past that it is expired, so an executor started later runs
+ * nothing from a stale approval. The primary keys turn a second claim into a no-op that reads the
+ * first, and a concurrent second claim waits for the first to commit, so exactly one caller gets
+ * `created`.
  */
 export const createClaim =
-  (sql: Sql): Claim =>
+  (sql: Sql, windowHours: number): Claim =>
   (actionId, dryRun) =>
     sql.begin(async (tx) => {
+      const fresh = tx`decided_at > now() - make_interval(hours => ${windowHours})`;
       const action = await tx`
         INSERT INTO gateway.executions (action_id, dry_run)
         SELECT action_id, ${dryRun} FROM gateway.approvals
-        WHERE action_id = ${actionId} AND decision = 'approved'
+        WHERE action_id = ${actionId} AND decision = 'approved' AND ${fresh}
         ON CONFLICT (action_id) DO NOTHING
         RETURNING action_id`;
       const plan = await tx`
@@ -83,11 +86,17 @@ export const createClaim =
         SELECT d.plan_id, ${dryRun} FROM gateway.plan_decisions d
         JOIN gateway.plans p ON p.id = d.plan_id
         WHERE d.plan_id = ${actionId} AND d.decision = 'approved' AND p.kind = 'restart_service'
+          AND ${fresh}
         ON CONFLICT (plan_id) DO NOTHING
         RETURNING plan_id`;
       const execution = await read(tx, actionId);
-      if (execution === undefined) return 'not_found';
-      return { created: action.length + plan.length > 0, execution };
+      if (execution !== undefined) return { created: action.length + plan.length > 0, execution };
+      const expired = await tx`
+        SELECT FROM gateway.approvals WHERE action_id = ${actionId} AND decision = 'approved'
+        UNION ALL
+        SELECT FROM gateway.plan_decisions d JOIN gateway.plans p ON p.id = d.plan_id
+        WHERE d.plan_id = ${actionId} AND d.decision = 'approved' AND p.kind = 'restart_service'`;
+      return expired.length > 0 ? 'expired' : 'not_found';
     });
 
 /** Only a claimed execution takes a result, once; a finished one is never reopened. */

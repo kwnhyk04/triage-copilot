@@ -144,8 +144,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Records a human approval of a plan. Nothing runs from it yet.
-         * @description One decision per plan. A plan that holds no proposal, because no model gave one, takes no decision, and neither does a plan its review refused. In phase 2 an approval only records the human's answer; no action is queued.
+         * Records a human approval of a plan a model reviewed.
+         * @description One decision per plan. A plan that holds no proposal, because no model gave one, takes no decision, and neither does a plan its review refused. A plan no model reviewed takes no approval. An approved restart is queued for the executor, which must claim it within APPROVAL_WINDOW_HOURS; any other approval only records the human's answer.
          */
         post: operations["approvePlan"];
         delete?: never;
@@ -176,6 +176,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What Prometheus reads, in its text format.
+         * @description Each live verdict and each plan that waits for a decision, for an hour after it was stored. It names ids, apps and closed lists, never text a model wrote. It takes no credential, as only internal networks reach this listener.
+         */
+        get: operations["getMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/actions/{id}/execution": {
         parameters: {
             query?: never;
@@ -189,7 +209,7 @@ export interface paths {
         put?: never;
         /**
          * Claims an approved action for the executor, once.
-         * @description Inserts the execution in one transaction. The id is a proposed action's, or a restart plan's (ActionApproved v2 carries it as its action id). Only an action whose decision is approved can be claimed, and of plans only a restart: the database refuses any other. The action id is the idempotency key, so a second claim returns the first one with 200, and the executor must not run the action again. An execution left in claimed is never retried; it waits for a human. Before every claim the gateway asks the agent's actions switch: while it is off (409) or unknown (503), nothing is claimed.
+         * @description Inserts the execution in one transaction. The id is a proposed action's, or a restart plan's (ActionApproved v2 carries it as its action id). Only an action whose decision is approved can be claimed, and of plans only a restart: the database refuses any other. The action id is the idempotency key, so a second claim returns the first one with 200, and the executor must not run the action again. An execution left in claimed is never retried; it waits for a human. Before every claim the gateway asks the agent's actions switch: while it is off (409) or unknown (503), nothing is claimed. An approval older than APPROVAL_WINDOW_HOURS (24 by default) can no longer be claimed (410), dry runs included.
          */
         post: operations["claimExecution"];
         delete?: never;
@@ -436,7 +456,7 @@ export interface components {
          * @enum {string}
          */
         ModelPart: "triage" | "summary" | "plan";
-        /** @description The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review refused takes no decision. */
+        /** @description The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Only an approved restart runs, once. A plan its review refused takes no decision, and one no model reviewed takes no approval. */
         Plan: {
             /** Format: uuid */
             id: string;
@@ -455,6 +475,8 @@ export interface components {
             /** Format: date-time */
             decided_at: string | null;
             decision_reason: string | null;
+            /** @description How long an approval of this plan stays executable; past that the executor cannot claim it, and nothing runs. An older gateway leaves this out. */
+            approval_window_hours?: number;
         };
         PlanProposal: {
             kind: components["schemas"]["PlanKind"];
@@ -485,7 +507,7 @@ export interface components {
             new_files: string[];
         };
         /**
-         * @description ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and a human decides it unreviewed.
+         * @description ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, so it cannot be approved, only rejected.
          * @enum {string}
          */
         PlanReviewStatus: "ok" | "flag" | "refuse" | "not_reviewed";
@@ -722,7 +744,7 @@ export interface components {
                 "application/json": components["schemas"]["Plan"];
             };
         };
-        /** @description The plan was already approved or rejected, it holds no proposal to decide, or its review refused it. */
+        /** @description The plan was already approved or rejected, it holds no proposal to decide, its review refused it, or, for an approval, no model reviewed it. */
         PlanNotDecidable: {
             headers: {
                 [name: string]: unknown;
@@ -1014,6 +1036,35 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    getMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The metrics. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Postgres could not be read, so the scrape shows it failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     claimExecution: {
         parameters: {
             query?: never;
@@ -1060,6 +1111,15 @@ export interface operations {
             };
             /** @description The actions switch is off, so nothing is claimed. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The approval is past its window, so nothing is claimed. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };

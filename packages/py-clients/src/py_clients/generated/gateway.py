@@ -115,7 +115,7 @@ class PlanKind(StrEnum):
 
 class PlanReviewStatus(StrEnum):
     """
-    ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, and a human decides it unreviewed.
+    ok: no issue found; flag: only warnings, which a human reads before deciding; refuse: the plan takes no decision; not_reviewed: the code checks passed but no model reviewed it, so it cannot be approved, only rejected.
     """
 
     ok = "ok"
@@ -551,7 +551,7 @@ class Step(BaseModel):
 
 class Plan(BaseModel):
     """
-    The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Nothing runs from a plan in phase 2. A plan its review refused takes no decision.
+    The agent's plan for a real incident's fix, made once after the triage's real verdict, for a human to approve or reject. Only an approved restart runs, once. A plan its review refused takes no decision, and one no model reviewed takes no approval.
     """
 
     id: UUID
@@ -578,6 +578,13 @@ class Plan(BaseModel):
     decided_by: Annotated[str | None, Field(description="Approver identity; null while pending.")]
     decided_at: AwareDatetime | None
     decision_reason: str | None
+    approval_window_hours: Annotated[
+        int | None,
+        Field(
+            description="How long an approval of this plan stays executable; past that the executor cannot claim it, and nothing runs. An older gateway leaves this out.",
+            ge=1,
+        ),
+    ] = None
 
 
 class Investigation(InvestigationSummary):

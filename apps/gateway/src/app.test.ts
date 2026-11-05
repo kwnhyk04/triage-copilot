@@ -224,6 +224,12 @@ describe('gateway', () => {
   };
   afterEach(() => app.close());
 
+  it('serves no /metrics on the public port', async () => {
+    await start();
+    const metrics = { url: '/metrics', headers: { 'x-api-key': API_KEY } };
+    expect((await app.inject(metrics)).statusCode).toBe(404);
+  });
+
   describe('plan decisions', () => {
     const post = (headers: Record<string, string>, route = 'approve', id = PLAN_ID) =>
       app.inject({
@@ -254,6 +260,16 @@ describe('gateway', () => {
         expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
         expect(refused.json<{ detail: string }>().detail).toBe('A refused plan takes no decision.');
       }
+    });
+
+    it('answer 409 with a clear error to the approval of a plan no model reviewed', async () => {
+      await start({ decidePlan: () => Promise.resolve('not_reviewed') });
+      const refused = await post(approver);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect(refused.json<{ detail: string }>().detail).toBe(
+        'This plan has no model review, so it cannot be approved.',
+      );
     });
 
     it('map a bad id, an unknown plan, a decided one, one without a proposal and a failure', async () => {

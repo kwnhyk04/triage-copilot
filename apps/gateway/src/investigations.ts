@@ -3,6 +3,8 @@ import type { PlanRecordedV1, ReportRecordedV2 } from '@triage/ts-clients/messag
 import { z } from '@triage/ts-config';
 import type { Sql } from 'postgres';
 
+import { lockGroupKey } from './intake.ts';
+
 type Schemas = components['schemas'];
 /** One page, newest first; bad_cursor when the cursor is not one this gateway issued. */
 export type ListInvestigations = (query: {
@@ -13,10 +15,11 @@ export type ListInvestigations = (query: {
 }) => Promise<Schemas['InvestigationPage'] | 'bad_cursor'>;
 /** One investigation; undefined when no alert group has its id. */
 export type GetInvestigation = (id: string) => Promise<Schemas['Investigation'] | undefined>;
-/** What reads take from the settings: LIVE_TENANTS, and SWEEPER_STUCK_AFTER_MINUTES. */
+/** What reads take from the settings: LIVE_TENANTS, the stuck time and the approval window. */
 export interface ReadSettings {
   liveTenants: readonly string[];
   stuckAfterMinutes: number;
+  approvalWindowHours: number;
 }
 
 interface Group {
@@ -56,9 +59,10 @@ export interface PlanRow {
 
 /**
  * A plan as the API serves it: its proposal, or null with the problem that left none, its review,
- * and the human decision. A plan its review refused takes none, so it stays pending.
+ * the human decision, and how long an approval lasts. A plan its review refused takes no decision,
+ * so it stays pending.
  */
-export const toPlan = (row: PlanRow): Schemas['Plan'] => ({
+export const toPlan = (row: PlanRow, approvalWindowHours: number): Schemas['Plan'] => ({
   id: row.id,
   proposal:
     row.kind === null
@@ -76,6 +80,7 @@ export const toPlan = (row: PlanRow): Schemas['Plan'] => ({
   decided_by: row.approver,
   decided_at: row.decided_at?.toISOString() ?? null,
   decision_reason: row.reason,
+  approval_window_hours: approvalWindowHours,
 });
 
 // A position is (created_at, id). created_at travels as text with its microseconds: a JS Date keeps
@@ -118,52 +123,64 @@ export type GetAlertContext = (
   investigationId: string,
 ) => Promise<Schemas['AlertContext'] | undefined>;
 
-/** The group and its 200 oldest alerts, with how many it holds in all. */
+/**
+ * The group and its 200 oldest alerts, with how many it holds in all. The first read closes the
+ * group: it waits for any webhook of the group key, shows what that stored, and intake sends any
+ * later alert to a group of its own.
+ */
 export const createAlertContext =
   (sql: Sql): GetAlertContext =>
-  async (investigationId) => {
-    const [group] = await sql<
-      {
-        id: string;
-        tenant_id: string;
-        group_key: string;
-        window_start: Date;
-        severity: Schemas['AlertContext']['severity'];
-        alert_count: number;
-      }[]
-    >`
-      SELECT id, tenant_id, group_key, window_start, severity,
-             (SELECT count(*)::int FROM gateway.alerts a WHERE a.group_id = g.id) AS alert_count
-      FROM gateway.alert_groups g WHERE investigation_id = ${investigationId}`;
-    if (group === undefined) return undefined;
-    const alerts = await sql<
-      {
-        fingerprint: string;
-        labels: Record<string, string>;
-        annotations: Record<string, string> | null;
-        starts_at: Date;
-        status: Schemas['AlertStatus'];
-      }[]
-    >`
-      SELECT fingerprint, labels, annotations, starts_at, status FROM gateway.alerts
-      WHERE group_id = ${group.id}
-      ORDER BY starts_at, created_at, id LIMIT 200`;
-    return {
-      investigation_id: investigationId,
-      group_id: group.id,
-      tenant_id: group.tenant_id,
-      group_key: group.group_key,
-      window_start: group.window_start.toISOString(),
-      severity: group.severity,
-      alert_count: group.alert_count,
-      // Rows stored before 0005 have no annotations, and their alerts leave the field out.
-      alerts: alerts.map(({ annotations, ...alert }) => ({
-        ...alert,
-        ...(annotations === null ? {} : { annotations }),
-        starts_at: alert.starts_at.toISOString(),
-      })),
-    };
-  };
+  (investigationId) =>
+    sql.begin(async (tx) => {
+      const [group] = await tx<
+        {
+          id: string;
+          tenant_id: string;
+          group_key: string;
+          window_start: Date;
+          severity: Schemas['AlertContext']['severity'];
+          alerts_read_at: Date | null;
+        }[]
+      >`
+        SELECT id, tenant_id, group_key, window_start, severity, alerts_read_at
+        FROM gateway.alert_groups WHERE investigation_id = ${investigationId}`;
+      if (group === undefined) return undefined;
+      if (group.alerts_read_at === null) {
+        await lockGroupKey(tx, group.tenant_id, group.group_key);
+        await tx`
+          UPDATE gateway.alert_groups SET alerts_read_at = clock_timestamp()
+          WHERE id = ${group.id}`;
+      }
+      const [count] = await tx<{ alerts: number }[]>`
+        SELECT count(*)::int AS alerts FROM gateway.alerts WHERE group_id = ${group.id}`;
+      const alerts = await tx<
+        {
+          fingerprint: string;
+          labels: Record<string, string>;
+          annotations: Record<string, string> | null;
+          starts_at: Date;
+          status: Schemas['AlertStatus'];
+        }[]
+      >`
+        SELECT fingerprint, labels, annotations, starts_at, status FROM gateway.alerts
+        WHERE group_id = ${group.id}
+        ORDER BY starts_at, created_at, id LIMIT 200`;
+      return {
+        investigation_id: investigationId,
+        group_id: group.id,
+        tenant_id: group.tenant_id,
+        group_key: group.group_key,
+        window_start: group.window_start.toISOString(),
+        severity: group.severity,
+        alert_count: count?.alerts ?? 0,
+        // Rows stored before 0005 have no annotations, and their alerts leave the field out.
+        alerts: alerts.map(({ annotations, ...alert }) => ({
+          ...alert,
+          ...(annotations === null ? {} : { annotations }),
+          starts_at: alert.starts_at.toISOString(),
+        })),
+      };
+    });
 
 /** The groups a UTC day kept from investigation, per tenant, with why and what they hold. */
 export interface Digest {
@@ -393,7 +410,7 @@ export const createGetInvestigation =
       partial: report?.partial ?? false,
       // The report's models, then the plan's.
       models: [...(group.models ?? []), ...(plan?.models ?? [])],
-      plan: plan === undefined ? null : toPlan(plan),
+      plan: plan === undefined ? null : toPlan(plan, settings.approvalWindowHours),
       proposed_actions: actions.map((action) => ({
         id: action.id,
         investigation_id: action.investigation_id,

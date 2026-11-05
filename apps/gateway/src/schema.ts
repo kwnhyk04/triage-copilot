@@ -126,6 +126,9 @@ export const alertGroups = gateway.table(
     requeueCount: integer('requeue_count').notNull().default(0),
     // Set on a queued_not_investigated group from gateway 0007 on; null on older ones.
     notInvestigated: notInvestigatedReason('not_investigated'),
+    // When the investigation first read its alerts (gateway 0011): a later alert goes to a group of
+    // its own, so none joins unseen.
+    alertsReadAt: timestamptz('alerts_read_at'),
   },
   (t) => [
     unique().on(t.tenantId, t.groupKey, t.windowStart),
