@@ -27,7 +27,7 @@ PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
 
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
-	eval-plans eval-reviews scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
+	eval-plans eval-reviews eval-cache scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
 	prod-env prod-up prod-down prod-token prod-switch prod-digest
 
 install:
@@ -168,6 +168,10 @@ eval-plans:
 eval-reviews: export ANTHROPIC_API_KEY := $(ANTHROPIC_API_KEY)
 eval-reviews:
 	uv run python evals/harness/reviews.py $(if $(ESTIMATE),--estimate) $(if $(MAX_USD),--max-usd $(MAX_USD)) $(if $(REVIEW_MODEL),--model $(REVIEW_MODEL)) $(if $(FRESH),--fresh) $(if $(REPEAT),--repeat $(REPEAT))
+
+# Prompt caching on the recorded Claude runs (evals/harness/cache_replay.py): no model, no stack.
+eval-cache:
+	uv run python evals/harness/cache_replay.py
 
 # Every scenario set passes the validator, and a released set never changes: a file of a
 # v<N> set that exists at SCENARIOS_BASE (default HEAD; CI passes the target branch) must be
