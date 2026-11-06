@@ -3,6 +3,8 @@ name: publish
 # Pushes the five images to GHCR after ci.yml passed on a push to this repo's main. workflow_run
 # also fires for pull request runs, forks included, with this repo's permissions, so the job checks
 # every field, builds exactly the commit that ci.yml tested, and downloads nothing from that run.
+# Each image builds natively on amd64 and arm64 under a tag of its own; once all are pushed,
+# `manifests` makes the tags production pins, which give each host its own architecture.
 on:
   workflow_run:
     workflows: [ci]
@@ -17,13 +19,16 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     strategy:
       matrix:
+        arch: [amd64, arm64]
+        service: [gateway, agent, executor, sim, squid]
+        # Each entry adds its file and target to both architectures' jobs for that service.
         include:
           - { service: gateway, file: infra/docker/gateway.Dockerfile, target: '' }
           - { service: agent, file: infra/docker/python.Dockerfile, target: agent }
@@ -41,9 +46,10 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           SERVICE: ${{ matrix.service }}
+          ARCH: ${{ matrix.arch }}
         run: |
           image="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/triage-copilot-$SERVICE"
-          echo "tags=$image:sha-$(echo "$SHA" | cut -c1-12),$image:main" >> "$GITHUB_OUTPUT"
+          echo "tags=$image:sha-$(echo "$SHA" | cut -c1-12)-$ARCH" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -56,5 +62,33 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           build-args: PACKAGE=${{ matrix.service }}
+          platforms: linux/${{ matrix.arch }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+
+  manifests:
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        service: [gateway, agent, executor, sim, squid]
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: One tag for both architectures
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          image="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/triage-copilot-$SERVICE"
+          tag="sha-$(echo "$SHA" | cut -c1-12)"
+          docker buildx imagetools create --tag "$image:$tag" --tag "$image:main" \
+            "$image:$tag-amd64" "$image:$tag-arm64"

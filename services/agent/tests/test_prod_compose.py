@@ -145,8 +145,8 @@ def test_only_the_egress_proxy_publishes_and_only_on_127_0_0_1() -> None:
 
 
 def test_only_the_egress_proxy_has_a_route_out() -> None:
-    # Docker Desktop lets any container on a routed network reach the internet and this PC's own
-    # listeners (host.docker.internal), so every network but the proxy's `egress` is internal.
+    # Docker lets any container on a routed network reach the internet and the host's own
+    # listeners, so every network but the proxy's `egress` is internal.
     routed = {name for name, network in PROD["networks"].items() if not network.get("internal")}
     assert routed == {"egress"}
     # The internet-facing sidecar shares `edge` with the gateway alone and no network with
@@ -259,6 +259,12 @@ def test_prometheus_loads_production_s_config_and_rules_and_alerts_alertmanager(
     assert _job("agent")["static_configs"] == agent
 
 
+def test_prometheus_reads_alertmanager_s_own_metrics_so_failed_delivery_shows() -> None:
+    # On `alerting`, which holds the alert path and the proxy alone.
+    assert _job("alertmanager")["static_configs"] == [{"targets": ["alertmanager:9093"]}]
+    assert {"alerting"} <= set(networks("prometheus")) & set(networks("alertmanager"))
+
+
 def test_verdicts_and_waiting_plans_go_to_discord_alone_each_once() -> None:
     config = _alertmanager_config()
     [route] = config["route"]["routes"]
@@ -292,7 +298,7 @@ def test_each_readiness_probe_runs_from_inside_prometheus() -> None:
         for group in probes["static_configs"]
         for target in group["targets"]
     }
-    # watch runs on this PC, which only the proxy reaches: its probe port forwards /readyz there.
+    # watch runs on the host, which only the proxy reaches: its probe port forwards /readyz there.
     assert targets == {
         "http://gateway:4200/readyz": "gateway",
         "http://agent:4210/readyz": "agent",
@@ -301,9 +307,7 @@ def test_each_readiness_probe_runs_from_inside_prometheus() -> None:
     conf = SQUID_CONF.read_text("utf-8")
     probe = r"^http_port 4240 accel defaultsite=watch no-vhost name=watch_probe$"
     assert re.search(probe, conf, re.MULTILINE)
-    assert re.search(
-        r"^cache_peer host\.docker\.internal parent 4240 0 .*\bname=watch_host\b", conf, re.M
-    )
+    assert re.search(r"^cache_peer watch-host parent 4240 0 .*\bname=watch_host\b", conf, re.M)
     ip = re.escape(address("prometheus", "alerting"))
     assert re.search(rf"^acl prometheus_ip src {ip}$", conf, re.MULTILINE)
 

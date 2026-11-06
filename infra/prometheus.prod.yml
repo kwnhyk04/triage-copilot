@@ -1,6 +1,7 @@
 # Production's Prometheus (the observability profile; infra/docker-compose.prod.yml): the agent's
-# metrics, the readiness probes and egress-log's count of the proxy's refusals, judged by the rules
-# in prometheus-alerts.yml, whose alerts go to Alertmanager. docs/alerts.md says what each means.
+# metrics, the readiness probes, Alertmanager's own and egress-log's count of the proxy's refusals,
+# judged by the rules in prometheus-alerts.yml, whose alerts go to Alertmanager. docs/alerts.md
+# says what each means.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -23,7 +24,7 @@ scrape_configs:
     static_configs:
       - targets: [gateway:4201]
         labels: { service: gateway }
-  # Each /readyz, through the probe exporter on this container's loopback. watch runs on this PC,
+  # Each /readyz, through the probe exporter on this container's loopback. watch runs on the host,
   # which only the egress proxy reaches: its probe port forwards GET /readyz there.
   - job_name: readyz
     metrics_path: /probe
@@ -42,6 +43,10 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: 127.0.0.1:9115
+  # Alertmanager's own counts, which show a message it gave up on (AlertDeliveryFailing).
+  - job_name: alertmanager
+    static_configs:
+      - targets: [alertmanager:9093]
   # The proxy's refusals, counted from its access log.
   - job_name: egress-log
     static_configs:

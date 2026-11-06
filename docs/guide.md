@@ -42,7 +42,7 @@ pnpm --filter @triage/web session-secret              # writes a random SESSION_
 
 `next start` and Vercel refuse to start without both. Under `make dev` they are optional, but both or neither; without them sign-in is off and only the landing, the demo and the probes work. For Vercel, run `hash-password` without `--write-env` and paste the hash it prints.
 
-CI (GitHub Actions): `ci.yml` runs lint, types, unit, integration and browser tests, contract and scenario checks, a gitleaks scan of the full history and the image builds on every pull request and push to main; `ci-result` is the required check. `publish.yml` pushes the gateway, agent, executor and sim images to GHCR from main. `eval.yml` stays off until the repository variable `EVAL_ENABLED` is `true`; its only secret is `GEMINI_API_KEY`, and CI never calls Claude. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
+CI (GitHub Actions): `ci.yml` runs lint, types, unit, integration and browser tests, contract and scenario checks, a gitleaks scan of the full history and the image builds on every pull request and push to main; `ci-result` is the required check. `publish.yml` pushes the gateway, agent, executor, sim and squid images to GHCR from main, each built natively for amd64 and arm64 and joined under one tag, so a host pulls its own architecture; `ci.yml` builds both on every pull request. `eval.yml` stays off until the repository variable `EVAL_ENABLED` is `true`; its only secret is `GEMINI_API_KEY`, and CI never calls Claude. `make dev` starts Postgres, ElasticMQ (SQS) and Toxiproxy, then all five apps. Set `COMPOSE_PROFILES=observability` in `.env` to add the OpenTelemetry Collector, Jaeger (16688), Prometheus (9092) and Grafana (3201), and uncomment `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces.
 
 ## Usage
 
@@ -90,7 +90,7 @@ Actions (phase 3): only a plan a model reviewed can be approved. Approving a res
 
 ## Deploy
 
-The web runs on Vercel. The backend runs on this PC as its own compose project, `triagecopilot-prod`, with its own containers, networks and volumes, so dev, test and eval work run beside it (`docker compose ls` lists both). Production runs the images `publish.yml` pushes from main.
+The web runs on Vercel. The backend runs on this PC as its own compose project, `triagecopilot-prod`, with its own containers, networks and volumes, so dev, test and eval work run beside it (`docker compose ls` lists both). Production runs the images `publish.yml` pushes from main. `docs/server-move.md` moves it to an always-on Linux server.
 
 Only the gateway's public port is reachable from outside production: on `127.0.0.1:4202` (`PROD_GATEWAY_PORT`) for `watch`, which the egress proxy publishes and forwards to the gateway, and through a Tailscale Funnel sidecar at `https://triage-copilot.<tailnet>.ts.net`. Postgres, ElasticMQ, the gateway's internal listener (4201) and the agent publish nothing. The sim and the executor are not deployed.
 
@@ -121,6 +121,13 @@ The agent never holds the approver key, and no container holds the web's sign-in
 | `make prod-token NAME=<tenant>` | Issues a tenant's webhook token in the production database (it has no host port) |
 | `make prod-switch [NAME= STATE=]` | The production agent's kill switches |
 | `make prod-digest [DAY=]` | A UTC day's uninvestigated alert groups in production |
+| `make prod-backup` | Dumps the database with `pg_dump -Fc` into `BACKUP_DIR`, reads the dump back in full, keeps the newest `BACKUP_KEEP` and copies it to `BACKUP_DEST`, an S3-compatible bucket or an rsync target, empty by default (`docs/server-move.md`, Backups) |
+| `make prod-restore FILE=<dump>` | Starts Postgres alone and loads the dump into a database of its own, then swaps it in. The old database stays as `triage_before_<stamp>`. Refuses while the gateway or the agent runs |
+| `make prod-heartbeat` | Pings `HEARTBEAT_URL`, an outside monitor, while the gateway answers `/readyz` |
+| `make prod-watch` | watch on its own packages alone, for the server's systemd unit |
+| `make prod-fetch` | `git fetch` of each watched app's origin/main, which watch never does |
+
+Each long-running container has `restart: unless-stopped`, and each container's log rotates at 10 MB, three files kept (the prod compose file's `x-logging`). The agent gets 60 s to finish its step when stopped. Docker's default of 10 s kills a job mid-step, which then pays for that model call again.
 
 Tailscale: turn on MagicDNS and HTTPS certificates, and allow Funnel for the auth key's tag in the policy file (the `funnel` node attribute).
 
@@ -161,7 +168,7 @@ agent     --outbound, 10.231.233.2--> egress-proxy:3128 --egress--> the model pr
 tailscale --outbound, 10.231.233.3--> egress-proxy:3129 --egress--> Tailscale, Let's Encrypt
 ```
 
-Docker Desktop lets any container on a routed network reach the internet and this PC's own listeners at `host.docker.internal` (192.168.65.254), and publishes no port from an internal network. So every production network is internal (`data`, `edge`, `ingress`, `outbound`, and `monitoring` for the observability profile) except `egress`, which only `egress-proxy` joins. The proxy is squid (`infra/squid/squid.conf`), as in FreightAudit and FilingLens:
+Docker lets any container on a routed network reach the internet and the host's own listeners (on Docker Desktop, through `host.docker.internal`, 192.168.65.254), and publishes no port from an internal network. So every production network is internal (`data`, `edge`, `ingress`, `outbound`, and `monitoring` for the observability profile) except `egress`, which only `egress-proxy` joins. The proxy is squid (`infra/squid/squid.conf`), as in FreightAudit and FilingLens:
 
 - CONNECT to port 443 only; nothing cached.
 - Every loopback, private, link-local, CGNAT and other non-public destination is refused before any allowlist, by each address a name resolves to.
@@ -179,7 +186,7 @@ Docker Desktop lets any container on a routed network reach the internet and thi
 | 4202 | watch, on this PC | the gateway's public listener only |
 | 3130 | Alertmanager (10.231.233.50, observability profile) | `discord.com` |
 | 3131 | the mail relay (10.231.233.51, observability profile) | `smtp.gmail.com`, on 587 alone |
-| 4240 | Prometheus (10.231.233.52, observability profile) | `GET /readyz` of watch on this PC (`host.docker.internal:4240`) only |
+| 4240 | Prometheus (10.231.233.52, observability profile) | `GET /readyz` of watch on the host (`watch-host:4240`) only |
 
 - Not allowed: Tailscale's log server (`--no-logs-no-support` turns its upload off), OpenRouter and Ollama (not used in production), and every other host.
 - The agent's model clients read `HTTPS_PROXY` themselves (`test_providers.py` checks each); every internal address is `http://`, which it leaves alone.
@@ -192,7 +199,7 @@ Egress checks, after check 2, in PowerShell:
 2. Run `docker logs triagecopilot-prod-egress-proxy-1 | Select-String CONNECT`. Expect `TCP_TUNNEL/200` for Tailscale's hosts from 10.231.233.3. Then `Select-String TCP_DENIED`: nothing. If the sidecar asks for another host, report it; never allow a bare IP address.
 3. The model routes, with no key and no model call: `docker exec triagecopilot-prod-agent-1 python -c "import httpx2; [print(h, httpx2.head('https://' + h, timeout=10).status_code) for h in ('api.anthropic.com', 'generativelanguage.googleapis.com', 'integrate.api.nvidia.com')]"`. Each host prints an HTTP status, and the proxy's log shows a tunnel from 10.231.233.2 for each.
 4. This PC's ports are closed to the agent, so every result is non-zero (`10.231.233.1` is `outbound`'s gateway address): `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.setdefaulttimeout(2); [print(h, p, socket.socket().connect_ex((h, p))) for h in ('192.168.65.254', '10.231.233.1') for p in (4200, 4201, 4231, 5434, 4566, 445)]"`. And `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.create_connection(('host.docker.internal', 4231), 3)"` fails. This is P1.12 (4) for TC's own containers.
-5. Through the proxy, a 403: `docker exec triagecopilot-prod-agent-1 python -c "import socket; s = socket.create_connection(('egress-proxy', 3128), 5); s.sendall(b'CONNECT host.docker.internal:443 HTTP/1.1\r\nHost: x\r\n\r\n'); print(s.recv(40))"` prints `b'HTTP/1.1 403 Forbidden...'`.
+5. Through the proxy, a 403: `docker exec triagecopilot-prod-agent-1 python -c "import socket; s = socket.create_connection(('egress-proxy', 3128), 5); s.sendall(b'CONNECT watch-host:443 HTTP/1.1\r\nHost: x\r\n\r\n'); print(s.recv(40))"` prints `b'HTTP/1.1 403 Forbidden...'`.
 6. watch's port: `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4202/readyz` prints 200. Then `curl.exe -s -o NUL -w "%{http_code}" -X POST -H "Authorization: Bearer not-a-token" -H "X-API-Key: x" http://127.0.0.1:4202/v1/alerts` prints 401: the token reached the gateway, which knows no tenant for it. A 403 means the proxy dropped the token and the gateway saw only the key, so every alert would get 401 "Send a valid tenant webhook token." even with the right token. Then check that `infra/squid/squid.conf`'s gateway `cache_peer` has `login=PASSTHRU`, run `docker restart triagecopilot-prod-egress-proxy-1`, and check again.
 7. A day later, `docker stats --no-stream triagecopilot-prod-egress-proxy-1` stays well under its 256 MB, and `Select-String TCP_DENIED` shows only egress check 5's probe.
 
@@ -207,9 +214,9 @@ Rollback, if Funnel's `/healthz` is not 200 within 10 minutes, or the model call
 ```
 prometheus   --data--> agent:4210/metrics
 blackbox     (in Prometheus's network namespace) --data--> gateway:4200/readyz, agent:4210/readyz
-blackbox     --alerting, 10.231.233.52--> egress-proxy:4240 --egress--> watch's 127.0.0.1:4240/readyz
+blackbox     --alerting, 10.231.233.52--> egress-proxy:4240 --egress--> watch's /readyz on the host
 egress-proxy --alerting, UDP--> egress-log:5514 (counts the refusals) <--alerting-- prometheus
-prometheus   --alerting--> alertmanager:9093
+prometheus   --alerting--> alertmanager:9093 (sends alerts, reads its /metrics)
 alertmanager --alerting, 10.231.233.50--> egress-proxy:3130 --egress--> discord.com:443
 alertmanager --alerting--> smtp-relay:2525 (10.231.233.51) --> egress-proxy:3131 --egress--> smtp.gmail.com:587
 ```
@@ -220,20 +227,22 @@ With `COMPOSE_PROFILES=observability` in `.env.prod`, production runs Prometheus
 | --- | --- | --- |
 | GatewayNotReady | the gateway's `/readyz` fails for 2 minutes | critical |
 | AgentNotReady | the agent's `/readyz` or `/metrics` fails for 2 minutes | critical |
-| WatchNotReady | watch's `/readyz` on this PC fails for 5 minutes | warning |
+| WatchNotReady | watch's `/readyz` on the host fails for 5 minutes | warning |
 | InvestigationsFailing | an investigation message went to the dead-letter queue, or failed validation, in the last hour | warning |
 | ClaudeOff | Claude takes no live triage call for a minute: switched off, key rejected, credits or TC's monthly cap used up. Not its planned end on `LLM_CLAUDE_UNTIL` | warning |
 | ClaudeDailyCapReached | today's Claude spend leaves less than one largest call under the triage cap ($0.40, UTC) | warning |
 | PlansUnreviewed | a plan arrived in the last hour with no model review, so it cannot be approved | warning |
 | EgressDenied | the egress proxy refused a request in the last 10 minutes | warning |
-| MonitoringBlind | Prometheus cannot read the probe exporter, egress-log or the gateway's metrics for 5 minutes | warning |
+| MonitoringBlind | Prometheus cannot read the probe exporter, egress-log, the gateway's metrics or Alertmanager's for 5 minutes | warning |
+| AlertDeliveryFailing | Alertmanager gave up on a message to Discord or the inbox in the last 15 minutes | warning |
 | InvestigationVerdict | a live investigation reached a verdict: one Discord message with a link to the report, no email | warning |
 | PlanWaiting | a plan a model reviewed waits for a decision: one Discord message with a link to the report, no email | warning |
 
 - **No route of its own.** Alertmanager, the mail relay and egress-log sit on `alerting` alone: internal, with Prometheus and the egress proxy, so no app container reaches Alertmanager's API, which has no login. Nothing publishes a port.
 - **Discord** goes through the proxy's port 3130, which serves 10.231.233.50 alone and allows `discord.com:443` alone. So the webhook URL must start with `https://discord.com/api/webhooks/`; `discordapp.com`, `canary.` and `ptb.` are refused, and the entrypoint says so at start.
 - **Mail:** Alertmanager sends no SMTP through a proxy, so `smtp-relay` (socat, from the proxy's image) takes its connections, from 10.231.233.50 alone, and opens each as a CONNECT to `smtp.gmail.com:587` on port 3131. STARTTLS runs from Alertmanager to Gmail, the certificate checked against `smtp.gmail.com`. A connection idle for 60 s closes.
-- **Probes:** the blackbox exporter runs in Prometheus's network namespace and answers on its loopback alone, so no other container can make it probe anything. watch runs on this PC, which only the proxy reaches: port 4240 forwards `GET /readyz` from Prometheus's address alone to `host.docker.internal:4240`, which reaches watch's 127.0.0.1 listener (checked on Docker Desktop on 2026-11-01).
+- **Probes:** the blackbox exporter runs in Prometheus's network namespace and answers on its loopback alone, so no other container can make it probe anything. watch runs on the host, which only the proxy reaches: port 4240 forwards `GET /readyz` from Prometheus's address alone to `watch-host:4240`. Compose maps that name to `host-gateway`, Docker's own address for the host. On Docker Desktop that reaches watch's 127.0.0.1 listener. On Docker Engine a container never reaches the host's loopback, so watch binds the default bridge's address instead (`docs/server-move.md`).
+- **Failed delivery:** Prometheus also reads Alertmanager's own metrics, and AlertDeliveryFailing fires when it gives up on a message. The channel that still works carries the alert.
 - **Refusals:** the proxy sends every access log line over UDP to egress-log, a collector of its own on `alerting`, which serves the count of `TCP_DENIED` lines to Prometheus. It adds up each refusal since egress-log started (`infra/otel-egress-log.yaml`). With the profile off, nobody listens and nothing waits.
 - **The agent's `/metrics`** serves the failed investigation messages of the last hour and, while live triage's Claude takes no call, why. It takes no credential, like the probes, and answers on internal networks only.
 - **Messages:** one per rule, its alerts listed, titled `Triage Copilot firing: <rule>` with a count when several fire. Each alert gives its severity, its summary, `Firing since <UTC time>` and its runbook link. No other link, no HTML part. Discord also says when an alert resolves; email gets firing messages only. A group waits 30 s, then at least 10 minutes between messages, and reminds every 12 hours while it fires.
@@ -244,7 +253,7 @@ With `COMPOSE_PROFILES=observability` in `.env.prod`, production runs Prometheus
   - Messages: `docker restart triagecopilot-prod-alertmanager-1`. The entrypoint writes the config only at start.
   - egress-log's count (`infra/otel-egress-log.yaml`): `docker restart triagecopilot-prod-egress-log-1`. The count starts again from none, which EgressDenied reads as the series appearing at its next refusal.
 - **A new webhook or password:** change `.env.prod`, then `make prod-up`.
-- **Not watched:** see `docs/alerts.md`, Not watched. If Alertmanager, the relay, the proxy or Prometheus stops, nothing says so.
+- **Not watched:** see `docs/alerts.md`, Not watched. If Alertmanager, the relay, the proxy or Prometheus stops, no rule says so.
 
 Alerting rollout, after the egress checks pass, in PowerShell:
 
@@ -257,7 +266,7 @@ Alerting rollout, after the egress checks pass, in PowerShell:
    1. `docker compose -p triagecopilot-prod ps`: Alertmanager, Prometheus, the egress proxy, the gateway and the agent are `(healthy)`, the rest Up. Only the egress proxy shows a port.
    2. `docker inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' triagecopilot-prod-alertmanager-1 triagecopilot-prod-smtp-relay-1 triagecopilot-prod-egress-log-1 triagecopilot-prod-prometheus-1`: Alertmanager, the relay and egress-log on `alerting` alone, and Prometheus on `alerting`, `data` and `monitoring`. `docker inspect --format '{{.HostConfig.NetworkMode}}' triagecopilot-prod-blackbox-1` starts with `container:`.
    3. Prometheus found Alertmanager: `docker exec triagecopilot-prod-prometheus-1 wget -qO- http://127.0.0.1:9090/api/v1/alertmanagers` lists `http://alertmanager:9093/api/v2/alerts`.
-   4. Every target answers: `docker exec triagecopilot-prod-prometheus-1 wget -qO- "http://127.0.0.1:9090/api/v1/query?query=up"` shows 1 for `agent`, `egress-log`, `otel-collector` and the three `readyz` probes. Then `query=probe_success` shows 1 for the gateway and the agent, and for watch while `make dev-watch` runs. Without watch, WatchNotReady fires after 5 minutes.
+   4. Every target answers: `docker exec triagecopilot-prod-prometheus-1 wget -qO- "http://127.0.0.1:9090/api/v1/query?query=up"` shows 1 for `agent`, `alertmanager`, `egress-log`, `gateway`, `otel-collector` and the three `readyz` probes. Then `query=probe_success` shows 1 for the gateway and the agent, and for watch while `make dev-watch` runs. Without watch, WatchNotReady fires after 5 minutes.
    5. Alertmanager has no way around the proxy, so both of these fail: `docker exec triagecopilot-prod-alertmanager-1 wget -q -T 3 -O /dev/null http://192.168.65.254:4240/readyz` and the same with `https://discord.com/`.
    6. No app container reaches Alertmanager. This fails with `gaierror`: `docker exec triagecopilot-prod-agent-1 python -c "import socket; socket.create_connection(('alertmanager', 9093), 3)"`.
 5. One test alert to both channels: `docker exec triagecopilot-prod-alertmanager-1 amtool alert add alertname=DeliveryTest severity=warning --annotation=summary="A test of alert delivery; nothing is wrong." --annotation=runbook_url=https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md --alertmanager.url=http://127.0.0.1:9093`

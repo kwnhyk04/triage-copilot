@@ -188,6 +188,15 @@ class Delivery:
         found = re.search(r"^tc_egress_denied_total(?:\{[^}]*\})? (\S+)$", text, re.MULTILINE)
         return float(found[1]) if found else 0.0
 
+    def failed(self, integration: str) -> float:
+        """Messages Alertmanager gave up on, from the metrics Prometheus scrapes."""
+        url = "http://127.0.0.1:9093/metrics"
+        text = docker("exec", self.names["alertmanager"], "wget", "-qO-", url)
+        pattern = rf'^alertmanager_notifications_failed_total\{{[^}}]*integration="{integration}"'
+        rows = re.findall(pattern + r"[^}]*\} (\S+)$", text, re.MULTILINE)
+        assert rows, text
+        return sum(float(row) for row in rows)
+
     def tunnels(self, since: float) -> set[tuple[str, str, str, str]]:
         """The proxy's access log since then, as client, result, method and target."""
         fields = [line.split() for line in docker("logs", self.names["proxy"]).splitlines()]
@@ -231,7 +240,7 @@ def delivery(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Delivery]:
             start(fake, f"--network={nets['internet']}", f"--ip={ip}", *files, PYTHON, *serve)
         # The proxy finds the fakes under the names it allows, and watch's peer nowhere.
         hosts = [f"--add-host=discord.com={DISCORD}", f"--add-host=smtp.gmail.com={GMAIL}"]
-        hosts.append(f"--add-host=host.docker.internal={NOWHERE}")
+        hosts.append(f"--add-host=watch-host={NOWHERE}")
         proxy = [f"--label={LABEL}", f"--name={names['proxy']}", *hosts]
         proxy += hardening(PROD["services"]["egress-proxy"])
         squid = [f"--network={nets['internet']}", mount(conf, "/etc/squid/squid.conf"), IMAGE]
@@ -395,6 +404,25 @@ def test_a_verdict_and_a_waiting_plan_reach_discord_once_each_with_the_report_an
     assert {post["path"] for post in new} == {f"/api/webhooks/1234567890/{TOKEN}"}
     for post in new:
         assert TOKEN not in post["body"]
+
+
+def test_a_message_discord_refuses_shows_in_the_count_prometheus_reads(delivery: Delivery) -> None:
+    before = delivery.failed("discord")
+    discord = delivery.names["discord"]
+    docker("exec", discord, "touch", "/tmp/refuse")  # noqa: S108 - the fake's own container
+    try:
+        labels = ["alertname=InvestigationVerdict", "severity=warning", "notify=report"]
+        labels.append("investigation=refused")
+        url = "--alertmanager.url=http://127.0.0.1:9093"
+        docker("exec", delivery.names["alertmanager"], "amtool", "alert", "add", *labels, url)
+
+        def rose() -> float | None:
+            now = delivery.failed("discord")
+            return now if now > before else None
+
+        assert until(rose, "Alertmanager's failure count", 60, hint=delivery.logs) == before + 1
+    finally:
+        docker("exec", discord, "rm", "/tmp/refuse")  # noqa: S108
 
 
 BROKEN = [

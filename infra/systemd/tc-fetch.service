@@ -1,0 +1,13 @@
+# Fetches origin/main of each watched app's clone (docs/server-move.md, Services), started by
+# tc-fetch.timer. watch never fetches, so without this its commits and source index go stale.
+[Unit]
+Description=Fetch the watched apps' origin/main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tc
+WorkingDirectory=/opt/triage-copilot
+ExecStart=/usr/bin/make prod-fetch
+NoNewPrivileges=true

@@ -1,0 +1,13 @@
+# Pings the outside monitor while the gateway answers (docs/server-move.md, Outside monitor), started
+# by tc-heartbeat.timer.
+[Unit]
+Description=Triage Copilot heartbeat to the outside monitor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tc
+WorkingDirectory=/opt/triage-copilot
+ExecStart=/usr/bin/make prod-heartbeat
+NoNewPrivileges=true

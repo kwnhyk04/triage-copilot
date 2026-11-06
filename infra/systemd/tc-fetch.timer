@@ -1,0 +1,10 @@
+# Every 10 minutes, the delay a merge may wait before a code fix can name its files.
+[Unit]
+Description=Fetch the watched apps' origin/main every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

@@ -26,6 +26,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "WATCH_GATEWAY_URL",
         "GATEWAY_URL",
         "WATCH_SOURCE_INDEX_DIR",
+        "WATCH_STATE_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -101,6 +102,17 @@ def test_every_watched_app_writes_its_source_index_to_the_one_folder(
     monkeypatch.setenv("WATCH_SOURCE_INDEX_DIR", "H:/.cache/triage-copilot/sources")
     folders = {target.sources for target in load_settings(Settings).targets()}
     assert folders == {Path("H:/.cache/triage-copilot/sources")}
+
+
+def test_every_watched_app_keeps_its_firing_state_in_the_one_folder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for app in ("FA", "FL"):
+        monkeypatch.setenv(f"WATCH_{app}_TOKEN", PLANTED)
+    assert {target.state for target in load_settings(Settings).targets()} == {None}
+    monkeypatch.setenv("WATCH_STATE_DIR", "/var/lib/tc-watch")
+    folders = {target.state for target in load_settings(Settings).targets()}
+    assert folders == {Path("/var/lib/tc-watch")}
 
 
 def test_tokens_stay_out_of_every_printout(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,15 +19,18 @@ __pycache__/
 .env
 .env.*
 !.env.example
+# make prod-backup's dumps: every report, and the tenants' token hashes.
+/backups/
 
 # Private: agent instructions and working notes, kept on this PC and in its backup. The alert
-# runbooks (the rules link to them), the guide and the logo files stay public.
+# runbooks (the rules link to them), the guide, the server runbook and the logo files stay public.
 /AGENTS.md
 /CLAUDE.md
 .claude/
 docs/*
 !docs/alerts.md
 !docs/guide.md
+!docs/server-move.md
 !docs/brand/
 !docs/third-party.md
 

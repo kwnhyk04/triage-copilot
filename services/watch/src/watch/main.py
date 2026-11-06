@@ -64,6 +64,9 @@ class Settings(EnvSettings):
     # Where each app with a repo gets its source index at origin/main (<folder>/<app>.json), which
     # the agent reads (SOURCE_INDEX_DIR); unset, none is written.
     watch_source_index_dir: Path | None = None
+    # Where each app's firing alerts are kept (<folder>/<app>.json), so a restart neither fires
+    # them again nor loses them; unset, a restart forgets them.
+    watch_state_dir: Path | None = None
     log_level: LogLevel = "info"
     otel_exporter_otlp_endpoint: str | None = None
 
@@ -111,9 +114,18 @@ class Settings(EnvSettings):
                 self.watch_fl_prometheus_url,
             ),
         ]
-        index = self.watch_source_index_dir
+        index, state = self.watch_source_index_dir, self.watch_state_dir
         return [
-            Target(CATALOGS[app], stack, token.get_secret_value(), health, repo, prometheus, index)
+            Target(
+                CATALOGS[app],
+                stack,
+                token.get_secret_value(),
+                health,
+                repo,
+                prometheus,
+                index,
+                state,
+            )
             for app, token, stack, health, repo, prometheus in apps
             if token
         ]

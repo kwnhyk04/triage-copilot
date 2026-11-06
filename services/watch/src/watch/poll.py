@@ -6,7 +6,9 @@ and resolves after RESOLVE_AFTER good ones, and only those transitions are poste
 gateway's webhook. Its labels are always the same five, so fingerprints and dedupe hold; what
 varies goes in its annotations, with a scrubbed snapshot of the app of at most SNAPSHOT_BYTES.
 With a repo and a source index folder, each poll also writes the app's tracked paths at
-origin/main there whenever that commit changes, for the agent's check of a code fix's files.
+origin/main there whenever that commit changes, for the agent's check of a code fix's files. With
+a state folder, what fires outlives a restart: the gateway keys an alert by its start, so without
+it a restart fires each bad alert again under a new start and leaves the old one open for good.
 """
 
 import json
@@ -55,8 +57,8 @@ Observed = dict["Key", tuple[bool, str]]
 @dataclass(frozen=True)
 class Target:
     """One watched app: its catalog and stack, its tenant's webhook token, health URLs by
-    service, its repo (for origin/main's commits), on a dev stack its Prometheus, and the folder
-    its source index goes to."""
+    service, its repo (for origin/main's commits), on a dev stack its Prometheus, the folder its
+    source index goes to, and the folder that keeps what fires across a restart."""
 
     catalog: Catalog
     stack: Stack
@@ -65,6 +67,7 @@ class Target:
     repo: Path | None = None
     prometheus: str | None = None
     sources: Path | None = None
+    state: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +203,9 @@ class Watcher:
         self._changes: tuple[object, object] | None = None
         # The origin/main commit whose source index was last written.
         self._indexed: str | None = None
+        # What the state file holds, so a poll that changes nothing writes nothing.
+        self._saved: str | None = None
+        self._load_state()
 
     @property
     def app(self) -> str:
@@ -218,9 +224,68 @@ class Watcher:
         self._read_docker(now, observed)
         self._read_prometheus(observed)
         posted = self._step(now, observed)
+        self._save_state()
         self._write_index()
         self.ok = not self.problems
         return posted
+
+    def _load_state(self) -> None:
+        """Takes back what fired before a restart. A damaged file is logged and starts clean: the
+        worst that costs is the firing again that the file is there to prevent."""
+        if self.target.state is None:
+            return
+        path = self.target.state / f"{self.app}.json"
+        try:
+            tracks = {
+                Key(row["alertname"], row["service"], row["severity"], row["source"]): Track(
+                    detail=row["detail"],
+                    firing=datetime.fromisoformat(row["firing"]),
+                    fired=deque(datetime.fromisoformat(at) for at in row["fired"]),
+                )
+                for row in json.loads(path.read_text("utf-8"))
+            }
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            extra = {"app": self.app, "error": mask(repr(error))}
+            log.warning("firing state not read", extra=extra)
+            return
+        self.tracks = tracks
+
+    def _save_state(self) -> None:
+        """Writes `<state>/<app>.json` once what fires has changed, as a temp file moved over the
+        old one, so a restart never reads half of it. A failure is logged, and the next poll tries
+        again."""
+        folder = self.target.state
+        if folder is None:
+            return
+        text = json.dumps(
+            [
+                {
+                    "alertname": key.alertname,
+                    "service": key.service,
+                    "severity": key.severity,
+                    "source": key.source,
+                    "detail": track.detail,
+                    "firing": track.firing.isoformat(),
+                    "fired": [at.isoformat() for at in track.fired],
+                }
+                for key, track in self.tracks.items()
+                if track.firing is not None
+            ]
+        )
+        if text == self._saved:
+            return
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            temp = folder / f"{self.app}.json.tmp"
+            temp.write_text(text, encoding="utf-8")
+            temp.replace(folder / f"{self.app}.json")
+        except OSError as error:
+            extra = {"app": self.app, "error": mask(str(error))}
+            log.warning("firing state not written", extra=extra)
+            return
+        self._saved = text
 
     def _write_index(self) -> None:
         """Writes `<sources>/<app>.json` (app, commit, files) once origin/main's commit is new, as

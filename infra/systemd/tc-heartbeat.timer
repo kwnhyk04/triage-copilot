@@ -1,0 +1,11 @@
+# Every 5 minutes. The monitor's period must match, with a grace of a few minutes.
+[Unit]
+Description=Triage Copilot heartbeat every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

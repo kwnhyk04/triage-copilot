@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+backups
 .git
 .github
 **/node_modules

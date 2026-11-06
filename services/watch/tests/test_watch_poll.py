@@ -86,9 +86,10 @@ def _watch(
     stack: Stack = "prod",
     repo: Path | None = None,
     prometheus: str | None = None,
+    state: Path | None = None,
 ) -> Watcher:
     health = {"api": server.url + "/readyz"}
-    target = Target(FA, stack, BEARER, health, repo=repo, prometheus=prometheus)
+    target = Target(FA, stack, BEARER, health, repo=repo, prometheus=prometheus, state=state)
     return Watcher(target, gateway.url)
 
 
@@ -102,6 +103,141 @@ def test_the_fingerprint_is_prometheus_s_as_the_gateway_computes_it() -> None:
     assert fingerprint(labels) == "2f09d8d93d1d4d16"
     other = {**labels, "Zone": "eu-west-1", "pod": "checkout-7d9f8b6c5-x2k4p", "team": "über-ops"}
     assert fingerprint(other) == "70fb7a16eb9a8e33"
+
+
+def test_a_restart_keeps_what_fires_and_resolves_it_under_its_own_start(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _stack(tools)
+    server.route("/readyz", Route(503))
+    polls = [NOW + timedelta(seconds=30 * i) for i in range(10)]
+    before = _watch(server, gateway, state=tmp_path)
+    for when in polls[:3]:
+        before.poll(when)
+    before.close()
+
+    after = _watch(server, gateway, state=tmp_path)
+    for when in polls[3:8]:
+        after.poll(when)
+    # Still failing, past FIRE_AFTER: the gateway keys an alert by its start, so a second firing
+    # would open a new alert and leave the first firing for good.
+    assert [alert["status"] for alert in _alerts(gateway)] == ["firing"]
+    server.route("/readyz", Route(200))
+    for when in polls[8:]:
+        after.poll(when)
+    fired, resolved = _alerts(gateway)
+    assert (fired["status"], resolved["status"]) == ("firing", "resolved")
+    assert resolved["startsAt"] == fired["startsAt"]
+
+
+def test_an_alert_that_ended_during_a_restart_resolves_at_once(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _stack(tools)
+    server.route("/readyz", Route(503))
+    before = _watch(server, gateway, state=tmp_path)
+    for seconds in (0, 30, 60):
+        before.poll(NOW + timedelta(seconds=seconds))
+    before.close()
+    server.route("/readyz", Route(200))
+
+    after = _watch(server, gateway, state=tmp_path)
+    for hours in (2, 3):
+        after.poll(NOW + timedelta(hours=hours))
+    assert [alert["status"] for alert in _alerts(gateway)] == ["firing", "resolved"]
+
+
+def test_a_restart_keeps_a_flapping_alert_held(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _stack(tools)
+    watcher = _watch(server, gateway, state=tmp_path)
+    when = NOW
+    # Three firings within the hour, each followed by the two good polls that resolve it, but the
+    # last, which waits out FLAP_WINDOW as one long firing.
+    for flap in range(3):
+        server.route("/readyz", Route(503))
+        for _ in range(3):
+            watcher.poll(when)
+            when += timedelta(seconds=30)
+        server.route("/readyz", Route(200))
+        if flap < 2:
+            for _ in range(2):
+                watcher.poll(when)
+                when += timedelta(seconds=30)
+    watcher.close()
+
+    after = _watch(server, gateway, state=tmp_path)
+    for _ in range(4):
+        after.poll(when)
+        when += timedelta(seconds=30)
+    statuses = [alert["status"] for alert in _alerts(gateway)]
+    assert statuses == ["firing", "resolved", "firing", "resolved", "firing"]
+
+
+def test_the_state_file_is_written_only_when_what_fires_changes_and_holds_no_token(
+    tools: FakeTools, server: FakeServer, gateway: FakeServer, tmp_path: Path
+) -> None:
+    _stack(tools)
+    server.route("/readyz", Route(503))
+    state = tmp_path / "state"
+    watcher = _watch(server, gateway, state=state)
+    for seconds in (0, 30, 60):
+        watcher.poll(NOW + timedelta(seconds=seconds))
+    path = state / "freight-audit.json"
+    [row] = json.loads(path.read_text("utf-8"))
+    assert (row["alertname"], row["service"], row["severity"]) == (
+        "HealthCheckFailed",
+        "api",
+        "critical",
+    )
+    assert row["source"] == "health"
+    assert datetime.fromisoformat(row["firing"]) == NOW + timedelta(seconds=60)
+    assert BEARER not in path.read_text("utf-8")
+    assert [file.name for file in state.iterdir()] == ["freight-audit.json"]
+    written = path.stat().st_mtime_ns
+    watcher.poll(NOW + timedelta(seconds=90))
+    assert path.stat().st_mtime_ns == written
+    server.route("/readyz", Route(200))
+    for seconds in (120, 150):
+        watcher.poll(NOW + timedelta(seconds=seconds))
+    assert json.loads(path.read_text("utf-8")) == []
+
+
+@pytest.mark.parametrize("damaged", ["not json", '[{"alertname": "x"}]', '{"a": 1}', "[1]"])
+def test_a_damaged_state_file_starts_clean_and_says_so(
+    tools: FakeTools,
+    server: FakeServer,
+    gateway: FakeServer,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    damaged: str,
+) -> None:
+    _stack(tools)
+    server.route("/readyz", Route(200))
+    (tmp_path / "freight-audit.json").write_text(damaged, "utf-8")
+    watcher = _watch(server, gateway, state=tmp_path)
+    assert watcher.tracks == {}
+    assert "firing state not read" in caplog.text
+    watcher.poll(NOW)
+
+
+def test_an_unwritable_state_folder_never_stops_a_poll(
+    tools: FakeTools,
+    server: FakeServer,
+    gateway: FakeServer,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _stack(tools)
+    server.route("/readyz", Route(503))
+    occupied = tmp_path / "a-file"
+    occupied.write_text("", "utf-8")
+    watcher = _watch(server, gateway, state=occupied)
+    for seconds in (0, 30, 60):
+        watcher.poll(NOW + timedelta(seconds=seconds))
+    assert [alert["status"] for alert in _alerts(gateway)] == ["firing"]
+    assert "firing state not written" in caplog.text
 
 
 def test_a_failing_health_check_fires_once_and_resolves_once(

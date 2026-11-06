@@ -82,15 +82,24 @@ groups:
           summary: 'The egress proxy refused a request in the last 10 minutes: a container asked for a host, port or path outside its allowlist.'
           runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#egressdenied
 
-      # Without the probe exporter, egress-log or the gateway's metrics, the readiness, refusal,
-      # verdict and waiting-plan rules cannot fire.
+      # Without the probe exporter, egress-log, the gateway's metrics or Alertmanager's, the
+      # readiness, refusal, verdict, waiting-plan and delivery rules cannot fire.
       - alert: MonitoringBlind
-        expr: up{job=~"readyz|egress-log|gateway"} == 0
+        expr: up{job=~"readyz|egress-log|gateway|alertmanager"} == 0
         for: 5m
         labels: { severity: warning }
         annotations:
           summary: 'Prometheus cannot read {{ $labels.job }}, so the rules that need it stay silent.'
           runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind
+
+      # Alertmanager gave up on a message, after its retries. The channel that still works carries
+      # this one, so each reports the other's failures; if both fail, only Prometheus shows it.
+      - alert: AlertDeliveryFailing
+        expr: sum by (integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: 'Alertmanager gave up on a message to {{ $labels.integration }} in the last 15 minutes, so an alert may never have arrived there.'
+          runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#alertdeliveryfailing
 
       # A verdict and a plan that waits for a person: notify routes each to one Discord message with
       # a link to its report (infra/alertmanager), no email and no reminder. A series lasts an hour

@@ -1,0 +1,11 @@
+# Nightly, with a run at the next boot if the server was off at that hour.
+[Unit]
+Description=Nightly Triage Copilot database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

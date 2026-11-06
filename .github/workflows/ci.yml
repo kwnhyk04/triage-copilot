@@ -118,11 +118,15 @@ jobs:
           ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git --redact --no-banner --log-opts=--all /repo
 
+  # Both architectures, so a change that breaks one build fails here and not after the merge.
   images:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       matrix:
+        arch: [amd64, arm64]
+        service: [gateway, agent, executor, sim, squid]
+        # Each entry adds its file and target to both architectures' jobs for that service.
         include:
           - { service: gateway, file: infra/docker/gateway.Dockerfile, target: '' }
           - { service: agent, file: infra/docker/python.Dockerfile, target: agent }
@@ -141,6 +145,7 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           build-args: PACKAGE=${{ matrix.service }}
+          platforms: linux/${{ matrix.arch }}
           push: false
 
   ci-result:
