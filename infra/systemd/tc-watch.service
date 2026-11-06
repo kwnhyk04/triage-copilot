@@ -1,0 +1,25 @@
+# watch on the Linux server (docs/server-move.md, Services): restarted whenever it exits, its log in
+# the journal (journalctl -u tc-watch). Needs the checkout at /opt/triage-copilot and the user tc in
+# the docker group, for the docker ps and docker logs it reads.
+[Unit]
+Description=Triage Copilot watch
+# After Docker, whose default bridge holds the address watch binds (WATCH_HOST). Wants, not Requires:
+# a Docker restart must not stop watch, which reports Docker out of reach as a poll that failed.
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+# No limit on restarts: watch is the only source of live incidents.
+StartLimitIntervalSec=0
+
+[Service]
+User=tc
+WorkingDirectory=/opt/triage-copilot
+ExecStart=/usr/bin/make prod-watch
+Restart=always
+RestartSec=10
+# systemd makes this folder, owned by tc. It keeps what fires across a restart.
+StateDirectory=tc-watch
+Environment=WATCH_STATE_DIR=/var/lib/tc-watch
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

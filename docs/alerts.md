@@ -1,6 +1,6 @@
 # Alerts
 
-Production's alert rules (`infra/prometheus-alerts.yml`), one section each: what fired, what it stops, and what to do. Each Discord message and email links its rule's section here; delivery and silences are in the README (Deploy, Alerting). Commands run in PowerShell from the repo root.
+Production's alert rules (`infra/prometheus-alerts.yml`), one section each: what fired, what it stops, and what to do. Each Discord message and email links its rule's section here; delivery and silences are in the README (Deploy, Alerting). Commands run from the repo root, in PowerShell on the PC. On a Linux server, use `grep -E` for `Select-String -Pattern` and `curl` for `curl.exe`.
 
 ## GatewayNotReady
 
@@ -24,12 +24,12 @@ While its metrics fail, InvestigationsFailing, ClaudeOff and ClaudeDailyCapReach
 
 ## WatchNotReady
 
-watch's `/readyz` on this PC failed for 5 minutes. The probe goes through the egress proxy's port 4240, the only way from a container to this PC. watch is not running, its last poll is over three intervals old, or that poll did not read and post everything. No FreightAudit or FilingLens incident reaches TC meanwhile.
+watch's `/readyz` on the host failed for 5 minutes. The probe goes through the egress proxy's port 4240, the only way from a container to the host. watch is not running, its last poll is over three intervals old, or that poll did not read and post everything. No FreightAudit or FilingLens incident reaches TC meanwhile.
 
-1. Check that `make dev-watch` still runs, and run `curl.exe -s http://127.0.0.1:4240/readyz`.
+1. On a Linux server, run `systemctl status tc-watch` and `journalctl -u tc-watch --since "15 minutes ago"`. systemd restarts watch, so a stopped unit means someone stopped it, and a crash loop shows here. On the PC, check that `make dev-watch` still runs, and run `curl.exe -s http://127.0.0.1:4240/readyz`.
 2. Its log names the app whose poll failed (`poll failed`). A post the gateway refused shows as `alert not posted` with its status. A 401 means the token in `.env` is not the tenant's current one (`make prod-token` replaces it), or the proxy drops it (docs/guide.md, Deploy, egress check 6).
-3. If watch answers 200 and the alert stays: `docker logs triagecopilot-prod-egress-proxy-1 --since 15m | Select-String "watch/readyz"`. A `/503` there means the proxy cannot reach watch: `WATCH_HOST` must stay `127.0.0.1` and `WATCH_PORT` 4240.
-4. Start `make dev-watch` again.
+3. If watch answers 200 and the alert stays: `docker logs triagecopilot-prod-egress-proxy-1 --since 15m | Select-String "watch/readyz"`. A `/503` there means the proxy cannot reach watch. `WATCH_PORT` must stay 4240. On the PC, `WATCH_HOST` must stay `127.0.0.1`. On a Linux server it must be the default bridge's address, and the firewall must let `tc-egress` reach port 4240 (docs/server-move.md, Firewall).
+4. Start it again: `sudo systemctl start tc-watch`, or `make dev-watch` on the PC.
 
 ## InvestigationsFailing
 
@@ -97,10 +97,24 @@ Egress check 5 in docs/guide.md makes one refusal on purpose.
 
 ## MonitoringBlind
 
-Prometheus could not read the probe exporter (`readyz`), egress-log or the gateway's metrics (`gateway`) for 5 minutes, so the readiness or refusal rules, or the verdict and waiting-plan messages, cannot fire.
+Prometheus could not read the probe exporter (`readyz`), egress-log, the gateway's metrics (`gateway`) or Alertmanager's (`alertmanager`) for 5 minutes, so the readiness or refusal rules, the verdict and waiting-plan messages, or AlertDeliveryFailing cannot fire.
 
-1. `docker compose -p triagecopilot-prod ps -a blackbox egress-log prometheus gateway`.
+1. `docker compose -p triagecopilot-prod ps -a blackbox egress-log prometheus gateway alertmanager`.
 2. The probe exporter shares Prometheus's network namespace, so it needs a restart after Prometheus is recreated: `make prod-up` recreates both.
+
+If Alertmanager itself is down, this alert has no way out until it is back.
+
+## AlertDeliveryFailing
+
+Alertmanager gave up on a message to Discord or the inbox in the last 15 minutes, after its retries; `integration` says which. An alert may never have arrived there. This message comes through the other channel. If both fail, neither says so, and only Prometheus shows it.
+
+1. `docker logs triagecopilot-prod-alertmanager-1 --since 1h` names the integration and its error, never the secret.
+2. Fix by integration:
+   - `email`: a `535` means Gmail refused the app password. Make a new one from the sending account, put it in `ALERT_SMTP_PASSWORD` in `.env.prod`, and run `make prod-up`.
+   - `discord`: a `404` means the webhook was deleted. Make a new one, put it in `ALERT_DISCORD_WEBHOOK_URL` in `.env.prod`, and run `make prod-up`. For anything else, check the proxy's log (EgressDenied) and Discord's status page.
+3. Send the test alert (docs/guide.md, Alerting, step 5).
+
+It resolves 15 minutes after the last failure. A verdict or plan message lost meanwhile is not sent again, but the report stays on the web.
 
 ## InvestigationVerdict
 
@@ -116,9 +130,11 @@ Open the report and approve or reject it. An approval expires after `APPROVAL_WI
 
 ## Not watched
 
-Nothing reports these:
+No rule here reports these:
 
-- Alertmanager, the mail relay, the egress proxy or Prometheus itself stopping. Delivery goes through the proxy.
-- Google revoking the app password, which a change of the Google password does, or the webhook being deleted in Discord.
+- Alertmanager, the mail relay, the egress proxy or Prometheus itself stopping, and the whole host going down. Delivery goes through the proxy, and all of it runs on the host.
+- Both channels failing at once. AlertDeliveryFailing needs one that works.
+
+On a Linux server, the outside monitor covers the host, Docker, the proxy, the gateway and Postgres, since its heartbeat needs all of them (docs/server-move.md, Outside monitor). It does not see Alertmanager, the mail relay, Prometheus or Funnel.
 
 `docker logs triagecopilot-prod-alertmanager-1 --since 1h` names the integration that failed, never the secret.

@@ -124,8 +124,10 @@ CASES = [
     ("smtp-relay", 3131, "CONNECT smtp.gmail.com:443", REFUSED),
     ("smtp-relay", 3131, "CONNECT smtp.gmail.com:465", REFUSED),
     ("smtp-relay", 3131, "CONNECT smtp.example.com:587", REFUSED),
-    # This PC, the containers beside the proxy and the private ranges, by address and by name.
+    # The host, the containers beside the proxy and the private ranges, by address and by name.
     ("agent", 3128, "CONNECT host.docker.internal:443", REFUSED),
+    ("agent", 3128, "CONNECT watch-host:443", REFUSED),
+    ("tailscale", 3129, "CONNECT watch-host:443", REFUSED),
     ("agent", 3128, f"CONNECT {GATEWAY}:4200", REFUSED),
     ("agent", 3128, "CONNECT 127.0.0.1:443", REFUSED),
     ("agent", 3128, "CONNECT [::1]:443", REFUSED),
@@ -133,7 +135,7 @@ CASES = [
     # watch's port and the probe port open no tunnel for a client either.
     ("agent", 4202, "CONNECT api.anthropic.com:443", NO_TUNNEL),
     ("prometheus", 4240, "CONNECT api.anthropic.com:443", NO_TUNNEL),
-    # Prometheus's probe of watch on this PC: GET /readyz alone, from Prometheus's address alone.
+    # Prometheus's probe of watch on the host: GET /readyz alone, from Prometheus's address alone.
     ("prometheus", 4240, "GET /readyz", WATCH),
     ("prometheus", 4240, "GET /docs", REFUSED),
     ("prometheus", 4240, "POST /readyz", REFUSED),
@@ -200,6 +202,8 @@ class Proxy:
     name: str
     clients: dict[str, str]
     watch_port: int
+    # The routed network the proxy gets out on.
+    egress: str
 
     def ask(self, client: str, port: int, request: str) -> int:
         """The proxy's status for one request line, sent from inside the client's container."""
@@ -232,12 +236,12 @@ def proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxy]:
             _network(net, prod)
         echo = ["--entrypoint=bash", IMAGE, "-c", ECHO]
         _start(names["gateway"], f"--network={nets['ingress']}", f"--ip={GATEWAY}", *echo)
-        # watch runs on this PC, which the proxy reaches as host.docker.internal: here, a fake on
-        # the proxy's routed network under that name.
+        # watch runs on the host, which the proxy reaches as watch-host: here, a fake on the
+        # proxy's routed network under that name.
         _start(names["watch"], f"--network={nets['egress']}", FAKE, "-host=0.0.0.0", "-port=4240")
         ips = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
         watch = docker("inspect", f"--format={ips}", names["watch"])
-        hardening.append(f"--add-host=host.docker.internal={watch}")
+        hardening.append(f"--add-host=watch-host={watch}")
         egress = [f"--network={nets['egress']}", "--publish=127.0.0.1::4202", mount, IMAGE]
         docker("create", f"--label={LABEL}", f"--name={names['proxy']}", *hardening, *egress)
         for prod in ("outbound", "alerting"):
@@ -250,10 +254,10 @@ def proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxy]:
             _start(names[who], f"--network={nets[network]}", *fixed, *idle)
         _wait(names["proxy"], "127.0.0.1", 3128)
         _wait(names["proxy"], GATEWAY, 4200)
-        _wait(names["proxy"], "host.docker.internal", 4240)
+        _wait(names["proxy"], "watch-host", 4240)
         published = docker("port", names["proxy"], "4202/tcp").splitlines()[0]
         clients = {who: names[who] for who in CLIENTS}
-        yield Proxy(names["proxy"], clients, int(published.rsplit(":", 1)[1]))
+        yield Proxy(names["proxy"], clients, int(published.rsplit(":", 1)[1]), nets["egress"])
     finally:
         _quietly("rm", "--force", *names.values())
         _quietly("network", "rm", *nets.values())
@@ -298,6 +302,29 @@ def test_watch_s_port_reaches_the_gateway_alone(proxy: Proxy) -> None:
     assert _through_watch_port(proxy, "CONNECT example.com:443")[0] == NO_TUNNEL
     # Squid's cache manager would show its traffic and config to any process on this PC.
     assert _through_watch_port(proxy, "GET cache_object://localhost/info")[0] == REFUSED
+
+
+def _connects(proxy: Proxy, host: str, port: int) -> bool:
+    """Whether a container on the proxy's routed network, under compose's extra_hosts, connects."""
+    [mapping] = PROD["services"]["egress-proxy"]["extra_hosts"]
+    script = f"echo > /dev/tcp/{host}/{port}"
+    command = ["run", "--rm", f"--network={proxy.egress}", f"--add-host={mapping}"]
+    command += ["--entrypoint=bash", IMAGE, "-c", script]
+    return subprocess.run([DOCKER, *command], capture_output=True, check=False).returncode == 0  # noqa: S603
+
+
+def test_the_proxy_reaches_a_listener_where_watch_binds_on_either_docker(proxy: Proxy) -> None:
+    desktop = "Docker Desktop" in docker("info", "--format", "{{.OperatingSystem}}")
+    gateway = "{{(index .IPAM.Config 0).Gateway}}"
+    # WATCH_HOST: Docker Desktop forwards to the host's loopback, Docker Engine routes to the
+    # default bridge's address on the host.
+    bound = "127.0.0.1" if desktop else docker("network", "inspect", "bridge", "--format", gateway)
+    with socket.create_server((bound, 0)) as listener:
+        assert _connects(proxy, "watch-host", listener.getsockname()[1])
+    if not desktop:
+        # Docker Engine never reaches the host's loopback, so 127.0.0.1 would fail the probe.
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            assert not _connects(proxy, "watch-host", listener.getsockname()[1])
 
 
 def test_watch_s_token_reaches_the_gateway(proxy: Proxy) -> None:

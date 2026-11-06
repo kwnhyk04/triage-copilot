@@ -40,6 +40,7 @@ def test_the_rules_cover_what_production_must_report() -> None:
         "PlansUnreviewed",
         "EgressDenied",
         "MonitoringBlind",
+        "AlertDeliveryFailing",
         "InvestigationVerdict",
         "PlanWaiting",
     ]

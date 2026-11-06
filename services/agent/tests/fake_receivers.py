@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 RECEIVED = Path("/tmp/received.jsonl")  # noqa: S108 - the fake's own container
+# While this file exists Discord answers 404, as for a deleted webhook, which Alertmanager never
+# retries, so its failure count rises at once.
+REFUSE = Path("/tmp/refuse")  # noqa: S108
 
 
 def record(entry: dict[str, Any]) -> None:
@@ -28,7 +31,7 @@ class Discord(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         record({"path": self.path, "body": self.rfile.read(length).decode()})
-        self.send_response(204)
+        self.send_response(404 if REFUSE.exists() else 204)
         self.end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:

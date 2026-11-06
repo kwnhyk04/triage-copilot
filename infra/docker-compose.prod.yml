@@ -8,9 +8,9 @@
 # Alertmanager to Discord and Gmail through the proxy too.
 name: triagecopilot-prod
 
-# Docker Desktop lets any container on a routed network reach the internet and this PC's own
-# listeners (host.docker.internal), and publishes no port from an internal network. So every
-# network but `egress` is internal, and only the egress proxy joins `egress` (infra/squid).
+# Docker lets any container on a routed network reach the internet and the host's own listeners,
+# and publishes no port from an internal network. So every network but `egress` is internal, and
+# only the egress proxy joins `egress` (infra/squid).
 networks:
   # The data stores, and every container that talks to them.
   data: { internal: true }
@@ -36,7 +36,16 @@ networks:
   alerting:
     internal: true
     ipam: { config: [{ subnet: 10.231.233.48/28, ip_range: 10.231.233.56/29 }] }
-  egress: {}
+  # A fixed bridge name, so a server's firewall can let this bridge alone reach watch on the host
+  # (docs/server-move.md, Firewall); a generated name changes with each make prod-down.
+  egress:
+    driver_opts: { com.docker.network.bridge.name: tc-egress }
+
+# Docker keeps a container's log forever by default. json-file, so docker logs, and with it watch's
+# reads, work as before.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 10m, max-file: '3' }
 
 # Fixed here, not in the env files, so a line copied from .env never points a container at
 # 127.0.0.1 or an H: path. environment beats env_file.
@@ -57,6 +66,7 @@ services:
     ports: !reset []
     networks: [data]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 512m
     # Production's own passwords; the init script gives the two roles theirs on the first start.
     environment:
@@ -68,6 +78,7 @@ services:
     ports: !reset []
     networks: [data]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
   # Fault injection is for tests; in production it starts only with --profile chaos. Neither it nor
@@ -77,18 +88,21 @@ services:
     ports: !reset []
     networks: [data]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 64m
 
   otel-collector:
     ports: !reset []
     networks: [data, monitoring]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
   jaeger:
     ports: !reset []
     networks: [monitoring]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 512m
 
   # Production's rules (prometheus-alerts.yml; docs/alerts.md). It reads the agent's /metrics and
@@ -106,6 +120,7 @@ services:
       - ./prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
   # Probes the gateway's, the agent's and watch's /readyz for Prometheus, from inside Prometheus's
@@ -122,6 +137,7 @@ services:
     security_opt: ['no-new-privileges:true']
     depends_on: [prometheus]
     restart: unless-stopped
+    logging: *logging
     mem_limit: 64m
 
   # Sends every alert to Discord and to an inbox (infra/alertmanager). Its entrypoint stops it,
@@ -162,6 +178,7 @@ services:
       egress-proxy:
         condition: service_healthy
     restart: unless-stopped
+    logging: *logging
     mem_limit: 128m
 
   # Alertmanager sends no SMTP through a proxy, so socat (from the proxy's image) takes its
@@ -189,6 +206,7 @@ services:
       egress-proxy:
         condition: service_healthy
     restart: unless-stopped
+    logging: *logging
     mem_limit: 32m
 
   # Counts the proxy's refusals for Prometheus: the proxy sends it every access log line over UDP
@@ -205,6 +223,7 @@ services:
     networks:
       alerting: { ipv4_address: 10.231.233.53 }
     restart: unless-stopped
+    logging: *logging
     mem_limit: 128m
 
   grafana:
@@ -214,12 +233,14 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${PROD_GRAFANA_ADMIN_PASSWORD:?set PROD_GRAFANA_ADMIN_PASSWORD in .env.prod}
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
   # The images publish.yml pushes from main, pinned to the merged commit (TC_TAG=sha-<12>).
   gateway-migrate:
     image: &gateway-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-gateway:${TC_TAG:?set TC_TAG in .env.prod}
     command: [pnpm, db:migrate]
+    logging: *logging
     environment:
       GATEWAY_DATABASE_URL: &gateway-db postgres://gateway:${PROD_GATEWAY_DB_PASSWORD:?set PROD_GATEWAY_DB_PASSWORD in .env.prod}@postgres:5432/triage
     networks: [data]
@@ -268,11 +289,13 @@ services:
       gateway-migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    logging: *logging
     mem_limit: 512m
 
   agent-migrate:
     image: &agent-image ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-agent:${TC_TAG:?set TC_TAG in .env.prod}
     command: [alembic, -c, services/agent/alembic.ini, upgrade, head]
+    logging: *logging
     env_file: ../.env.prod.agent
     environment: *agent-env
     networks: [data]
@@ -284,6 +307,7 @@ services:
   agent-runbooks:
     image: *agent-image
     command: [python, -m, agent.runbooks, ingest]
+    logging: *logging
     env_file: ../.env.prod.agent
     environment: *agent-env
     volumes:
@@ -333,6 +357,9 @@ services:
       egress-proxy:
         condition: service_healthy
     restart: unless-stopped
+    logging: *logging
+    # On SIGTERM each job finishes its step; a kill at Docker's 10 s pays for that model call again.
+    stop_grace_period: 60s
     mem_limit: 2g
 
   # Tailscale Funnel: https://triage-copilot.<tailnet>.ts.net to the gateway's public port only
@@ -367,6 +394,7 @@ services:
       egress-proxy:
         condition: service_healthy
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
   # The only container with a route out (squid, infra/squid/squid.conf): CONNECT on 443 (587 for
@@ -374,6 +402,9 @@ services:
   # to the gateway alone, and Prometheus's probe to watch's /readyz alone.
   egress-proxy:
     image: ${TC_IMAGES:?set TC_IMAGES in .env.prod}/triage-copilot-squid:${TC_TAG:?set TC_TAG in .env.prod}
+    # The host's address for squid's peer for watch. WATCH_HOST must be one this address reaches:
+    # 127.0.0.1 on Docker Desktop, the default bridge's address on Docker Engine.
+    extra_hosts: ['watch-host:host-gateway']
     read_only: true
     tmpfs: [/tmp, /var/spool/squid, /var/log/squid, /run]
     cap_drop: [ALL]
@@ -400,6 +431,7 @@ services:
       retries: 10
       start_period: 5s
     restart: unless-stopped
+    logging: *logging
     mem_limit: 256m
 
 volumes:

@@ -15,6 +15,9 @@ unexport GEMINI_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
 unexport SIM_ADMIN_URL
 # Only watch gets the apps' webhook tokens.
 unexport WATCH_FA_TOKEN WATCH_FL_TOKEN
+# Only the backup gets the bucket's keys, and each outside check's ping URL, a credential in itself,
+# reaches its own job alone.
+unexport RCLONE_S3_ACCESS_KEY_ID RCLONE_S3_SECRET_ACCESS_KEY BACKUP_PING_URL HEARTBEAT_URL
 # Only dev's compose (infra-up, infra-down) takes its profiles from .env. Production's come from
 # .env.prod, which an exported value, even an empty one, would override.
 unexport COMPOSE_PROFILES
@@ -28,7 +31,8 @@ PROD = docker compose -p triagecopilot-prod -f infra/docker-compose.yml \
 .PHONY: install infra-up infra-down dev dev-ts dev-agent dev-executor dev-sim dev-watch \
 	build test test-int lint typecheck codegen contracts-check contracts-breaking migrate seed eval \
 	eval-plans eval-reviews eval-cache scenarios-check dlq-replay embed-model runbooks smoke switch digest demo-save test-e2e \
-	prod-env prod-up prod-down prod-token prod-switch prod-digest
+	prod-env prod-up prod-down prod-token prod-switch prod-digest prod-backup prod-restore \
+	prod-heartbeat prod-watch prod-fetch
 
 install:
 	pnpm install
@@ -238,6 +242,38 @@ prod-switch:
 
 prod-digest:
 	$(PROD) exec -T gateway node src/cli.ts digest $(DAY)
+
+# What the server's systemd units run (infra/systemd; docs/server-move.md). --no-project syncs no
+# environment first, so neither a lockfile change nor a lost network stops a nightly job.
+# A checked pg_dump in BACKUP_DIR, the newest BACKUP_KEEP kept, and a copy to BACKUP_DEST.
+prod-backup: export RCLONE_S3_ACCESS_KEY_ID := $(RCLONE_S3_ACCESS_KEY_ID)
+prod-backup: export RCLONE_S3_SECRET_ACCESS_KEY := $(RCLONE_S3_SECRET_ACCESS_KEY)
+prod-backup: export BACKUP_PING_URL := $(BACKUP_PING_URL)
+prod-backup:
+	uv run --no-project python scripts/server.py backup
+
+# Loads FILE into a database of its own, then swaps it in; the old one stays, renamed. Stop the
+# gateway and the agent first: it refuses while they run.
+prod-restore:
+	$(PROD) up -d --wait postgres
+	uv run --no-project python scripts/server.py restore "$(FILE)"
+
+# Pings HEARTBEAT_URL while the gateway answers, so an outside check notices when it stops.
+prod-heartbeat: export HEARTBEAT_URL := $(HEARTBEAT_URL)
+prod-heartbeat:
+	uv run --no-project python scripts/server.py heartbeat
+
+# As dev-watch, on watch's own packages alone.
+prod-watch: export WATCH_FA_TOKEN := $(WATCH_FA_TOKEN)
+prod-watch: export WATCH_FL_TOKEN := $(WATCH_FL_TOKEN)
+prod-watch:
+	uv run --frozen --no-dev --package watch python -m watch
+
+# origin/main of each watched app's clone: watch reads commits and paths as last fetched, and
+# never fetches.
+prod-fetch:
+	$(if $(WATCH_FA_REPO),git -C "$(WATCH_FA_REPO)" fetch --quiet origin main)
+	$(if $(WATCH_FL_REPO),git -C "$(WATCH_FL_REPO)" fetch --quiet origin main)
 
 # Replays every failure store: parked gateway outbox messages (the running gateway sends them),
 # agent-events-dlq.fifo back into agent-events.fifo (the running gateway stores them), then

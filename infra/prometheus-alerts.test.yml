@@ -277,6 +277,43 @@ tests:
               summary: 'Prometheus cannot read gateway, so the rules that need it stay silent.'
               runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind
 
+  # Prometheus cannot read Alertmanager, so AlertDeliveryFailing cannot fire.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MonitoringBlind
+        exp_alerts:
+          - exp_labels: { severity: warning, job: alertmanager, instance: 'alertmanager:9093' }
+            exp_annotations:
+              summary: 'Prometheus cannot read alertmanager, so the rules that need it stay silent.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#monitoringblind
+
+  # Alertmanager gave up on a message to Discord: the rule fires at once, by integration, whatever
+  # the reason, and ends once 15 minutes pass without another. Email, with no failure, stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",instance="alertmanager:9093",integration="discord",reason="clientError"}'
+        values: '0 0 0 1+0x30'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",instance="alertmanager:9093",integration="email",reason="other"}'
+        values: '0+0x33'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlertDeliveryFailing
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: AlertDeliveryFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, integration: discord }
+            exp_annotations:
+              summary: 'Alertmanager gave up on a message to discord in the last 15 minutes, so an alert may never have arrived there.'
+              runbook_url: https://github.com/kwnhyk04/triage-copilot/blob/main/docs/alerts.md#alertdeliveryfailing
+      - eval_time: 25m
+        alertname: AlertDeliveryFailing
+        exp_alerts: []
+
   # The proxy's first refusal: egress-log's counter appears.
   - interval: 1m
     input_series:

@@ -1,0 +1,13 @@
+# The nightly database backup (docs/server-move.md, Backups), started by tc-backup.timer. Its log is
+# in the journal (journalctl -u tc-backup).
+[Unit]
+Description=Triage Copilot database backup
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tc
+WorkingDirectory=/opt/triage-copilot
+ExecStart=/usr/bin/make prod-backup
+NoNewPrivileges=true

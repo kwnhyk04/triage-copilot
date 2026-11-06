@@ -145,23 +145,29 @@ def embedding_info(cache_dir: Path | None) -> dict[str, str | None]:
 def main() -> None:
     # Imported here: only the CLI reads the environment.
     from agent.settings import Settings
-    from py_config import ConfigError, load_settings
+    from py_config import ConfigError, EnvSettings, load_settings
+
+    class Folder(EnvSettings):
+        """All that download and info read, so a new server fetches the model before it has any
+        other setting."""
+
+        fastembed_cache_path: Path | None = None
 
     parser = argparse.ArgumentParser(prog="python -m agent.runbooks")
     parser.add_argument("command", choices=["download", "ingest", "info"])
     command = parser.parse_args().command
     try:
-        settings = load_settings(Settings)
+        cache = load_settings(Folder).fastembed_cache_path
+        settings = load_settings(Settings) if command == "ingest" else None
     except ConfigError as error:
         sys.exit(f"runbooks: {error}")
-    cache = settings.fastembed_cache_path
     if cache is None:
         sys.exit("runbooks: FASTEMBED_CACHE_PATH is required")
     if command == "info":
         print(json.dumps(embedding_info(cache)))  # noqa: T201 - CLI output
         return
     embedder = FastEmbedder(cache, download=command == "download")
-    if command == "download":
+    if settings is None:
         dimensions = len(embedder.embed([QUERY + "ping"])[0])
         print(f"{MODEL}: {dimensions} dimensions in {cache}")  # noqa: T201 - CLI output
         return
